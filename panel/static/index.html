@@ -407,7 +407,7 @@
                 <i data-lucide="upload"></i>
                 <div style="color:var(--ru-text);font-weight:500">手动升级</div>
                 <div>点击选择升级包文件（.tar.gz），将校验完整性后原子替换</div>
-                <input type="file" id="file-upgrade" accept=".tar.gz,.tgz" hidden>
+                <input type="file" id="file-upgrade" accept="application/gzip,application/x-gzip,.tar.gz,.tgz,.gz" hidden>
               </div>
             </div>
 
@@ -416,7 +416,7 @@
               <div class="ru-save" style="margin-top:10px">
                 <button class="ru-btn" id="btn-backup"><i data-lucide="download"></i>新建备份</button>
                 <button class="ru-btn" id="btn-restore"><i data-lucide="upload"></i>立即恢复</button>
-                <input type="file" id="file-restore" accept=".tar.gz,.tgz" hidden>
+                <input type="file" id="file-restore" accept="application/gzip,application/x-gzip,.tar.gz,.tgz,.gz" hidden>
               </div>
               <div class="ru-hint">恢复前会校验备份文件结构，仅合并路由配置，不会改动系统密码之外的系统文件。</div>
             </div>

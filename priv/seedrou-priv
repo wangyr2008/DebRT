@@ -433,8 +433,15 @@ do_podman_ops() {
     status)
       local ver running autostart
       ver="$(podman --version 2>/dev/null | awk '{print $3}')"
-      [ -n "$(podman ps -q 2>/dev/null | head -n 1)" ] && running="true" || running="false"
-      systemctl is-active --quiet podman.service && running="true"
+      # "运行中" = podman 服务或 socket active，或确有容器在跑；
+      # 不能只看容器数——零容器的机器启动服务后仍会显示"已停止"（用户实测）
+      if [ -n "$(podman ps -q 2>/dev/null | head -n 1)" ] \
+         || systemctl is-active --quiet podman.service \
+         || systemctl is-active --quiet podman.socket; then
+        running="true"
+      else
+        running="false"
+      fi
       systemctl is-enabled --quiet podman-restart.service 2>/dev/null && autostart="true" || autostart="false"
       ok_out "installed" "true" "version" "${ver:-}" "running" "$running" "autostart" "$autostart" ;;
     list-containers)
