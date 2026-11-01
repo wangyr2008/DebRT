@@ -27,13 +27,12 @@ jobs:
 
       - name: 安装 SeedRou（--smoke：不碰网络服务）
         run: |
-          set -o pipefail
-          sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log
-          code=$?
+          code=0
+          sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::install.sh 失败（exit $code）"
-            tail -25 /tmp/install.log | sed 's/^/::error::/'    # 逐行注解，匿名 API 可读
-            exit "$code"
+            tail -30 /tmp/install.log | sed 's/^/::error::/'    # 逐行注解，匿名 API 可读
+            exit 1
           fi
           tail -5 /tmp/install.log
 
