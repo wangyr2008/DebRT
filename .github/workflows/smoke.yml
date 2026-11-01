@@ -95,7 +95,9 @@ jobs:
           echo "::error::PANEL $(systemctl is-active seedrou-panel) $(curl -s http://127.0.0.1/api/session)"
           CK=$(mktemp)
           OUT=$(curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
-            -d "{\"password\":\"$SEEDROU_ADMIN_PW\"}" -c "$CK" http://127.0.0.1/api/login) || true
+            # 注意：改密码步骤已把密码改为 NewPW-456789，此处必须用新密码（顺带验证改密→登录闭环）
+          OUT=$(curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
+            -d '{"password":"NewPW-456789"}' -c "$CK" http://127.0.0.1/api/login) || true
           echo "$OUT" | sed 's/^/::error::LOGIN /'
           echo "$OUT" | grep -q '"ok": true' || exit 1
           curl -s -b "$CK" http://127.0.0.1/api/status | python3 -c '
