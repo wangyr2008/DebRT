@@ -41,9 +41,12 @@ jobs:
 
       - name: P-02 登录冒烟——正确密码必须通过
         run: |
-          OUT=$(printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify)
-          echo "$OUT"
-          echo "$OUT" | grep -q '"ok": true' || { echo "::error::正确密码被拒绝（P-02 回归）"; exit 1; }
+          sudo python3 -c 'import json;d=json.load(open("/etc/seedrou/secrets.json"));rec=d.get("admin_pbkdf2","");print("::error::secrets keys:", sorted(d.keys()), "| rec 段数:", len(rec.split("$")))'
+          sudo ls -la /usr/local/lib/seedrou/ | sed 's/^/::error::FILES /'
+          OUT=$(printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify) || true
+          echo "auth-verify 输出: $OUT"
+          echo "$OUT" | sed 's/^/::error::AUTH /'
+          echo "$OUT" | grep -q '"ok": true' || { echo "::error::正确密码被拒绝（P-02）"; exit 1; }
 
       - name: P-02 错误密码必须拒绝
         run: |
