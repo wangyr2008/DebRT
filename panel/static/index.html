@@ -9,6 +9,7 @@
 </head>
 <body>
 <div id="router-ui">
+  <div id="ru-boot" style="display:flex;align-items:center;justify-content:center;min-height:100vh;gap:10px;color:#86868b;font-size:13px"><span class="ru-spin"></span>正在连接路由器…</div>
 
   <!-- ============ 管理后台外壳（登录后显示） ============ -->
   <div class="ru-shell" id="ru-shell" hidden>
@@ -431,7 +432,7 @@
   </div>
 
   <!-- ============ 登录页 ============ -->
-  <section class="ru-login" id="ru-login">
+  <section class="ru-login" id="ru-login" hidden>
     <div class="ru-lcard">
       <div class="ru-llogo"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgl)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></div>
       <h2>SeedRou</h2>

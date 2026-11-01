@@ -14,7 +14,7 @@ import time
 MOCK = False
 _secret_cache = None
 _secret_ts = 0
-SESSION_TTL = 12 * 3600
+SESSION_TTL = 7 * 24 * 3600   # 7 天：局域网面板 + HttpOnly cookie，频繁过期得不偿失
 COOKIE = "sr_sess"
 
 # 面板侧登录限速（按来源 IP，内存态；priv 侧还有全局兜底限速，双层防御 —— 审计 B-18）

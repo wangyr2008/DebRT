@@ -95,11 +95,18 @@ function apiFail(err) {
 
 /* ===================== 登录态 ===================== */
 var loginEl = $id("ru-login"), shellEl = $id("ru-shell");
-function setLogged(v) {
+function setLogged(v, page) {
   LOGGED = v;  // 登出后停掉轮询（审计 C-10）
+  var boot = document.getElementById("ru-boot");
+  if (boot) boot.remove();
   loginEl.hidden = v;
   shellEl.hidden = !v;
-  if (v) { show("overview"); loadAll(); }
+  if (v) {
+    var last = null;
+    try { last = localStorage.getItem("sr_page"); } catch (e) {}
+    show(page || last || "overview");   // 刷新/重登后回到离开时的页面
+    loadAll();
+  }
 }
 var loginBad = $id("ru-loginbad"), loginBtn = $id("ru-loginbtn");
 $id("ru-loginform").addEventListener("submit", function (e) {
@@ -127,6 +134,7 @@ var titles = { overview: "系统概览", network: "网络设置", devices: "设�
 var loaders = {};
 function show(id) {
   if (!titles[id]) return;
+  try { localStorage.setItem("sr_page", id); } catch (e) {}   // 刷新后回到当前页
   var pages = root.querySelectorAll(".ru-page");
   for (var i = 0; i < pages.length; i++) pages[i].classList.toggle("active", pages[i].id === "pg-" + id);
   var navs = root.querySelectorAll("[data-nav]");
@@ -1081,8 +1089,7 @@ $id("btn-factory").addEventListener("click", function () {
 
 /* ===================== 启动 ===================== */
 API.get("/api/session").then(function (s) {
-  if (s.logged) setLogged(true);
-  else setLogged(false);
+  setLogged(s.logged);
   if (s.lan_ip) $id("ru-lsub").textContent = s.lan_ip + " · 管理后台";
 }).catch(function () { setLogged(false); });
 
