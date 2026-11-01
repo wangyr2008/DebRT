@@ -32,7 +32,7 @@ jobs:
           sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::install.sh 失败（exit $code）"
-            tail -30 /tmp/install.log | sed 's/^/::error::/'
+            tail -30 /tmp/install.log | tac | sed 's/^/::error::/'   # 倒序：死点排在注解第一条（上限 10 条）
             exit 1
           fi
           tail -5 /tmp/install.log
