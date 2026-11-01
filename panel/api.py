@@ -58,11 +58,17 @@ def priv(*args, input_text=None, timeout=90):
                            capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise ApiError(504, "TIMEOUT", "操作超时", "任务可能仍在后台进行，请稍后刷新页面确认结果")
+    if not (p.stdout or "").strip():
+        # 无输出：把 stderr 尾部与退出码带给前端/日志（真机排障关键，2026-11 首装实测）
+        err_tail = "; ".join((p.stderr or "").strip().splitlines()[-3:])
+        raise ApiError(500, "PRIV_ERROR", "特权服务无输出",
+                       f"exit={p.returncode} stderr: {err_tail[:300]}")
     try:
-        data = json.loads(p.stdout or "{}")
+        data = json.loads(p.stdout)
     except json.JSONDecodeError:
+        err_tail = "; ".join((p.stderr or "").strip().splitlines()[-3:])
         raise ApiError(500, "PRIV_MALFORMED", "特权服务返回异常",
-                       "请在系统上执行 seedrou-priv selftest 检查；journalctl -u seedrou-panel 查看日志")
+                       f"stderr: {err_tail[:300]}")
     if not data.get("ok", False):
         raise ApiError(STATUS_MAP.get(data.get("code", ""), 400),
                        data.get("code", "PRIV_ERROR"), data.get("message", "操作失败"),

@@ -90,6 +90,20 @@ jobs:
           assert "has_password" in cfg["wan"], cfg["wan"]
           print("config-get OK")' || { echo "$OUT" | sed 's/^/::error::CFG /'; exit 1; }
 
+      - name: HTTP 登录 + /api/status 真实链路（2026-11 首装揭出 status 缺 ok 字段）
+        run: |
+          CK=$(mktemp)
+          curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
+            -d "{\"password\":\"$SEEDROU_ADMIN_PW\"}" -c "$CK" http://127.0.0.1/api/login \
+            | grep -q '"ok": true' || { echo "::error::HTTP 登录失败"; exit 1; }
+          curl -s -b "$CK" http://127.0.0.1/api/status | python3 -c '
+            import json, sys
+            d = json.load(sys.stdin)
+            assert d.get("ok"), d
+            assert d["wan"]["mode"] == "dhcp", d
+            assert d["system_ok"], d
+            print("HTTP 登录 + status OK，leases:", d["stats"]["devices"])'
+
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
         run: |
           VER=$(tr -d '[:space:]' < VERSION)

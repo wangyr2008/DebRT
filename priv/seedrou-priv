@@ -1135,6 +1135,7 @@ for vp in ("/usr/local/lib/seedrou/share/VERSION", "/usr/local/lib/seedrou/VERSI
     except OSError:
         continue
 print(json.dumps({
+    "ok": True,
     "wan": wan, "ipv6": v6, "ports": ports,
     "lan": cfg.get("lan", {}),
     "version": ver,

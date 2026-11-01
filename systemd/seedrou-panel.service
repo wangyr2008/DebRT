@@ -7,9 +7,10 @@ Wants=network-online.target
 Type=simple
 User=seedrou
 Group=seedrou
-# 绑定 80 端口所需的最小能力；面板无任何文件级 root 权限
+# 绑定 80 端口用 Ambient 即可；【不能】配 CapabilityBoundingSet —— bounding 集不含
+# CAP_SETUID/CAP_SETGID 会让面板里的 setuid sudo 提权失败（"unable to change to root gid"，
+# 真机首装实测），登录与全部特权操作断链。安全边界由 sudo 白名单 + 无 shell 用户保证。
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/python3 /usr/local/lib/seedrou/panel/seedrou_panel.py --port 80
 Restart=on-failure
 RestartSec=3
