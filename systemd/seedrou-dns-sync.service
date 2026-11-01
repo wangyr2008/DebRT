@@ -1,0 +1,16 @@
+[Unit]
+# WAN 租约就绪后重建 dnsmasq 上游（事件驱动的开机路径）
+# dnsmasq 不等它——先服务 DHCP/LAN，上游由本单元补齐后 HUP 生效
+Wants=network-online.target
+After=network-online.target dnsmasq.service networkd-dispatcher.service
+ConditionPathExists=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
+
+[Service]
+Type=oneshot
+# 有载波才等（最多 45s）；无线上位机/离线开机直接跳过，不拖慢启动
+ExecStart=/usr/local/lib/seedrou/wait-dns-upstream
+TimeoutStartSec=75
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

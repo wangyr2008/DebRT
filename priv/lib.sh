@@ -236,30 +236,18 @@ DPEOF
 }
 
 # 按 config.json 的 WAN 口重建 DNS 上游（幂等；/run 重启即清，dispatcher 未触发时由此兜底）
-# 开机竞态：apply 排在 dnsmasq 之前、可能早于 DHCP 租约——此时轮询等待（最多 30s），
-# 保证 dnsmasq 启动时 servers-file 已就绪（真机首装实测：错过 dispatcher 信号导致全网 REFUSED）
+# 按 config.json 的 WAN 口即时重建 DNS 上游（幂等、尽力而为、不等待）。
+# 等待职责在专用单元 seedrou-dns-sync.service（After=network-online，载波感知），
+# dispatcher 负责运行期事件；此处只做收敛时的即时兜底。
 sync_dns_upstream() {
   local hook=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
   [ -x "$hook" ] || return 0
-  local wan_if if got=""
+  local wan_if if
   wan_if="$(python3 -c 'import json;print(",".join(p["name"] for p in json.load(open("'"$CONFIG_JSON"'")).get("ports",[]) if p.get("wan")) or "")' 2>/dev/null)"
   [ -n "$wan_if" ] || return 0
   for if in ${wan_if//,/ }; do
-    ip -4 addr show "$if" 2>/dev/null | grep -q inet && { got="$if"; break; }
+    ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' && "$hook" "$if" routable
   done
-  if [ -z "$got" ]; then
-    local i=0
-    while [ "$i" -lt 30 ]; do
-      for if in ${wan_if//,/ }; do
-        ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' && { got="$if"; break; }
-      done
-      [ -n "$got" ] && break
-      sleep 1; i=$((i+1))
-    done
-    [ -z "$got" ] && return 0   # WAN 真的没线：保留现状，等 dispatcher/下次收敛
-    got="$if"
-  fi
-  "$hook" "$got" routable
   return 0
 }
 

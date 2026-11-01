@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# 等 WAN 口拿到 IPv4（载波感知，最多 45s）→ 写上游 → HUP dnsmasq。
+# 载波不存在（离线开机）立即退出；运行期变化由 dispatcher 钩子负责。
+set -u
+CFG="/etc/seedrou/config.json"
+HOOK="/etc/networkd-dispatcher/routable.d/70-seedrou-dns"
+[ -x "$HOOK" ] || exit 0
+
+read -r MODE WANIFS <<<"$(python3 - "$CFG" <<'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+    mode = cfg.get("wan", {}).get("mode", "dhcp")
+    ifaces = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+except Exception:
+    mode, ifaces = "dhcp", []
+print(("pppoe ppp0") if mode == "pppoe" else ("dhcp " + " ".join(ifaces or ["enp1s0"])))
+PY
+)"
+
+i=0
+while [ "$i" -lt 45 ]; do
+  if [ "$MODE" = "pppoe" ] && ip -4 addr show ppp0 2>/dev/null | grep -q 'inet '; then got=ppp0; break; fi
+  for IF in $WANIFS; do
+    ip -4 addr show "$IF" 2>/dev/null | grep -q 'inet ' && { got="$IF"; break; }
+  done
+  [ -n "${got:-}" ] && break
+  # 无载波（网线没插）就不等了
+  any_carrier=0
+  for IF in $WANIFS; do
+    [ "$(cat /sys/class/net/$IF/carrier 2>/dev/null)" = "1" ] && any_carrier=1
+  done
+  [ "$any_carrier" = "0" ] && { echo "wait-dns-upstream: WAN 无载波，跳过等待"; exit 0; }
+  sleep 1; i=$((i+1))
+done
+
+IF="${got:-${WANIFS%% *}}"
+[ -n "$IF" ] || exit 0
+"$HOOK" "$IF" routable
+exit 0

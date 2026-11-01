@@ -58,6 +58,8 @@ install -m 644 "$SRC_DIR/priv/lib.sh"         "$LIB_DIR/lib.sh"
 # 全部 .py 按 glob 部署：逐个列举会漏新文件（pwhash.py 就漏过一次，被 CI 抓到）
 install -m 644 "$SRC_DIR/priv/"*.py           "$LIB_DIR/"
 install -m 755 "$SRC_DIR/priv/qdisc-apply"    "$LIB_DIR/qdisc-apply"
+install -m 755 "$SRC_DIR/priv/wait-wan"       "$LIB_DIR/wait-wan"
+install -m 755 "$SRC_DIR/priv/wait-dns-upstream" "$LIB_DIR/wait-dns-upstream"
 install -m 755 "$SRC_DIR/priv/wan-addr-sync"  "$LIB_DIR/wan-addr-sync"
 install -m 644 "$SRC_DIR/panel/"*.py          "$LIB_DIR/panel/"
 mkdir -p "$LIB_DIR/panel/static"
@@ -180,6 +182,7 @@ else
   systemctl daemon-reload
   systemctl enable --now dnsmasq.service >/dev/null 2>&1 || true
   systemctl enable --now networkd-dispatcher.service >/dev/null 2>&1 || true
+  systemctl enable --now seedrou-dns-sync.service >/dev/null 2>&1 || true
   systemctl enable seedrou-apply.service >/dev/null 2>&1
   systemctl enable --now seedrou-converge.timer >/dev/null 2>&1
   systemctl enable --now seedrou-panel.service >/dev/null 2>&1
