@@ -22,22 +22,8 @@ CMD="${1:-}"; [ $# -gt 0 ] && shift
 # 管理密码哈希记录解析：兼容 "pbkdf2$iters$salt$hash"（旧4段）与
 # "pbkdf2$sha256$iters$salt$hash"（新5段，算法显式）。历史缺陷：4 段格式的
 # 首段"pbkdf2"曾被当成摘要算法名传给 pbkdf2_hmac → 必抛异常 → 永远登录失败（五审 P-02）。
-_pw_parse() { python3 - "$1" <<'PWPY'
-import sys
-parts = sys.argv[1].split("$")
-if len(parts) == 5:
-    fmt, algo, iters, salt, want = parts
-    if fmt != "pbkdf2" or algo != "sha256":
-        raise SystemExit(1)
-elif len(parts) == 4:
-    fmt, iters, salt, want = parts
-    if fmt != "pbkdf2":
-        raise SystemExit(1)
-else:
-    raise SystemExit(1)
-print(iters, salt, want)
-PWPY
-}
+# 密码记录解析/校验见 priv/pwhash.py（Python 模块，auth-verify / passwd-set / install.sh 共用；
+# 此前曾误写成 Bash 函数并在 Python heredoc 里调用 → NameError → 登录必失败，六审 P-02）
 
 # ---------------------------------------------------------------------------
 # 认证
@@ -52,7 +38,9 @@ do_auth_verify() {
   [ -f "${SEEDROU_VAR}/auth-state.json" ] && lock_state="$(cat "${SEEDROU_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
   # 密码经环境变量传入（/proc/<pid>/environ 为 0400 root，ps 不可见），不走 argv（审计 B-15）
   out="$(SEEDROU_SECRET="$pw" python3 - "$lock_state" <<'PYEOF'
-import hashlib, hmac, json, os, sys, time
+import json, os, sys, time
+sys.path.insert(0, "/usr/local/lib/seedrou")
+import pwhash
 pw, state = os.environ.get("SEEDROU_SECRET", ""), json.loads(sys.argv[1])
 now = int(time.time())
 if state.get("lock_until", 0) > now:
@@ -62,13 +50,19 @@ if state.get("lock_until", 0) > now:
     sys.exit(0)
 try:
     rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
-    iters, salt, want = _pw_parse(rec)
-    got = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(iters)).hex()
-    ok = hmac.compare_digest(got, want)
+    ok = pwhash.verify(pw, rec)
+except ValueError:
+    # 记录格式坏：与"密码不正确"区分开，CI/排查一眼定位（六审建议）
+    print(json.dumps({"ok": False, "code": "AUTH_RECORD_BAD",
+                      "message": "密码记录无法解析（secrets.json 可能损坏或来自旧版本）",
+                      "hint": "在系统上执行：rm /etc/seedrou/secrets.json && sudo bash install.sh 重新生成密码"}))
+    sys.exit(1)
 except Exception:
     ok = False
 if ok:
     state = {"fails": 0, "lock_until": 0}
+    # 成功也必须输出 JSON：bash 包装层靠 stdout 判定，空输出会被当作失败（六审复现 A 揭出）
+    print(json.dumps({"ok": True}))
 else:
     state["fails"] = int(state.get("fails", 0)) + 1
     if state["fails"] >= 20:
@@ -429,7 +423,8 @@ do_podman_ops() {
   local action="${1:-}"; [ $# -gt 0 ] && shift
   if ! command -v podman >/dev/null 2>&1; then
     if [ "$action" = "status" ]; then
-      ok_out "installed" "false" "running" "false" "autostart" "false"   # 五审 P-06：未安装也要给前端结构化结果
+      ok_out "installed" "false" "running" "false" "autostart" "false"   # 未安装也给前端结构化结果
+      exit 0    # 不能再落到 die：ok_out 不退出，双 JSON 会让面板解析失败（六审 P-06）
     fi
     die "PODMAN_MISSING" "Podman 未安装" "请在系统上执行 apt install podman podman-compose"
   fi
@@ -638,24 +633,22 @@ do_passwd_set() {
   local out rc
   # body（含新旧密码）经环境变量传入，不进 argv（审计 B-15）
   out="$(SEEDROU_SECRET="$body" python3 - <<'PYEOF'
-import hashlib, hmac, json, sys, time, os
+import json, os, sys
+sys.path.insert(0, "/usr/local/lib/seedrou")
+import pwhash
 body = json.loads(os.environ["SEEDROU_SECRET"])
 old, new = body.get("old", ""), body.get("new", "")
 secrets = json.load(open("/etc/seedrou/secrets.json"))
 def check(pw, rec):
     try:
-        iters, salt, want = _pw_parse(rec)
-        return hmac.compare_digest(
-            hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(iters)).hex(), want)
+        return pwhash.verify(pw, rec)
     except Exception:
         return False
 if not check(old, secrets.get("admin_pbkdf2", "")):
     print(json.dumps({"ok": False, "code": "AUTH_BAD", "message": "原密码不正确", "hint": "请输入当前使用的管理密码"})); sys.exit(1)
 if not (8 <= len(new) <= 32):
     print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)
-salt = os.urandom(16)
-h = hashlib.pbkdf2_hmac("sha256", new.encode(), salt, 600000).hex()
-secrets["admin_pbkdf2"] = f"pbkdf2$sha256$600000${salt.hex()}${h}"
+secrets["admin_pbkdf2"] = pwhash.hash_new(new)
 # 轮换会话密钥：改密后所有旧会话（含可能被盗的 cookie）立即失效（审计 B-17）
 secrets["session_secret"] = os.urandom(32).hex()
 tmp = "/etc/seedrou/.secrets.tmp"

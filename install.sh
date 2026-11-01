@@ -127,14 +127,13 @@ if [ ! -f "$ETC_DIR/secrets.json" ]; then
   fi
   # 密码经环境变量传入（/proc environ 0400 root），不进 argv（五审 P-05）
   ADMIN_PW="$ADMIN_PW" python3 - <<'PYEOF'
-import hashlib, json, os, secrets
+import json, os, sys
+sys.path.insert(0, "/usr/local/lib/seedrou")
+import pwhash   # 唯一实现（六审 P-02）
 pw = os.environ["ADMIN_PW"]
-salt = os.urandom(16)
-h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 600000).hex()
 data = {
-    # 五段格式：算法显式化（五审 P-02；priv 校验双向兼容旧四段）
-    "admin_pbkdf2": f"pbkdf2$sha256$600000${salt.hex()}${h}",
-    "session_secret": secrets.token_hex(32),
+    "admin_pbkdf2": pwhash.hash_new(pw),
+    "session_secret": os.urandom(32).hex(),
     "pppoe_password": "",
 }
 json.dump(data, open("/etc/seedrou/secrets.json", "w"), indent=1)
