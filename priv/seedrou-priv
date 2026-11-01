@@ -368,6 +368,7 @@ PYEOF
       nft list table $NFT_TABLE >/dev/null 2>&1 || svc_nft
       svc_cake
       sync_dns_upstream
+      maintain_singbox_dropin
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0
     fi
@@ -382,6 +383,7 @@ PYEOF
   run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true
   wait_dnsmasq 15 || true
   sync_dns_upstream
+  maintain_singbox_dropin
   ok_out "message" "已按配置完成系统收敛${migrated:+。}$migrated"
 }
 

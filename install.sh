@@ -162,6 +162,14 @@ fi
 
 # ---------------- 5. 服务 ----------------
 c_info "启用服务..."
+# sing-box 共存：检测到 sing-box.service 时，自动挂"等 WAN 就绪"drop-in
+# （防止 auto_route 在 WAN 未就绪时形成路由死循环；收敛流程也会维护，见 COEXISTENCE.md）
+if [ -f /etc/systemd/system/sing-box.service ]; then
+  mkdir -p /etc/systemd/system/sing-box.service.d
+  install -m 644 "$SRC_DIR/systemd/sing-box.service.d/10-seedrou-wait-wan.conf" \
+    /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf
+  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in（priv/wait-wan）"
+fi
 # Debian 自带 nftables.service 开机 flush ruleset —— 与 sing-box 表冲突，禁用之（见 COEXISTENCE.md）
 systemctl disable nftables.service >/dev/null 2>&1 || true
 if [ "$SMOKE" = "1" ]; then

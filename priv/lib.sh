@@ -211,15 +211,55 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
   esac
 }
 
+# sing-box 共存维护：sing-box.service 存在但缺"等 WAN"drop-in 时自动补挂
+# （覆盖"先装 SeedRou 后装 sing-box"的场景；幂等，见 COEXISTENCE.md）
+maintain_singbox_dropin() {
+  local di="/etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf"
+  [ -f /etc/systemd/system/sing-box.service ] || return 0
+  [ -f /usr/local/lib/seedrou/wait-wan ] || return 0
+  [ -f "$di" ] && return 0
+  mkdir -p /etc/systemd/system/sing-box.service.d
+  cat > "$di" <<'DPEOF'
+# 由 SeedRou 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
+[Unit]
+After=network-online.target
+Wants=network-online.target
+[Service]
+ExecStartPre=/usr/local/lib/seedrou/wait-wan
+TimeoutStartSec=210
+Restart=on-failure
+RestartSec=15
+DPEOF
+  systemctl daemon-reload
+  echo "wait-wan: 已为 sing-box 安装 WAN 就绪 drop-in"
+  return 0
+}
+
 # 按 config.json 的 WAN 口重建 DNS 上游（幂等；/run 重启即清，dispatcher 未触发时由此兜底）
+# 开机竞态：apply 排在 dnsmasq 之前、可能早于 DHCP 租约——此时轮询等待（最多 30s），
+# 保证 dnsmasq 启动时 servers-file 已就绪（真机首装实测：错过 dispatcher 信号导致全网 REFUSED）
 sync_dns_upstream() {
   local hook=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
   [ -x "$hook" ] || return 0
-  local wan_if if
+  local wan_if if got=""
   wan_if="$(python3 -c 'import json;print(",".join(p["name"] for p in json.load(open("'"$CONFIG_JSON"'")).get("ports",[]) if p.get("wan")) or "")' 2>/dev/null)"
+  [ -n "$wan_if" ] || return 0
   for if in ${wan_if//,/ }; do
-    ip -4 addr show "$if" 2>/dev/null | grep -q inet && "$hook" "$if" routable
+    ip -4 addr show "$if" 2>/dev/null | grep -q inet && { got="$if"; break; }
   done
+  if [ -z "$got" ]; then
+    local i=0
+    while [ "$i" -lt 30 ]; do
+      for if in ${wan_if//,/ }; do
+        ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' && { got="$if"; break; }
+      done
+      [ -n "$got" ] && break
+      sleep 1; i=$((i+1))
+    done
+    [ -z "$got" ] && return 0   # WAN 真的没线：保留现状，等 dispatcher/下次收敛
+    got="$if"
+  fi
+  "$hook" "$got" routable
   return 0
 }
 
