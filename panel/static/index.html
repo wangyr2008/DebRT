@@ -349,7 +349,7 @@
                 <button class="ru-btn primary" id="btn-compose-deploy"><i data-lucide="play"></i>部署</button>
                 <button class="ru-btn" id="btn-compose-stop"><i data-lucide="square-stop"></i>停止</button>
                 <button class="ru-btn" id="btn-compose-upload"><i data-lucide="file-up"></i>上传 compose 文件</button>
-                <input type="file" id="file-compose" accept=".yaml,.yml,.json" hidden>
+                <input type="file" id="file-compose" hidden>
               </div>
             </div>
           </section>
@@ -407,7 +407,7 @@
                 <i data-lucide="upload"></i>
                 <div style="color:var(--ru-text);font-weight:500">手动升级</div>
                 <div>点击选择升级包文件（.tar.gz），将校验完整性后原子替换</div>
-                <input type="file" id="file-upgrade" accept="application/gzip,application/x-gzip,.tar.gz,.tgz,.gz" hidden>
+                <input type="file" id="file-upgrade" hidden>
               </div>
             </div>
 
@@ -416,7 +416,7 @@
               <div class="ru-save" style="margin-top:10px">
                 <button class="ru-btn" id="btn-backup"><i data-lucide="download"></i>新建备份</button>
                 <button class="ru-btn" id="btn-restore"><i data-lucide="upload"></i>立即恢复</button>
-                <input type="file" id="file-restore" accept="application/gzip,application/x-gzip,.tar.gz,.tgz,.gz" hidden>
+                <input type="file" id="file-restore" hidden>
               </div>
               <div class="ru-hint">恢复前会校验备份文件结构，仅合并路由配置，不会改动系统密码之外的系统文件。</div>
             </div>
