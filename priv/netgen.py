@@ -94,6 +94,12 @@ def cross_validate(cfg):
     w, l = set(wan_ifaces(cfg)), set(lan_ifaces(cfg))
     if w & l:
         fail("NETGEN", f"网口角色冲突：{sorted(w & l)}")
+    # PPPoE 线路没有 DHCPv6-PD 客户端，Native 模式实际不可用（存量坏配置在收敛期暴露，复审 R-07）
+    if cfg.get("wan", {}).get("mode") == "pppoe" and cfg.get("ipv6", {}).get("enabled") \
+            and cfg.get("ipv6", {}).get("mode") == "native":
+        fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
+             "PPPoE 线路不支持 IPv6 Native（PD）",
+             "请进入「网络设置 → IPv6 设置」改为 NAT6 或关闭 IPv6")
 
 
 def gen_wan_network(cfg):

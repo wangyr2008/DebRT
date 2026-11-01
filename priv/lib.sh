@@ -216,8 +216,11 @@ svc_restart_networkd() {
   systemctl restart systemd-networkd.service 2>/dev/null || systemctl restart systemd-networkd
 }
 svc_nft() {
-  [ -f /etc/nftables.d/seedrou-base.nft ] && nft -f /etc/nftables.d/seedrou-base.nft
+  local rc=0
+  # nft 失败不能被后面的 wan-addr-sync 掩盖（复审 R-02）
+  [ -f /etc/nftables.d/seedrou-base.nft ] && { nft -f /etc/nftables.d/seedrou-base.nft || rc=$?; }
   [ -x "${SEEDROU_ROOT}/wan-addr-sync" ] && "${SEEDROU_ROOT}/wan-addr-sync"
+  return $rc
 }
 svc_cake() {
   [ -x "${SEEDROU_ROOT}/qdisc-apply" ] && "${SEEDROU_ROOT}/qdisc-apply"

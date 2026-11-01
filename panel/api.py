@@ -84,7 +84,11 @@ def _json_body(body: bytes):
 
 def _version():
     if MOCK:
-        return "0.1.1"
+        # 开发预览直接读仓库根的 VERSION，永不漂移（复审 R-06）
+        try:
+            return open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION")).read().strip()
+        except OSError:
+            return "0.0.0"
     try:
         return open(VERSION_FILE).read().strip()
     except Exception:
@@ -222,6 +226,7 @@ def _wan_dns():
 
 def get_status(body, headers):
     st = sysinfo.mock_status() if MOCK else priv("status", timeout=30)
+    st["version"] = _version()  # mock/真实统一由 VERSION 文件决定（复审 R-06）
     if not MOCK:
         st.setdefault("wan", {}).setdefault("dns", _wan_dns())
     stats = {

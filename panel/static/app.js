@@ -1052,8 +1052,8 @@ $id("file-restore").addEventListener("change", function () {
   this.value = "";
   if (!f) return;
   if (!window.confirm("恢复将覆盖当前全部路由配置（上网方式、绑定、端口转发、静态分配等），恢复后网络会自动应用。确定继续吗？")) return;
-  API.post("/api/restore", f, { raw: true, filename: f.name }).then(function () {
-    toast("ok", "配置已恢复并生效", "若管理地址变化，请用新地址重新登录");
+  API.post("/api/restore", f, { raw: true, filename: f.name }).then(function (r) {
+    toast("ok", "配置已恢复并生效", (r && r.message) || "若管理地址变化，请用新地址重新登录");
     setTimeout(function () { loadAll(); }, 1500);
   }).catch(apiFail);
 });

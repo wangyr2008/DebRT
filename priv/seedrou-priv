@@ -190,7 +190,14 @@ PYEOF
     die "MERGE" "配置合并失败" "本次修改未生效；请刷新页面重试"
   fi
 
-  # 3) 生成原生配置到暂存目录（含跨段校验）
+  # 3) 先采样 + 落盘：netgen 读固定路径 /etc/seedrou/config.json，必须让它在
+  #    生成前看到"新配置"，否则每次保存生效的都是上一版（复审 v0.1.2 P-01）
+  #    pre_wan 语义仍是"改动前 WAN 是否可用"（审计 B-03），在写盘前采样
+  pre_wan="$(wan_route_ok)"
+  write_atomic "$CONFIG_JSON" 644 < "$new_cfg"
+  [ -s "$new_sec" ] && write_atomic "$SECRETS_JSON" 600 < "$new_sec"
+
+  # 4) 用新配置生成 + 预检。此时原生文件尚未部署，失败回滚后系统与旧配置完全一致（安全）
   stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json"; then
@@ -198,18 +205,13 @@ PYEOF
     restore_lastgood "$tag"; rm -rf "$stage" "$in_json" "$new_cfg" "$new_sec" "$norm_file"
     exit 1
   fi
-  # 4) 语法预检
   if ! pf_out="$(preflight_stage "$stage")"; then
     printf '%s\n' "$pf_out"
     restore_lastgood "$tag"; rm -rf "$stage" "$in_json" "$new_cfg" "$new_sec" "$norm_file"
     exit 1
   fi
 
-  # 5) 应用：写配置 + 写原生文件 + 重启受影响服务
-  # pre_wan 必须在写盘前采样：它表示"改动前 WAN 是否可用"（审计 B-03）
-  pre_wan="$(wan_route_ok)"
-  write_atomic "$CONFIG_JSON" 644 < "$new_cfg"
-  [ -s "$new_sec" ] && write_atomic "$SECRETS_JSON" 600 < "$new_sec"
+  # 5) 部署生成文件 + 重启受影响服务
   rm -f "$in_json" "$new_cfg" "$new_sec" "$norm_file"
   apply_stage_files "$stage" "$man_json"
   cleanup_stale_port_networks
@@ -288,11 +290,31 @@ do_apply_all() {
   local convergent=""; [ "${1:-}" = "--convergent" ] && convergent="1"
   mkdir -p /run/seedrou-dns /run/seedrou
   acquire_lock
-  local stage man_json
+  local stage man_json migrated=""
   stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
-    die "CONFIG_CORRUPT" "配置生成失败（config.json 可能损坏）" "可从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+    # /16 历史配置：自动迁移为 /24（保留 IP 与地址池），避免"重启即无 NAT"（复审 R-04）
+    if grep -q 'LAN_MASK_TOO_WIDE' "$man_json" 2>/dev/null; then
+      snapshot_lastgood "m$(date +%s)"
+      if python3 - <<'PYEOF'
+import json, os
+cfg = json.load(open("/etc/seedrou/config.json"))
+cfg.setdefault("lan", {})["mask"] = "255.255.255.0"
+json.dump(cfg, open("/etc/seedrou/.config.tmp", "w"), ensure_ascii=False, indent=1)
+os.replace("/etc/seedrou/.config.tmp", "/etc/seedrou/config.json")
+PYEOF
+      then
+        migrated="已自动把 LAN 子网掩码迁移为 255.255.255.0（历史 /16 配置不再受支持，地址池末段保持不变）"
+        rm -rf "$stage"
+        stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+        man_json="$stage/manifest.json"
+      fi
+    fi
+    if [ ! -s "$man_json" ] || ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+      cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
+      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+    fi
   fi
 
   if [ -n "$convergent" ]; then
@@ -323,7 +345,7 @@ PYEOF
   rm -rf "$stage"
   run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true
   wait_dnsmasq 15 || true
-  ok_out "message" "已按配置完成系统收敛"
+  ok_out "message" "已按配置完成系统收敛${migrated:+。}$migrated"
 }
 
 # ---------------------------------------------------------------------------
@@ -1014,20 +1036,36 @@ try:
 except Exception:
     pass
 
-# 硬盘温度：smartctl 需要 root（复审 N-05），随 status 一并采集
+# 硬盘温度：smartctl 需要 root（复审 N-05），随 status 一并采集；
+# 60 秒文件缓存——5 秒轮询下不至于持续唤醒机械盘（复审 R-05）
 disk_temp = None
 try:
-    import shutil as _sh
-    if _sh.which("smartctl"):
-        scan = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
-        dev = (json.loads(scan or "{}").get("devices") or [{}])[0].get("name", "")
-        if dev:
-            info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
-            temps = json.loads(info or "{}").get("temperature", {})
-            for tv in temps.values():
-                if isinstance(tv, (int, float)) and 0 < tv < 120:
-                    disk_temp = int(tv)
-                    break
+    import os as _os
+    cache = "/run/seedrou/disk-temp"
+    now = time.time()
+    cached = None
+    try:
+        if now - _os.stat(cache).st_mtime < 60:
+            cached = open(cache).read().strip()
+            disk_temp = int(cached) if cached.lstrip("-").isdigit() else None
+    except (OSError, ValueError):
+        pass
+    if cached is None:
+        import shutil as _sh
+        if _sh.which("smartctl"):
+            scan = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
+            dev = (json.loads(scan or "{}").get("devices") or [{}])[0].get("name", "")
+            if dev:
+                info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
+                temps = json.loads(info or "{}").get("temperature", {})
+                for tv in temps.values():
+                    if isinstance(tv, (int, float)) and 0 < tv < 120:
+                        disk_temp = int(tv)
+                        break
+        _os.makedirs("/run/seedrou", exist_ok=True)
+        with open(cache + ".tmp", "w") as f:
+            f.write(str(disk_temp if disk_temp is not None else ""))
+        _os.replace(cache + ".tmp", cache)
 except Exception:
     disk_temp = None
 
