@@ -616,7 +616,7 @@ do_backup_create() {
     --exclude='etc/seedrou/secrets.json' \
     etc/seedrou var/lib/seedrou/notes.json 2>/dev/null || true
   [ -s "$out_path" ] || die "BACKUP_FAIL" "备份打包失败" "请检查磁盘空间（df -h）"
-  # 备份含 secrets（PPPoE 密码）：仅面板用户可读
+  # 备份不含 secrets（已剔除）：640 归面板用户，仅供下载
   chown seedrou:seedrou "$out_path" 2>/dev/null || true
   chmod 640 "$out_path"
   ok_out "path" "$out_path"
@@ -665,9 +665,27 @@ sys.exit(0 if ok else 1)
   [ -f "$stage/var/lib/seedrou/notes.json" ] && write_atomic "${SEEDROU_VAR}/notes.json" 644 < "$stage/var/lib/seedrou/notes.json"
   rm -rf "$stage"
   chmod 600 "$SECRETS_JSON" 2>/dev/null || true
+  # 备份不含 secrets：按 secrets.json 实际内容重算 has_password（复审 N-04）
+  local pw_warn=""
+  python3 - <<'PYEOF'
+import json
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+    sec = json.load(open("/etc/seedrou/secrets.json"))
+except Exception:
+    raise SystemExit
+has = bool(sec.get("pppoe_password"))
+cfg.setdefault("wan", {})["has_password"] = has
+json.dump(cfg, open("/etc/seedrou/config.json.new", "w"), ensure_ascii=False, indent=1)
+import os
+os.replace("/etc/seedrou/config.json.new", "/etc/seedrou/config.json")
+PYEOF
+  if [ "$(python3 -c 'import json;c=json.load(open("'"$CONFIG_JSON"'"));print(c["wan"]["mode"]=="pppoe" and not c["wan"].get("has_password"))' 2>/dev/null)" = "True" ]; then
+    pw_warn="注意：备份不含宽带密码，PPPoE 拨号尚未可用——请在「网络设置 → 上网设置」重新填写宽带密码并保存"
+  fi
   # 重新生成 + 应用（失败必须如实上报，审计 B-08）
   local ap; ap="$(do_apply_all 2>&1)" || { printf '%s\n' "$ap"; exit 1; }
-  ok_out "message" "配置已从备份恢复并生效"
+  ok_out "message" "配置已从备份恢复并生效${pw_warn:+。}$pw_warn"
 }
 
 do_factory_reset() {
@@ -996,6 +1014,23 @@ try:
 except Exception:
     pass
 
+# 硬盘温度：smartctl 需要 root（复审 N-05），随 status 一并采集
+disk_temp = None
+try:
+    import shutil as _sh
+    if _sh.which("smartctl"):
+        scan = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
+        dev = (json.loads(scan or "{}").get("devices") or [{}])[0].get("name", "")
+        if dev:
+            info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
+            temps = json.loads(info or "{}").get("temperature", {})
+            for tv in temps.values():
+                if isinstance(tv, (int, float)) and 0 < tv < 120:
+                    disk_temp = int(tv)
+                    break
+except Exception:
+    disk_temp = None
+
 ver = "0.0.0"
 for vp in ("/usr/local/lib/seedrou/share/VERSION", "/usr/local/lib/seedrou/VERSION"):
     try:
@@ -1008,6 +1043,7 @@ print(json.dumps({
     "lan": cfg.get("lan", {}),
     "version": ver,
     "system_ok": bool(dnsmasq_ok and networkd_ok and nft_ok),
+    "disk_temp": disk_temp,
     "leases_count": leases,
 }, ensure_ascii=False))
 PYEOF

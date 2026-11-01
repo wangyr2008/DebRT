@@ -155,23 +155,6 @@ def temp_cpu():
     return None
 
 
-def temp_disk():
-    """第一块盘的温度；需要 smartmontools（未装返回 None，UI 显示 —）。"""
-    import subprocess
-    try:
-        out = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
-        dev = (json.loads(out or "{}").get("devices") or [{}])[0].get("name", "")
-        if not dev:
-            return None
-        info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
-        for t in (json.loads(info or "{}").get("temperature", {}) or {}).values():
-            if isinstance(t, (int, float)) and 0 < t < 120:
-                return int(t)
-    except Exception:
-        return None
-    return None
-
-
 def uptime_s():
     try:
         return int(float(open("/proc/uptime").read().split()[0]))

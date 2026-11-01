@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# 把当前 WAN IPv4 地址同步进 nft 集合 inet seedrou_base 的 wan_v4。
+# 被 ppp ip-up.d / networkd-dispatcher 钩子 / apply 流水线调用；幂等、失败静默（hairpin 只是降级不生效）。
+set -u
+PRIV_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=lib.sh
+source "${PRIV_DIR}/lib.sh" 2>/dev/null || true
+
+nft list table inet seedrou_base >/dev/null 2>&1 || exit 0
+
+ADDRS="$(python3 - <<'PYEOF'
+import json, subprocess
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+except Exception:
+    raise SystemExit
+wans = {p["name"] for p in cfg.get("ports", []) if p.get("wan")}
+if cfg.get("wan", {}).get("mode") == "pppoe":
+    wans.add("ppp0")
+try:
+    out = subprocess.run(["ip", "-j", "-4", "addr"], capture_output=True, text=True, timeout=5).stdout
+    addrs = json.loads(out or "[]")
+except Exception:
+    raise SystemExit
+ips = []
+for a in addrs:
+    if a.get("ifname") in wans:
+        for ai in a.get("addr_info", []):
+            ip = ai.get("local", "")
+            if ip and not ip.startswith("169.254."):
+                ips.append(ip)
+print(",".join(sorted(set(ips))))
+PYEOF
+)"
+
+nft flush set inet seedrou_base wan_v4 2>/dev/null || exit 0
+if [ -n "$ADDRS" ]; then
+  nft add element inet seedrou_base wan_v4 "{ $ADDRS }" 2>/dev/null || exit 0
+fi
+exit 0

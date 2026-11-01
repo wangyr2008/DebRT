@@ -22,8 +22,11 @@ _fails = {}
 FAIL_LIMIT, LOCK_S = 5, 60
 
 # 已登出令牌的撤销表（内存态，进程重启即清；无状态 HMAC 会话的补偿机制，
-# 否则登出后旧 cookie 重放仍然有效直到过期）
-_revoked = set()
+# 否则登出后旧 cookie 重放仍然有效直到过期）。条目 12h 自动过期（令牌最长寿命），
+# 并设总量上限，避免长期运行缓慢增长（复审 N-08a）。
+_revoked = {}
+_REVOKE_TTL = 12 * 3600
+_REVOKE_MAX = 4096
 
 
 class AuthError(Exception):
@@ -93,14 +96,25 @@ def _cookie_val(headers) -> str:
 
 def logged_in(headers) -> bool:
     tok = _cookie_val(headers)
-    if not tok or hashlib.sha256(tok.encode()).hexdigest() in _revoked:
+    if not tok:
+        return False
+    h = hashlib.sha256(tok.encode()).hexdigest()
+    if _revoked.get(h, 0) > time.time():
         return False
     return verify_token(tok)
 
 
 def revoke(token: str):
-    if token:
-        _revoked.add(hashlib.sha256(token.encode()).hexdigest())
+    if not token:
+        return
+    now = time.time()
+    _revoked[hashlib.sha256(token.encode()).hexdigest()] = now + _REVOKE_TTL
+    if len(_revoked) > _REVOKE_MAX:
+        expired = [k for k, v in _revoked.items() if v < now]
+        for k in expired:
+            _revoked.pop(k, None)
+        while len(_revoked) > _REVOKE_MAX:
+            _revoked.pop(next(iter(_revoked)), None)
 
 
 def session_cookie(token: str) -> str:

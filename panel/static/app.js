@@ -580,7 +580,7 @@ function loadLeases() {
         '<td data-label="IP 地址">' + esc(d.ip) + '</td>' +
         '<td data-label="MAC 地址" class="mono">' + esc(d.mac) + "</td>" +
         '<td data-label="租约">' + (d.static ? '<span class="ru-badge blue">静态绑定</span>' : esc(d.lease_text || "—")) + "</td>" +
-        '<td data-label="备注"><input class="ru-in" style="min-width:130px" data-note-mac="' + esc(d.mac) + '" value="' + esc(d.note || "") + '" placeholder="添加备注"></td></tr>';
+        '<td data-label="备注"><input class="ru-in" style="min-width:130px" maxlength="32" data-note-mac="' + esc(d.mac) + '" value="' + esc(d.note || "") + '" placeholder="添加备注（32 字内）"></td></tr>';
     });
     tb.innerHTML = html;
   }).catch(function (e) { if (e.code !== "UNAUTH") apiFail(e); });
@@ -588,9 +588,17 @@ function loadLeases() {
 loaders.devices = loadLeases;
 $id("btn-notes-save").addEventListener("click", function () {
   var btn = this, notes = {};
+  var noteBad = false;
   root.querySelectorAll("[data-note-mac]").forEach(function (inp) {
-    notes[inp.getAttribute("data-note-mac")] = inp.value.trim();  // 空值也要提交：语义是"清除备注"
+    var v = inp.value.trim();
+    if (v.length > 32) {
+      apiFail({ message: "备注最长 32 字", hint: "请缩短后再保存" });
+      noteBad = true;
+    } else {
+      notes[inp.getAttribute("data-note-mac")] = v;  // 空值也要提交：语义是"清除备注"
+    }
   });
+  if (noteBad) return;
   btnBusy(btn, true);
   API.post("/api/notes", { notes: notes }).then(function () {
     btnBusy(btn, false); toast("ok", "设备备注已保存", "备注将同步显示在静态分配列表");

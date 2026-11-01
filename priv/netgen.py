@@ -53,6 +53,10 @@ def lan_net(cfg):
 
 def cross_validate(cfg):
     net = lan_net(cfg)
+    if net.prefixlen < 24:
+        fail("LAN_MASK_TOO_WIDE",
+             f"LAN 子网掩码 /{net.prefixlen} 过宽（历史遗留配置）",
+             "新版仅支持 /24–/30：请进入「网络设置 → 局域网 IP」把子网掩码改为 255.255.255.0 并同步调整 DHCP 地址池")
     lan_ip = ipaddress.IPv4Address(cfg["lan"]["ip"])
     # 静态绑定必须在 LAN 子网内且不与路由器 IP 冲突
     for s in cfg.get("static", []):
@@ -127,6 +131,9 @@ def gen_lan_network(cfg):
              "IPForward=yes"]
     # LAN 桥成员口由 30-<name>.network 绑定（见 gen_port_networks）
     # IPv6：RA 统一由 networkd 发布（dnsmasq 不再发 RA，避免双 RA 源，见审计 B-21）
+    if v6.get("enabled") and v6.get("mode") == "static" and not v6.get("prefix"):
+        fail("V6_STATIC_NEEDS_PREFIX", "静态 IPv6 模式缺少 LAN IPv6 前缀",
+             "请在「网络设置 → IPv6 设置」补填 LAN IPv6 前缀（如 2001:db8:abcd::/64），或改用 NAT6")
     if v6.get("enabled"):
         if v6.get("mode") == "nat6":
             lines += [f"Address={ULA_PREFIX}::1/64"]
@@ -225,10 +232,10 @@ def gen_nft(cfg):
         tgt = r["ip"] + (f':{r["lport"]}' if r["lport"] != r["wport"].split("-")[0] else "")
         if r["proto"] in ("tcp", "both"):
             dnat.append(f'    iifname $WAN_IFS tcp dport {r["wport"]} dnat ip to {tgt}')
-            dnat_lan.append(f'    iifname $LAN_BR tcp dport {r["wport"]} dnat ip to {tgt}')
+            dnat_lan.append(f'    iifname $LAN_BR ip daddr @wan_v4 tcp dport {r["wport"]} dnat ip to {tgt}')
         if r["proto"] in ("udp", "both"):
             dnat.append(f'    iifname $WAN_IFS udp dport {r["wport"]} dnat ip to {tgt}')
-            dnat_lan.append(f'    iifname $LAN_BR udp dport {r["wport"]} dnat ip to {tgt}')
+            dnat_lan.append(f'    iifname $LAN_BR ip daddr @wan_v4 udp dport {r["wport"]} dnat ip to {tgt}')
     lines = [
         "#!/usr/sbin/nft -f",
         "# SeedRou 基础防火墙 —— 只操作本表 inet seedrou_base，",
@@ -241,6 +248,9 @@ def gen_nft(cfg):
         f"  define WAN_IFS = {{ {wan_set} }}",
         f'  define LAN_BR = "br-lan"',
         f"  define LAN_NET = {net.with_prefixlen}",
+        "  # 当前 WAN IPv4 地址集合：由 priv/wan-addr-sync（钩子/apply 调用）维护，",
+        "  # hairpin DNAT 仅对「目的地址 = 本机 WAN IP」的 LAN 流量生效，绝不劫持其他出站流量",
+        "  set wan_v4 { type ipv4_addr; }",
         "",
         "  chain input {",
         "    type filter hook input priority filter; policy accept;",
@@ -281,8 +291,8 @@ def gen_nft(cfg):
         "  chain srcnat {",
         "    type nat hook postrouting priority srcnat; policy accept;",
         "    ip saddr $LAN_NET oifname $WAN_IFS masquerade",
-        "    # hairpin 回程伪装（LAN→LAN 经 DNAT 后源地址仍是 LAN，需改写为 LAN_BR 地址）",
-        "    ip saddr $LAN_NET ip daddr $LAN_NET oifname $LAN_BR masquerade",
+        "    # hairpin 回程伪装：仅作用于被 DNAT 的连接（全量 LAN→LAN 伪装会破坏 mDNS 等，复审 N-02）",
+        "    oifname $LAN_BR ct status dnat masquerade",
     ]
     if v6.get("enabled") and v6.get("mode") == "nat6":
         lines.append(f"    ip6 saddr {ULA_PREFIX}::/48 oifname $WAN_IFS masquerade")

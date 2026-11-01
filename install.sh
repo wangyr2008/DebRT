@@ -52,6 +52,7 @@ install -m 644 "$SRC_DIR/priv/lib.sh"         "$LIB_DIR/lib.sh"
 install -m 644 "$SRC_DIR/priv/validate.py"    "$LIB_DIR/validate.py"
 install -m 644 "$SRC_DIR/priv/netgen.py"      "$LIB_DIR/netgen.py"
 install -m 755 "$SRC_DIR/priv/qdisc-apply"    "$LIB_DIR/qdisc-apply"
+install -m 755 "$SRC_DIR/priv/wan-addr-sync"  "$LIB_DIR/wan-addr-sync"
 install -m 644 "$SRC_DIR/panel/"*.py          "$LIB_DIR/panel/"
 mkdir -p "$LIB_DIR/panel/static"
 install -m 644 "$SRC_DIR/panel/static/"*      "$LIB_DIR/panel/static/"
@@ -62,6 +63,7 @@ install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispat
 install -m 755 "$SRC_DIR/network/dispatcher/80-seedrou-cake" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/no-carrier.d/
 install -m 755 "$SRC_DIR/network/ppp/ip-up.d/seedrou" /etc/ppp/ip-up.d/seedrou
+install -m 755 "$SRC_DIR/network/ppp/ip-down.d/seedrou" /etc/ppp/ip-down.d/seedrou
 # systemd / sysctl / modules
 install -m 644 "$SRC_DIR/systemd/seedrou-panel.service"   /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/seedrou-apply.service"   /etc/systemd/system/
@@ -70,6 +72,8 @@ install -m 644 "$SRC_DIR/systemd/seedrou-converge.timer"  /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/systemd/seedrou-pppoe.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/sysctl/70-seedrou.conf"  /etc/sysctl.d/
 install -m 644 "$SRC_DIR/network/modules/seedrou.conf"    /etc/modules-load.d/
+# sudo 审计日志轮转（复审 N-07）
+install -m 644 "$SRC_DIR/network/logrotate/seedrou" /etc/logrotate.d/seedrou
 # sudoers（先语法检查再落盘）
 install -m 644 "$SRC_DIR/sudoers/seedrou" /etc/sudoers.d/seedrou.tmp
 visudo -c -f /etc/sudoers.d/seedrou.tmp >/dev/null || { rm -f /etc/sudoers.d/seedrou.tmp; die "sudoers 语法校验失败"; }

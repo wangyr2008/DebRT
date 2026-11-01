@@ -25,6 +25,7 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/seedrou-pppoe.service \
       /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
       /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/ppp/ip-up.d/seedrou \
+      /etc/ppp/ip-down.d/seedrou /etc/logrotate.d/seedrou \
       /etc/dnsmasq.d/seedrou.conf /etc/nftables.d/seedrou-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
       /etc/ppp/peers/seedrou

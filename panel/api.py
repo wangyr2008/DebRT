@@ -229,7 +229,7 @@ def get_status(body, headers):
         "cpu": None if MOCK else sysinfo.cpu_pct(),
         "cpu_temp": None if MOCK else sysinfo.temp_cpu(),
         "mem": None if MOCK else sysinfo.mem_pct(),
-        "disk_temp": None if MOCK else sysinfo.temp_disk(),  # 需 smartmontools（审计 C-02）
+        "disk_temp": st.get("disk_temp"),  # 由 priv status 以 root 采集（复审 N-05）
         "uptime_s": None if MOCK else sysinfo.uptime_s(),
     }
     if MOCK:

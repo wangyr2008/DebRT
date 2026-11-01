@@ -18,4 +18,5 @@ mv -f "${CONF}.tmp" "$CONF"
 
 systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 [ -x /usr/local/lib/seedrou/qdisc-apply ] && /usr/local/lib/seedrou/qdisc-apply
+[ -x /usr/local/lib/seedrou/wan-addr-sync ] && /usr/local/lib/seedrou/wan-addr-sync
 exit 0

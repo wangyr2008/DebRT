@@ -3,4 +3,5 @@
 IFACE="$1"
 STATE="$2"
 [ -x /usr/local/lib/seedrou/qdisc-apply ] && /usr/local/lib/seedrou/qdisc-apply
+[ -x /usr/local/lib/seedrou/wan-addr-sync ] && /usr/local/lib/seedrou/wan-addr-sync
 exit 0

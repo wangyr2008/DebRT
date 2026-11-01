@@ -217,6 +217,7 @@ svc_restart_networkd() {
 }
 svc_nft() {
   [ -f /etc/nftables.d/seedrou-base.nft ] && nft -f /etc/nftables.d/seedrou-base.nft
+  [ -x "${SEEDROU_ROOT}/wan-addr-sync" ] && "${SEEDROU_ROOT}/wan-addr-sync"
 }
 svc_cake() {
   [ -x "${SEEDROU_ROOT}/qdisc-apply" ] && "${SEEDROU_ROOT}/qdisc-apply"

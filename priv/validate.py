@@ -158,12 +158,17 @@ def norm_ipv6(section, data):
     need(dns_mode in ("auto", "manual"), "VALIDATE", "IPv6 DNS 仅支持 自动/手动")
     dns = []
     if enabled and dns_mode == "manual":
+        def v6addr(x, name):
+            try:
+                ipaddress.IPv6Address(x)
+            except ValueError:
+                fail("V6_DNS_BAD", f"{name} {x!r} 不是有效的 IPv6 地址", "示例：240c::6666")
         d1 = as_str(data.get("dns1"), "IPv6 DNS1")
-        need(":" in d1, "V6_DNS_BAD", f"IPv6 DNS {d1!r} 无效", "示例：240c::6666")
+        v6addr(d1, "IPv6 DNS 服务器 1")
         dns.append(d1)
         d2 = as_str(data.get("dns2"), "IPv6 DNS2")
         if d2:
-            need(":" in d2, "V6_DNS_BAD", f"IPv6 DNS 2 {d2!r} 无效")
+            v6addr(d2, "IPv6 DNS 服务器 2")
             dns.append(d2)
     addr = as_str(data.get("addr"), "IPv6 地址")
     gw = as_str(data.get("gw"), "IPv6 网关")
@@ -199,6 +204,12 @@ def norm_lan(section, data, cur=None):
     need(not ip.endswith(".0") and not ip.endswith(".255"), "LAN_IP_BAD", "LAN IP 不能是网段地址或广播地址")
     need(ipaddress.IPv4Address(ip).is_private, "LAN_IP_PUBLIC",
          "LAN IP 不能使用公网地址", f"{ip} 属于公网段；请使用 192.168.x.x / 10.x.x.x / 172.16–31.x.x 等私网地址")
+    if cur and isinstance(cur.get("dhcp"), dict) and cur["dhcp"].get("enabled"):
+        ps, pe = cur["dhcp"].get("pool_start"), cur["dhcp"].get("pool_end")
+        if isinstance(ps, int) and isinstance(pe, int) and ps <= int(ip.rsplit(".", 1)[1]) <= pe:
+            fail("LAN_IP_IN_POOL",
+                 f"LAN IP {ip} 落在 DHCP 地址池（.{ps}–.{pe}）内",
+                 "地址池会把这个地址分给其他设备造成冲突；请改用池外地址（如 .1），或先缩小地址池")
     # 网段冲突：tun / fakeip / 常见代理网段
     net = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
     reserved = ["172.19.0.0/30", "198.19.0.0/16", "100.64.0.0/10", "10.88.0.0/16"]
@@ -229,6 +240,12 @@ def norm_dhcp(section, data, lan=None):
         need(is_ipv4(d2), "DHCP_DNS_BAD", f"DHCP DNS2 {d2!r} 无效")
     if gw:
         need(is_ipv4(gw), "DHCP_GW_BAD", f"DHCP 网关 {gw!r} 无效")
+    if lan:
+        last = int(str(lan.get("ip", "")).rsplit(".", 1)[-1] or -1)
+        if ps <= last <= pe:
+            fail("DHCP_POOL_COVERS_LAN",
+                 f"地址池 .{ps}–.{pe} 覆盖了路由器 LAN IP（.{last}）",
+                 f"路由器地址不能被分配出去；请把 LAN IP 改到池外，或把池调整到避开 .{last}")
     out.update(pool_start=ps, pool_end=pe, lease=lease, dns1=d1, dns2=d2, gw=gw)
     return out
 
@@ -367,7 +384,20 @@ def main():
     fn = fns.get(section)
     if fn is None:
         fail("VALIDATE", f"未知的配置段 {section!r}")
-    print(json.dumps({"ok": True, "section": section, "data": fn()}, ensure_ascii=False))
+    result = fn()
+    # 交叉校验：PPPoE 线路没有 DHCPv6-PD 客户端，Native 模式实际不可用（复审 N-08b）
+    if cur and isinstance(cur.get("wan"), dict):
+        cur_v6 = cur.get("ipv6", {})
+        if section == "ipv6" and result.get("enabled") and result.get("mode") == "native" \
+                and cur["wan"].get("mode") == "pppoe":
+            fail("V6_NATIVE_PPPPOE_UNSUPPORTED", "PPPoE 线路暂不支持 IPv6 Native（PD）",
+                 "PPPoE 下没有 DHCPv6 前缀委派客户端；请改用 NAT6，或把上网方式切换为 DHCP/静态后再用 Native")
+        if section == "wan" and result.get("mode") == "pppoe" \
+                and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
+            fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
+                 "切换到 PPPoE 需先调整 IPv6 模式",
+                 "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+    print(json.dumps({"ok": True, "section": section, "data": result}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
