@@ -171,6 +171,7 @@ if [ "$SMOKE" = "1" ]; then
 else
   systemctl daemon-reload
   systemctl enable --now dnsmasq.service >/dev/null 2>&1 || true
+  systemctl enable --now networkd-dispatcher.service >/dev/null 2>&1 || true
   systemctl enable seedrou-apply.service >/dev/null 2>&1
   systemctl enable --now seedrou-converge.timer >/dev/null 2>&1
   systemctl enable --now seedrou-panel.service >/dev/null 2>&1

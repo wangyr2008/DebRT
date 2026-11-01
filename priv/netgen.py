@@ -215,7 +215,9 @@ def gen_dnsmasq(cfg):
         for d in (v6d or []):
             lines.append(f"server={d}")
     else:
-        lines.append("conf-dir=/run/seedrou-dns,*.conf")
+        # servers-file 会在 SIGHUP 时重读（conf-dir 只在启动时读——dispatcher 钩子写完
+        # 上游后 HUP dnsmasq 才能生效，真机首装实测）
+        lines.append("servers-file=/run/seedrou-dns/upstream.conf")
     # 注意：RA 统一由 networkd 发布（见 gen_lan_network），dnsmasq 不发 RA（审计 B-21 单一 RA 源）
     return "\n".join(lines) + "\n"
 
