@@ -108,6 +108,6 @@ jobs:
           VER_INSTALLED="$(cat /usr/local/lib/seedrou/share/VERSION 2>/dev/null || echo MISSING)"
           echo "checkout=$VER_LOCAL installed=$VER_INSTALLED"
           [ "$VER_LOCAL" = "$VER_INSTALLED" ] || { echo "::error::升级后 share/VERSION 不一致（B-02 回归）"; exit 1; }
-          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify) || true
+          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify 2>&1) || true
           echo "$OUT" | sed 's/^/::error::AUTHPW /'
           echo "$OUT" | grep -q '"ok": true' || { echo "::error::升级后登录失效"; exit 1; }
