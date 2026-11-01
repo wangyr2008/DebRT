@@ -94,23 +94,18 @@ jobs:
       - name: HTTP 登录 + /api/status 真实链路（2026-11 首装揭出 status 缺 ok 字段）
         run: |
           echo "::error::PANEL $(systemctl is-active seedrou-panel) $(curl -s http://127.0.0.1/api/session)"
+          # 改密码步骤已把管理密码改为 NewPW-456789，此处用新密码（顺带验证改密→登录闭环）
           CK=$(mktemp)
-          OUT=$(curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
-            # 注意：改密码步骤已把密码改为 NewPW-456789，此处必须用新密码（顺带验证改密→登录闭环）
-          OUT=$(curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
+          OUT=$(curl -s --max-time 15 -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
             -d '{"password":"NewPW-456789"}' -c "$CK" http://127.0.0.1/api/login) || true
           echo "$OUT" | sed 's/^/::error::LOGIN /'
           echo "$OUT" | grep -q '"ok": true' || {
             sudo journalctl -u seedrou-panel -n 8 --no-pager | sed 's/^/::error::PJ /'
             exit 1
           }
-          curl -s --max-time 15 -b "$CK" http://127.0.0.1/api/status | python3 -c '
-            import json, sys
-            d = json.load(sys.stdin)
-            assert d.get("ok"), d
-            assert d["system_ok"], d
-            print("HTTP status OK")
-          curl -s -b "$CK" http://127.0.0.1/api/status | python3 -c '
+          ST=$(curl -s --max-time 15 -b "$CK" http://127.0.0.1/api/status)
+          echo "$ST" | sed 's/^/::error::STATUS /'
+          echo "$ST" | python3 -c '
             import json, sys
             d = json.load(sys.stdin)
             assert d.get("ok"), d
