@@ -1,0 +1,48 @@
+#!/bin/sh
+# networkd-dispatcher 钩子（routable.d / no-carrier.d）
+# 仅当事件接口是 WAN 口时：把 networkd 学到的上游 DNS 写入 /run/seedrou-dns/，
+# dnsmasq 以 conf-dir=/run/seedrou-dns 动态读取。
+IFACE="$1"
+STATE="$2"
+RUNDIR="/run/seedrou-dns"
+CONF="${RUNDIR}/upstream.conf"
+
+IS_WAN=$(python3 - "$IFACE" <<'PYEOF'
+import json, sys
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+    wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+except Exception:
+    wans = []
+print("yes" if sys.argv[1] in wans else "no")
+PYEOF
+)
+[ "$IS_WAN" = "yes" ] || exit 0
+
+mkdir -p "$RUNDIR"
+
+case "$STATE" in
+  routable) ;;
+  *) rm -f "$CONF"; systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null; exit 0 ;;
+esac
+
+IDX=$(cat "/sys/class/net/$IFACE/ifindex" 2>/dev/null) || exit 0
+LEASE="/run/systemd/netif/leases/$IDX"
+[ -f "$LEASE" ] || exit 0
+
+{
+  echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
+  python3 - "$LEASE" <<'PYEOF'
+import sys
+dns = []
+for line in open(sys.argv[1]):
+    if line.startswith("DNS=") and line.strip() != "DNS=":
+        dns += line.strip()[4:].split(" ")
+for d in dns:
+    if d:
+        print(f"server={d}")
+PYEOF
+} > "${CONF}.tmp" 2>/dev/null
+
+mv -f "${CONF}.tmp" "$CONF"
+systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true

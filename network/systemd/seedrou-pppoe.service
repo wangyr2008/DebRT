@@ -1,0 +1,18 @@
+[Unit]
+Description=SeedRou PPPoE 宽带拨号
+Documentation=man:pppd(8)
+After=systemd-networkd.service network-online.target
+Wants=network-online.target
+Before=dnsmasq.service
+# 与 sing-box 无依赖关系（见 COEXISTENCE.md）；sing-box 的 auto_detect_interface 会跟踪 ppp0 默认路由
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/pppd call seedrou
+ExecStop=/usr/bin/poff seedrou
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

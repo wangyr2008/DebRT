@@ -1,0 +1,234 @@
+/* SeedRou 管理后台样式 —— 从 v5 设计稿 1:1 移植（保持 ru-* 类名与视觉参数不变），
+   另补充真实应用需要的 toast / spinner / 禁用态 / 登录页背景。 */
+
+html, body { margin: 0; padding: 0; }
+body { background: var(--ru-bg, #f5f5f7); }
+
+#router-ui{
+  --ru-bg:#f5f5f7; --ru-card:#ffffff; --ru-text:#1d1d1f; --ru-text2:#86868b; --ru-text3:#b0b0b5;
+  --ru-line:rgba(0,0,0,.08); --ru-fill:rgba(120,120,128,.10); --ru-fill2:rgba(120,120,128,.18);
+  --ru-blue:#0071e3; --ru-blue-soft:rgba(0,113,227,.10);
+  --ru-green:#34c759; --ru-green-soft:rgba(52,199,89,.14);
+  --ru-red:#ff3b30; --ru-orange:#ff9500;
+  --ru-shadow:0 1px 2px rgba(0,0,0,.04), 0 10px 28px rgba(0,0,0,.05);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","PingFang SC","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif;
+  color:var(--ru-text); -webkit-font-smoothing:antialiased; line-height:1.5; position:relative; background:var(--ru-bg);
+  min-height:100vh;
+}
+@media (prefers-color-scheme: dark){
+  #router-ui{
+    --ru-bg:#000; --ru-card:#1c1c1e; --ru-text:#f5f5f7; --ru-text2:#98989d; --ru-text3:#6e6e73;
+    --ru-line:rgba(255,255,255,.12); --ru-fill:rgba(120,120,128,.22); --ru-fill2:rgba(120,120,128,.32);
+    --ru-blue:#0a84ff; --ru-blue-soft:rgba(10,132,255,.18);
+    --ru-green:#30d158; --ru-green-soft:rgba(48,209,88,.18);
+    --ru-red:#ff453a; --ru-orange:#ff9f0a;
+    --ru-shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.4);
+  }
+}
+#router-ui [hidden]{display:none !important}
+#router-ui *{box-sizing:border-box}
+#router-ui .lucide{width:18px;height:18px;flex:none}
+
+/* ===== shell ===== */
+#router-ui .ru-shell{display:flex;flex-direction:column;background:var(--ru-bg);color:var(--ru-text);min-height:100vh}
+#router-ui .ru-body{display:flex;flex:1;min-width:0}
+
+/* ===== sidebar ===== */
+#router-ui .ru-side{width:232px;flex:none;border-right:1px solid var(--ru-line);padding:22px 14px 16px;display:flex;flex-direction:column}
+#router-ui .ru-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
+#router-ui .ru-brandicon{width:36px;height:36px;border-radius:10px;overflow:hidden;flex:none;box-shadow:0 1px 4px rgba(0,0,0,.22)}
+#router-ui .ru-brandicon svg{width:100%;height:100%;display:block}
+#router-ui .ru-brand b{display:block;font-size:14.5px;font-weight:600;letter-spacing:-.01em}
+#router-ui .ru-brand small{display:block;font-size:11.5px;color:var(--ru-text2);margin-top:1px}
+#router-ui .ru-nav{display:flex;flex-direction:column;gap:2px}
+#router-ui .ru-navitem{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--ru-text);font-family:inherit;font-size:13.5px;font-weight:500;padding:9px 11px;border-radius:9px;cursor:pointer;text-align:left}
+#router-ui .ru-navitem .lucide{width:17px;height:17px;color:var(--ru-text2)}
+#router-ui .ru-navitem:hover{background:var(--ru-fill)}
+#router-ui .ru-navitem.active{background:var(--ru-blue);color:#fff}
+#router-ui .ru-navitem.active .lucide{color:#fff}
+#router-ui .ru-sidefoot{margin-top:auto;padding:12px 10px 0;font-size:11.5px;color:var(--ru-text3);border-top:1px solid var(--ru-line)}
+
+/* ===== login ===== */
+#router-ui .ru-login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:26px 20px;
+  background:radial-gradient(1200px 600px at 50% -10%, rgba(0,113,227,.08), transparent 60%), var(--ru-bg)}
+#router-ui .ru-lcard{width:400px;max-width:100%;background:var(--ru-card);border:1px solid var(--ru-line);border-radius:18px;box-shadow:var(--ru-shadow);padding:34px 32px 26px;text-align:center}
+#router-ui .ru-llogo{width:58px;height:58px;border-radius:14px;overflow:hidden;margin:0 auto 14px;box-shadow:0 8px 22px rgba(1,80,208,.35)}
+#router-ui .ru-llogo svg{width:100%;height:100%;display:block}
+#router-ui .ru-lcard h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-.02em}
+#router-ui .ru-lsub{font-size:12.5px;color:var(--ru-text2);margin-top:4px}
+#router-ui .ru-lcard form{text-align:left;margin-top:24px}
+#router-ui .ru-lcard .ru-in{height:42px;font-size:14px}
+#router-ui .ru-lcard .ru-btn{width:100%;height:42px;font-size:14px;margin-top:16px;justify-content:center}
+#router-ui .ru-lfoot{margin-top:20px;padding-top:16px;border-top:1px solid var(--ru-line);font-size:11.5px;color:var(--ru-text3);text-align:center}
+#router-ui .ru-lbad{display:none;font-size:12px;color:var(--ru-red);margin-top:10px;font-weight:500;text-align:left}
+#router-ui .ru-lbad.show{display:block}
+
+/* ===== main ===== */
+#router-ui .ru-main{flex:1;min-width:0;padding:26px 34px 42px}
+#router-ui .ru-mhead{display:none}
+#router-ui .ru-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+#router-ui .ru-topbar h1{margin:0;font-size:24px;font-weight:700;letter-spacing:-.02em}
+
+/* ===== pages ===== */
+#router-ui .ru-page{display:none}
+#router-ui .ru-page.active{display:block;animation:ruFade .22s ease}
+@keyframes ruFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ===== cards & rows ===== */
+#router-ui .ru-stack{display:flex;flex-direction:column;gap:18px}
+#router-ui .ru-card{background:var(--ru-card);border-radius:14px;box-shadow:var(--ru-shadow);border:1px solid var(--ru-line);padding:20px 22px}
+#router-ui .ru-card h3{margin:0;font-size:15px;font-weight:600}
+#router-ui .ru-sub{font-size:12.5px;color:var(--ru-text2);margin-top:3px}
+#router-ui .ru-chead{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:8px}
+#router-ui .ru-kv{display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:11px 0;border-bottom:1px solid var(--ru-line);font-size:13px}
+#router-ui .ru-kv:last-child{border-bottom:0}
+#router-ui .ru-kv .k{color:var(--ru-text2);flex:none}
+#router-ui .ru-kv .v{font-weight:500;text-align:right;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+#router-ui .ru-kv.sep{border-top:1px solid var(--ru-line);margin-top:4px}
+
+/* ===== controls ===== */
+#router-ui .ru-btn{height:34px;padding:0 16px;border-radius:980px;border:0;background:var(--ru-fill2);color:var(--ru-text);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+#router-ui .ru-btn:hover{filter:brightness(.97)}
+#router-ui .ru-btn.primary{background:var(--ru-blue);color:#fff}
+#router-ui .ru-btn.danger{background:var(--ru-red);color:#fff}
+#router-ui .ru-btn.sm{height:29px;padding:0 13px;font-size:12.5px}
+#router-ui .ru-btn .lucide{width:14px;height:14px}
+#router-ui .ru-btn[disabled]{opacity:.55;cursor:default;pointer-events:none}
+#router-ui .ru-iconbtn{width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--ru-text2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+#router-ui .ru-iconbtn:hover{background:var(--ru-fill);color:var(--ru-red)}
+#router-ui .ru-iconbtn .lucide{width:14px;height:14px}
+#router-ui .ru-switch{position:relative;display:inline-block;flex:none}
+#router-ui .ru-switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+#router-ui .ru-switch span{display:block;width:44px;height:26px;border-radius:13px;background:var(--ru-fill2);transition:background .2s;position:relative}
+#router-ui .ru-switch span::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .2s}
+#router-ui .ru-switch input:checked + span{background:var(--ru-green)}
+#router-ui .ru-switch input:checked + span::after{left:20px}
+#router-ui .ru-switch input[disabled]{cursor:default}
+#router-ui .ru-seg{display:inline-flex;background:var(--ru-fill);border-radius:9px;padding:2px}
+#router-ui .ru-seg button{border:0;background:transparent;padding:5px 14px;border-radius:7px;font-family:inherit;font-size:12.5px;font-weight:500;color:var(--ru-text2);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+#router-ui .ru-seg button.on{background:var(--ru-card);color:var(--ru-text);box-shadow:0 1px 3px rgba(0,0,0,.14)}
+#router-ui .ru-seg.sm button{padding:4px 9px;font-size:11.5px}
+#router-ui .ru-in{height:36px;width:100%;border:1px solid var(--ru-line);border-radius:9px;padding:0 11px;font-family:inherit;font-size:13px;color:var(--ru-text);background:var(--ru-card);outline:none}
+#router-ui select.ru-in{appearance:none;-webkit-appearance:none;padding-right:28px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2386868b' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center}
+#router-ui .ru-in:focus{border-color:var(--ru-blue);box-shadow:0 0 0 3px var(--ru-blue-soft)}
+#router-ui .ru-in[readonly]{background:var(--ru-fill)}
+#router-ui .ru-in[disabled]{opacity:.55}
+#router-ui textarea.ru-in{height:auto;min-height:170px;padding:11px 13px;font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;resize:vertical}
+#router-ui .ru-field{flex:1;min-width:0}
+#router-ui .ru-flabel{font-size:12px;font-weight:500;color:var(--ru-text2);margin-bottom:6px}
+#router-ui .ru-frow{display:flex;gap:14px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
+#router-ui .ru-save{margin-top:18px;display:flex;gap:10px;align-items:center}
+#router-ui .ru-hint{font-size:12px;color:var(--ru-text2);margin-top:12px}
+#router-ui .ru-callout{display:flex;gap:9px;align-items:flex-start;background:var(--ru-blue-soft);border-radius:10px;padding:11px 13px;font-size:12.5px;color:var(--ru-text);margin-top:12px}
+#router-ui .ru-callout .lucide{width:15px;height:15px;margin-top:1.5px;color:var(--ru-blue)}
+#router-ui .ru-callout.warn{background:rgba(255,149,0,.12)}
+#router-ui .ru-callout.warn .lucide{color:var(--ru-orange)}
+#router-ui .ru-callout.danger{background:rgba(255,59,48,.10)}
+#router-ui .ru-callout.danger .lucide{color:var(--ru-red)}
+#router-ui .ru-badge{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--ru-fill2);color:var(--ru-text2);white-space:nowrap}
+#router-ui .ru-badge.blue{background:var(--ru-blue-soft);color:var(--ru-blue)}
+#router-ui .ru-badge.green{background:var(--ru-green-soft);color:var(--ru-green)}
+#router-ui .ru-badge.red{background:rgba(255,59,48,.12);color:var(--ru-red)}
+#router-ui .ru-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ru-text3);flex:none}
+#router-ui .ru-dot.on{background:var(--ru-green);box-shadow:0 0 0 3.5px var(--ru-green-soft)}
+#router-ui .ru-okline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ru-green);margin-top:12px;font-weight:500}
+#router-ui .ru-okline .lucide{width:14px;height:14px}
+#router-ui .ru-check{display:inline-flex;align-items:center;gap:8px;background:var(--ru-fill);border:1px solid transparent;border-radius:10px;padding:9px 13px;font-size:13px;font-weight:500;cursor:pointer;user-select:none}
+#router-ui .ru-check:has(input:checked){background:var(--ru-blue-soft);border-color:var(--ru-blue);color:var(--ru-blue)}
+#router-ui .ru-cb{width:16px;height:16px;accent-color:var(--ru-blue);margin:0;flex:none}
+#router-ui .ru-badmsg{display:none;font-size:12px;color:var(--ru-red);margin-top:10px;font-weight:500}
+#router-ui .ru-badmsg.show{display:block}
+#router-ui .ru-linkbtn{border:0;background:none;color:var(--ru-red);font-family:inherit;font-size:12.5px;cursor:pointer;padding:2px 4px;font-weight:500;white-space:nowrap}
+#router-ui .ru-linkbtn.muted{color:var(--ru-text2)}
+#router-ui .ru-linkbtn[disabled]{opacity:.4;cursor:default;pointer-events:none}
+
+/* ===== spinner / loading ===== */
+#router-ui .ru-spin{width:14px;height:14px;border:2px solid rgba(128,128,128,.35);border-top-color:currentColor;border-radius:50%;animation:ruSpin .7s linear infinite;flex:none;display:inline-block}
+@keyframes ruSpin{to{transform:rotate(360deg)}}
+#router-ui .ru-loading{display:flex;align-items:center;gap:9px;color:var(--ru-text2);font-size:13px;padding:16px 0}
+
+/* ===== toast ===== */
+#router-ui .ru-toasts{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:100;width:min(440px,calc(100vw - 32px))}
+#router-ui .ru-toast{display:flex;gap:9px;align-items:flex-start;background:var(--ru-card);border:1px solid var(--ru-line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:11px 14px;font-size:13px;animation:ruFade .2s ease}
+#router-ui .ru-toast .lucide{width:16px;height:16px;flex:none;margin-top:1.5px}
+#router-ui .ru-toast.ok .lucide{color:var(--ru-green)}
+#router-ui .ru-toast.err .lucide{color:var(--ru-red)}
+#router-ui .ru-toast .tt{font-weight:600}
+#router-ui .ru-toast .th{color:var(--ru-text2);margin-top:2px;font-size:12px;overflow-wrap:anywhere}
+
+/* ===== tables ===== */
+#router-ui .ru-table{width:100%;border-collapse:collapse;font-size:13px}
+#router-ui .ru-table th{text-align:left;font-size:12px;font-weight:500;color:var(--ru-text2);padding:8px 10px;border-bottom:1px solid var(--ru-line);white-space:nowrap}
+#router-ui .ru-table td{padding:11px 10px;border-bottom:1px solid var(--ru-line);vertical-align:middle;font-variant-numeric:tabular-nums}
+#router-ui .ru-table tr:last-child td{border-bottom:0}
+#router-ui .ru-table .ru-in{height:32px;font-size:12.5px}
+#router-ui .ru-table .mono{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+#router-ui .ru-empty{padding:22px 0;color:var(--ru-text2);font-size:13px;text-align:center}
+
+/* ===== overview ===== */
+#router-ui .ru-hero{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start}
+#router-ui .ru-hero .st{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+#router-ui .ru-hero .st .ru-dot{width:11px;height:11px}
+#router-ui .ru-hero .meta{font-size:12.5px;color:var(--ru-text2);margin-top:5px}
+#router-ui .ru-stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+#router-ui .ru-stat{background:var(--ru-fill);border-radius:12px;padding:13px 15px}
+#router-ui .ru-stat b{display:block;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+#router-ui .ru-stat span{font-size:12px;color:var(--ru-text2)}
+#router-ui .ru-ports{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+#router-ui .ru-port{background:var(--ru-fill);border-radius:12px;padding:13px 14px}
+#router-ui .ru-port .lucide{width:21px;height:21px;color:var(--ru-text2)}
+#router-ui .ru-port .pname{display:flex;align-items:center;justify-content:space-between;margin-top:9px;font-size:13px;font-weight:600}
+#router-ui .ru-port .pstat{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11.5px;color:var(--ru-text2)}
+
+/* ===== bind rows (modal) ===== */
+#router-ui .ru-bindgrid{display:grid;grid-template-columns:1.15fr 168px 1.15fr 30px;gap:8px;align-items:center;margin-bottom:8px}
+#router-ui .ru-bindhead{font-size:11.5px;color:var(--ru-text2);margin-bottom:2px}
+#router-ui .ru-ipseg{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ru-text2);white-space:nowrap}
+#router-ui .ru-ipseg .ru-in{width:64px;text-align:center}
+#router-ui .ru-addrow{width:100%;height:38px;border:1.5px dashed var(--ru-fill2);border-radius:10px;background:transparent;color:var(--ru-blue);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+#router-ui .ru-addrow:hover{background:var(--ru-blue-soft)}
+#router-ui .ru-addrow .lucide{width:14px;height:14px}
+
+/* ===== modal ===== */
+#router-ui .ru-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:60px 16px;background:rgba(0,0,0,.35);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+#router-ui .ru-dialog{width:600px;max-width:100%;background:var(--ru-card);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.35);padding:22px 24px}
+#router-ui .ru-dhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+#router-ui .ru-dfoot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+
+/* ===== containers ===== */
+#router-ui .ru-dropbox{border:1.5px dashed var(--ru-fill2);border-radius:12px;padding:22px;text-align:center;color:var(--ru-text2);font-size:13px;margin-top:14px;cursor:pointer}
+#router-ui .ru-dropbox .lucide{width:22px;height:22px;color:var(--ru-text2);margin-bottom:6px}
+#router-ui .ru-card.danger{border-color:rgba(255,59,48,.4)}
+#router-ui .ru-card.danger h3{color:var(--ru-red)}
+
+/* ===== narrow mode（与设计稿一致：手机端无横向滚动，表格转堆叠卡片） ===== */
+#router-ui .ru-narrow .ru-side{display:none}
+#router-ui .ru-narrow .ru-mhead{display:block;padding:14px 2px 2px}
+#router-ui .ru-narrow .ru-mtitle{font-size:26px;font-weight:700;letter-spacing:-.02em;padding:0 2px}
+#router-ui .ru-mhead .ru-nav{flex-direction:row;overflow-x:auto;gap:8px;padding:12px 2px 6px;scrollbar-width:none}
+#router-ui .ru-mhead .ru-nav::-webkit-scrollbar{display:none}
+#router-ui .ru-mhead .ru-navitem{width:auto;flex:none;padding:7px 13px;border-radius:999px;background:var(--ru-fill);font-size:12.5px}
+#router-ui .ru-mhead .ru-navitem.active{background:var(--ru-blue);color:#fff}
+#router-ui .ru-mhead .ru-navitem .lucide{display:none}
+#router-ui .ru-narrow .ru-main{padding:10px 16px 30px}
+#router-ui .ru-narrow .ru-topbar{margin-bottom:14px}
+#router-ui .ru-narrow .ru-topbar h1{font-size:20px}
+#router-ui .ru-narrow .ru-stats{grid-template-columns:repeat(2,1fr)}
+#router-ui .ru-narrow .ru-ports{grid-template-columns:repeat(2,1fr)}
+#router-ui .ru-narrow .ru-frow{gap:10px}
+#router-ui .ru-narrow .ru-frow > .ru-field{flex:1 1 100%;max-width:none !important}
+#router-ui .ru-narrow .ru-table thead{display:none}
+#router-ui .ru-narrow .ru-table,
+#router-ui .ru-narrow .ru-table tbody,
+#router-ui .ru-narrow .ru-table tr,
+#router-ui .ru-narrow .ru-table td{display:block;width:100%;white-space:normal;overflow:visible}
+#router-ui .ru-narrow .ru-table tr{padding:11px 0;border-bottom:1px solid var(--ru-line)}
+#router-ui .ru-narrow .ru-table tr:last-child{border-bottom:0;padding-bottom:2px}
+#router-ui .ru-narrow .ru-table td{padding:3px 0;border-bottom:0}
+#router-ui .ru-narrow .ru-table td[data-label]::before{content:attr(data-label);display:block;font-size:11px;color:var(--ru-text2);margin-bottom:3px;font-weight:500}
+#router-ui .ru-narrow .ru-table .ru-in{width:100%}
+#router-ui .ru-narrow .ru-bindgrid{grid-template-columns:1fr 30px}
+#router-ui .ru-narrow .ru-bindgrid .ru-in{grid-column:1}
+#router-ui .ru-narrow .ru-bindgrid .ru-ipseg{grid-column:1}
+#router-ui .ru-narrow .ru-bindgrid > .ru-iconbtn{grid-row:1;grid-column:2}
+#router-ui .ru-narrow .ru-modal{padding:14px;align-items:center}

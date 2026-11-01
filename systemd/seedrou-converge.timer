@@ -1,0 +1,10 @@
+[Unit]
+Description=SeedRou 定时防漂移收敛定时器
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Unit=seedrou-converge.service
+
+[Install]
+WantedBy=timers.target

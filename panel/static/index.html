@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SeedRou</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='1' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%233aa0ff'/%3E%3Cstop offset='1' stop-color='%230150cf'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14.4' fill='url(%23g)'/%3E%3Cg fill='none' stroke='%23fff' stroke-linecap='round'%3E%3Cpath d='M32 45.5V30.5' stroke-width='4.2'/%3E%3Cpath d='M21.5 45.5H42.5' stroke-width='3.2'/%3E%3C/g%3E%3Crect x='14.6' y='42.1' width='6.8' height='6.8' rx='2' fill='%23fff'/%3E%3Crect x='42.6' y='42.1' width='6.8' height='6.8' rx='2' fill='%23fff'/%3E%3Cpath d='M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z' fill='%23fff'/%3E%3Cpath d='M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="router-ui">
+
+  <!-- ============ 管理后台外壳（登录后显示） ============ -->
+  <div class="ru-shell" id="ru-shell" hidden>
+    <div class="ru-body">
+      <aside class="ru-side">
+        <div class="ru-brand">
+          <span class="ru-brandicon"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srg)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></span>
+          <span><b>SeedRou</b><small id="ru-sidever">V0.1.0</small></span>
+        </div>
+        <nav class="ru-nav" aria-label="页面导航">
+          <button class="ru-navitem active" data-nav="overview"><i data-lucide="gauge"></i>系统概览</button>
+          <button class="ru-navitem" data-nav="network"><i data-lucide="globe"></i>网络设置</button>
+          <button class="ru-navitem" data-nav="devices"><i data-lucide="monitor-smartphone"></i>设备列表</button>
+          <button class="ru-navitem" data-nav="security"><i data-lucide="shield"></i>安全中心</button>
+          <button class="ru-navitem" data-nav="containers"><i data-lucide="container"></i>容器管理</button>
+          <button class="ru-navitem" data-nav="tools"><i data-lucide="wrench"></i>其他工具</button>
+          <button class="ru-navitem" data-nav="backup"><i data-lucide="database-backup"></i>备份与升级</button>
+        </nav>
+        <div class="ru-sidefoot" id="ru-sidefoot">192.168.10.1 · 管理员已登录</div>
+      </aside>
+
+      <main class="ru-main">
+        <div class="ru-mhead">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="ru-brandicon" style="width:30px;height:30px;border-radius:8px"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="srgm" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgm)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></span>
+            <div class="ru-mtitle">SeedRou</div>
+          </div>
+          <nav class="ru-nav" aria-label="页面导航">
+            <button class="ru-navitem active" data-nav="overview">系统概览</button>
+            <button class="ru-navitem" data-nav="network">网络设置</button>
+            <button class="ru-navitem" data-nav="devices">设备列表</button>
+            <button class="ru-navitem" data-nav="security">安全中心</button>
+            <button class="ru-navitem" data-nav="containers">容器管理</button>
+            <button class="ru-navitem" data-nav="tools">其他工具</button>
+            <button class="ru-navitem" data-nav="backup">备份与升级</button>
+          </nav>
+        </div>
+
+        <div class="ru-topbar"><h1 id="ru-pagetitle">系统概览</h1></div>
+
+        <div class="ru-stack">
+          <!-- ============ 1 系统概览 ============ -->
+          <section class="ru-page active" id="pg-overview">
+            <div class="ru-card">
+              <div class="ru-hero">
+                <div>
+                  <div class="st"><span class="ru-dot" id="ov-hero-dot"></span><span id="ov-hero-text">检测中…</span></div>
+                  <div class="meta" id="ov-hero-meta">—</div>
+                </div>
+                <span class="ru-badge" id="ov-hero-badge">检测中</span>
+              </div>
+              <div class="ru-stats" style="margin-top:18px">
+                <div class="ru-stat"><span>已连接设备</span><b id="ov-devices">—</b></div>
+                <div class="ru-stat"><span>CPU 占用</span><b id="ov-cpu">—</b></div>
+                <div class="ru-stat"><span>CPU 温度</span><b id="ov-cputemp">—</b></div>
+                <div class="ru-stat"><span>内存占用</span><b id="ov-mem">—</b></div>
+                <div class="ru-stat"><span>硬盘温度</span><b id="ov-disktemp">—</b></div>
+                <div class="ru-stat"><span>系统运行</span><b id="ov-uptime">—</b></div>
+              </div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>当前上网信息</h3><div class="ru-sub">由系统检测生成，只读展示；修改请在「网络设置」中进行</div></div><span class="ru-badge" id="ov-net-badge">—</span></div>
+              <div id="ov-net"><div class="ru-loading"><span class="ru-spin"></span>正在读取上网信息…</div></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>网口连接状态</h3><div class="ru-sub" id="ov-ports-sub">物理连接与角色</div></div></div>
+              <div class="ru-ports" id="ov-ports"><div class="ru-loading"><span class="ru-spin"></span>正在读取网口状态…</div></div>
+            </div>
+          </section>
+
+          <!-- ============ 2 网络设置 ============ -->
+          <section class="ru-page" id="pg-network">
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>网口绑定</h3><div class="ru-sub">勾选各网口角色，支持多 WAN / 多 LAN；同一网口只能属于一个角色，未勾选为「未使用」</div></div></div>
+              <div class="ru-flabel" style="margin-top:10px">WAN 口（广域网）</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px" id="bind-wan"></div>
+              <div class="ru-flabel" style="margin-top:16px">LAN 口（局域网）</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px" id="bind-lan"></div>
+              <div class="ru-badmsg" id="msg-wan">至少需要保留 1 个 WAN 口</div>
+              <div class="ru-badmsg" id="msg-lan">至少需要保留 1 个 LAN 口</div>
+              <div class="ru-hint">WAN 与 LAN 联动：同一网口不能同时属于两者；多 WAN 可用于双宽带接入。绑定变更将重建 LAN 网桥并重启网络。</div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-bind-save">保存绑定</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>上网设置</h3><div class="ru-sub">切换上网方式后，下方表单会随之变化</div></div></div>
+              <div class="ru-frow" style="margin-top:6px">
+                <div class="ru-field" style="max-width:300px">
+                  <div class="ru-flabel">上网方式</div>
+                  <select class="ru-in" id="sel-wanmode">
+                    <option value="pppoe">PPPoE（宽带拨号）</option>
+                    <option value="dhcp">DHCP（自动获取 IP）</option>
+                    <option value="static">静态 IP</option>
+                  </select>
+                </div>
+              </div>
+              <div data-wanblock="pppoe">
+                <div class="ru-frow">
+                  <div class="ru-field"><div class="ru-flabel">宽带账号</div><input class="ru-in" id="pppoe-user" autocomplete="off"></div>
+                  <div class="ru-field"><div class="ru-flabel">宽带密码</div><input class="ru-in" id="pppoe-pass" type="password" placeholder="已保存，留空保持不变" autocomplete="new-password"></div>
+                </div>
+              </div>
+              <div data-wanblock="dhcp" hidden>
+                <div class="ru-callout"><i data-lucide="info"></i><span>DHCP 模式下，IP 地址、网关与 DNS 均由上级网络自动下发，无需填写参数。</span></div>
+              </div>
+              <div data-wanblock="static" hidden>
+                <div class="ru-frow">
+                  <div class="ru-field"><div class="ru-flabel">IP 地址</div><input class="ru-in" id="wan-ip" placeholder="192.168.1.2"></div>
+                  <div class="ru-field"><div class="ru-flabel">子网掩码</div><input class="ru-in" id="wan-mask" placeholder="255.255.255.0"></div>
+                  <div class="ru-field"><div class="ru-flabel">默认网关</div><input class="ru-in" id="wan-gw" placeholder="192.168.1.1"></div>
+                </div>
+              </div>
+              <div class="ru-frow">
+                <div class="ru-field" style="flex:none">
+                  <div class="ru-flabel">DNS 配置</div>
+                  <div class="ru-seg" id="seg-wandns">
+                    <button class="on" data-value="auto">自动获取</button>
+                    <button data-value="manual" data-show="blk-wandns">手动配置</button>
+                  </div>
+                </div>
+              </div>
+              <div id="blk-wandns" hidden>
+                <div class="ru-frow">
+                  <div class="ru-field"><div class="ru-flabel">DNS 服务器 1（必填）</div><input class="ru-in" id="wan-dns1" placeholder="223.5.5.5"></div>
+                  <div class="ru-field"><div class="ru-flabel">DNS 服务器 2（选填）</div><input class="ru-in" id="wan-dns2" placeholder="119.29.29.29"></div>
+                </div>
+              </div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-wan-save">保存设置</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>IPv6 设置</h3><div class="ru-sub">开启后路由器将从运营商获取 IPv6 地址并向下分发</div></div>
+                <label class="ru-switch"><input type="checkbox" id="v6-enable" aria-label="IPv6 总开关"><span></span></label>
+              </div>
+              <div class="ru-frow" style="margin-top:8px">
+                <div class="ru-field" style="max-width:300px">
+                  <div class="ru-flabel">上网方式</div>
+                  <select class="ru-in" id="sel-v6mode">
+                    <option value="native">Native（原生）</option>
+                    <option value="nat6">NAT6</option>
+                    <option value="static">静态 IPv6</option>
+                  </select>
+                </div>
+                <div class="ru-field" id="blk-v6static" hidden>
+                  <div class="ru-flabel">IPv6 地址 / 前缀</div>
+                  <input class="ru-in" id="v6-addr" placeholder="如 2001:db8:1::2/64">
+                </div>
+                <div class="ru-field" id="blk-v6gw" hidden>
+                  <div class="ru-flabel">IPv6 网关</div>
+                  <input class="ru-in" id="v6-gw" placeholder="如 fe80::1">
+                </div>
+              </div>
+              <div class="ru-frow">
+                <div class="ru-field" style="flex:none">
+                  <div class="ru-flabel">DNS 配置</div>
+                  <div class="ru-seg" id="seg-v6dns">
+                    <button class="on" data-value="auto">自动获取</button>
+                    <button data-value="manual" data-show="blk-v6dns">手动配置</button>
+                  </div>
+                </div>
+              </div>
+              <div id="blk-v6dns" hidden>
+                <div class="ru-frow">
+                  <div class="ru-field"><div class="ru-flabel">DNS 服务器 1（必填）</div><input class="ru-in" id="v6-dns1" placeholder="240c::6666"></div>
+                  <div class="ru-field"><div class="ru-flabel">DNS 服务器 2（选填）</div><input class="ru-in" id="v6-dns2" placeholder="240c::6644"></div>
+                </div>
+              </div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-v6-save">保存设置</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>局域网 IP 设置</h3><div class="ru-sub">修改后管理地址随之变化，需用新 IP 重新登录</div></div></div>
+              <div class="ru-frow" style="margin-top:6px">
+                <div class="ru-field"><div class="ru-flabel">LAN IP 地址</div><input class="ru-in" id="lan-ip"></div>
+                <div class="ru-field" style="max-width:220px"><div class="ru-flabel">子网掩码</div>
+                  <select class="ru-in" id="lan-mask"><option>255.255.255.0</option><option>255.255.0.0</option></select>
+                </div>
+              </div>
+              <div class="ru-badmsg" id="msg-lanip"></div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-lan-save">保存并重启网络</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>DHCP 服务</h3><div class="ru-sub">为局域网设备自动分配 IP 地址</div></div>
+                <label class="ru-switch"><input type="checkbox" id="dhcp-enable" aria-label="DHCP 服务开关"><span></span></label>
+              </div>
+              <div id="dhcp-body">
+                <div class="ru-frow" style="margin-top:8px">
+                  <div class="ru-field" style="flex:1.6"><div class="ru-flabel">地址池（起止 IP 末段）</div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="font-size:12.5px;color:var(--ru-text2);white-space:nowrap" id="dhcp-pre1">192.168.10.</span>
+                      <input class="ru-in" style="width:70px;text-align:center" id="dhcp-start" inputmode="numeric">
+                      <span style="color:var(--ru-text2)">—</span>
+                      <span style="font-size:12.5px;color:var(--ru-text2);white-space:nowrap" id="dhcp-pre2">192.168.10.</span>
+                      <input class="ru-in" style="width:70px;text-align:center" id="dhcp-end" inputmode="numeric">
+                    </div>
+                  </div>
+                  <div class="ru-field" style="max-width:160px"><div class="ru-flabel">租期（分钟）</div><input class="ru-in" id="dhcp-lease" inputmode="numeric"></div>
+                </div>
+                <div class="ru-frow">
+                  <div class="ru-field"><div class="ru-flabel">下发给客户端的 DNS1</div><input class="ru-in" id="dhcp-dns1" placeholder="留空则下发路由器 LAN IP"></div>
+                  <div class="ru-field"><div class="ru-flabel">DNS2（选填）</div><input class="ru-in" id="dhcp-dns2" placeholder="留空则不下发"></div>
+                  <div class="ru-field"><div class="ru-flabel">默认网关</div><input class="ru-in" id="dhcp-gw" placeholder="留空则下发路由器 LAN IP"></div>
+                </div>
+                <div class="ru-hint">网关与 DNS 留空时，默认下发路由器 LAN IP。地址池需在 LAN 子网内且不与静态绑定冲突。</div>
+              </div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-dhcp-save">保存设置</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>DHCP 静态 IP 分配</h3><div class="ru-sub">为指定设备固定分配局域网 IP，不受地址池轮换影响</div></div>
+                <button class="ru-btn primary sm" id="btn-open-bind"><i data-lucide="plus"></i>添加绑定</button>
+              </div>
+              <table class="ru-table">
+                <thead><tr><th>设备名</th><th>IP 地址</th><th>MAC 地址</th><th style="width:60px"></th></tr></thead>
+                <tbody id="static-tbody"><tr><td colspan="4" class="ru-empty">加载中…</td></tr></tbody>
+              </table>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>QoS 限速</h3><div class="ru-sub">对 WAN 口整体上下行流量进行限速（CAKE 算法），关闭后不限速</div></div>
+                <label class="ru-switch"><input type="checkbox" id="qos-enable" aria-label="QoS 开关"><span></span></label>
+              </div>
+              <div id="qos-body">
+                <div class="ru-frow" style="margin-top:8px">
+                  <div class="ru-field"><div class="ru-flabel">下行带宽（Mbps）</div><input class="ru-in" id="qos-down" inputmode="numeric"></div>
+                  <div class="ru-field"><div class="ru-flabel">上行带宽（Mbps）</div><input class="ru-in" id="qos-up" inputmode="numeric"></div>
+                </div>
+              </div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-qos-save">保存设置</button></div>
+            </div>
+          </section>
+
+          <!-- ============ 3 设备列表 ============ -->
+          <section class="ru-page" id="pg-devices">
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>DHCP 租约</h3><div class="ru-sub" id="dev-count">—</div></div>
+                <button class="ru-btn sm" id="btn-dev-addbind"><i data-lucide="plus"></i>添加静态绑定</button>
+              </div>
+              <table class="ru-table">
+                <thead><tr><th>设备</th><th>IP 地址</th><th>MAC 地址</th><th>租约</th><th>备注</th></tr></thead>
+                <tbody id="dev-tbody"><tr><td colspan="5" class="ru-empty">加载中…</td></tr></tbody>
+              </table>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-notes-save">保存备注</button></div>
+            </div>
+            <div class="ru-hint">设备备注保存后，将同步显示在「网络设置 → DHCP 静态 IP 分配」列表中。</div>
+          </section>
+
+          <!-- ============ 4 安全中心 ============ -->
+          <section class="ru-page" id="pg-security">
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>端口转发</h3><div class="ru-sub">将公网端口映射到局域网设备（WAN 入站 DNAT）</div></div>
+                <label class="ru-switch"><input type="checkbox" id="fw-enable" aria-label="WAN 入站拦截开关"><span></span></label>
+              </div>
+              <div class="ru-callout" id="fw-on-callout"><i data-lucide="info"></i><span>LAN 侧访问默认全部放行，无需配置；WAN 侧入站默认全部拦截（除端口转发命中的流量），需要对外提供的服务请在下方添加转发规则。</span></div>
+              <div class="ru-callout warn" id="fw-off-callout" hidden><i data-lucide="info"></i><span>已关闭 WAN 入站拦截：公网可直接访问路由器与局域网的所有端口，仅建议在调试时临时开启，用完请及时恢复。</span></div>
+              <table class="ru-table" style="margin-top:14px">
+                <thead><tr><th>规则名称</th><th>协议</th><th>外部端口</th><th>目标 IP</th><th>内部端口</th><th>状态</th><th style="width:96px"></th></tr></thead>
+                <tbody id="fw-tbody"><tr><td colspan="7" class="ru-empty">加载中…</td></tr></tbody>
+              </table>
+              <div class="ru-save"><button class="ru-btn" id="btn-fw-add"><i data-lucide="plus"></i>添加转发规则</button></div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>修改管理密码</h3><div class="ru-sub">用于登录本管理后台的密码</div></div></div>
+              <div class="ru-frow" style="margin-top:6px;flex-direction:column;align-items:stretch;gap:0">
+                <div class="ru-field" style="max-width:380px;margin-top:14px"><div class="ru-flabel">原密码</div><input class="ru-in" type="password" id="pw-old" placeholder="请输入当前密码" autocomplete="current-password"></div>
+                <div class="ru-field" style="max-width:380px;margin-top:14px"><div class="ru-flabel">新密码</div><input class="ru-in" type="password" id="pw-new" placeholder="8–32 位，建议字母 + 数字组合" autocomplete="new-password"></div>
+                <div class="ru-field" style="max-width:380px;margin-top:14px"><div class="ru-flabel">确认新密码</div><input class="ru-in" type="password" id="pw-new2" placeholder="再次输入新密码" autocomplete="new-password"></div>
+              </div>
+              <div class="ru-badmsg" id="msg-pw"></div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-pw-save">确认修改</button></div>
+            </div>
+          </section>
+
+          <!-- ============ 5 容器管理 ============ -->
+          <section class="ru-page" id="pg-containers">
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>容器服务</h3><div class="ru-sub" id="ct-podman-sub">Podman · 容器与镜像运行时</div></div>
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                  <span class="ru-badge" id="ct-podman-badge">—</span>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">开机自启<label class="ru-switch"><input type="checkbox" id="ct-podman-autostart" aria-label="开机自启"><span></span></label></div>
+                  <button class="ru-btn sm" id="btn-podman-toggle">停止服务</button>
+                </div>
+              </div>
+              <div class="ru-hint">停止服务后所有容器将退出，镜像与数据卷保留；开启「开机自启」后，路由器开机将自动拉起容器服务。</div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>容器</h3><div class="ru-sub">支持启停/重启/删除，可一键拉取最新镜像并重建</div></div>
+                <button class="ru-btn sm" id="btn-ct-refresh"><i data-lucide="check"></i>刷新</button>
+              </div>
+              <table class="ru-table">
+                <thead><tr><th>容器名</th><th>镜像</th><th>状态</th><th>端口映射</th><th style="width:220px">操作</th></tr></thead>
+                <tbody id="ct-tbody"><tr><td colspan="5" class="ru-empty">加载中…</td></tr></tbody>
+              </table>
+              <div class="ru-hint">「更新」将拉取该镜像的最新版本并按原参数重建容器，数据卷保留；删除容器不会删除对应镜像。</div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>镜像</h3><div class="ru-sub">从镜像仓库拉取，或删除本机已有镜像</div></div>
+              </div>
+              <div class="ru-frow" style="margin-top:6px">
+                <div class="ru-field"><div class="ru-flabel">拉取镜像</div><input class="ru-in" id="img-pull-input" placeholder="如 docker.io/library/nginx:latest"></div>
+                <button class="ru-btn primary sm" id="btn-img-pull">拉取</button>
+              </div>
+              <div class="ru-badmsg" id="msg-img"></div>
+              <table class="ru-table" style="margin-top:16px">
+                <thead><tr><th>镜像</th><th>大小</th><th>使用状态</th><th style="width:60px"></th></tr></thead>
+                <tbody id="img-tbody"><tr><td colspan="4" class="ru-empty">加载中…</td></tr></tbody>
+              </table>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>Compose 编排</h3><div class="ru-sub">使用 compose v2 语法，一键部署多容器应用</div></div>
+              </div>
+              <div style="margin-top:10px">
+                <textarea class="ru-in" id="compose-text" rows="12" spellcheck="false" placeholder="services:&#10;  nginx:&#10;    image: docker.io/library/nginx:latest&#10;    ports:&#10;      - &quot;8080:80&quot;"></textarea>
+              </div>
+              <div class="ru-badmsg" id="msg-compose"></div>
+              <div class="ru-okline" id="compose-logline" hidden></div>
+              <div class="ru-save">
+                <button class="ru-btn primary" id="btn-compose-deploy"><i data-lucide="play"></i>部署</button>
+                <button class="ru-btn" id="btn-compose-stop"><i data-lucide="square-stop"></i>停止</button>
+                <button class="ru-btn" id="btn-compose-upload"><i data-lucide="file-up"></i>上传 compose 文件</button>
+                <input type="file" id="file-compose" accept=".yaml,.yml,.json" hidden>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============ 6 其他工具 ============ -->
+          <section class="ru-page" id="pg-tools">
+            <div class="ru-card" id="ts-uninstalled" hidden>
+              <div class="ru-chead"><div><h3>Tailscale</h3><div class="ru-sub">基于 WireGuard 的零配置虚拟组网，随时随地安全访问家中设备</div></div></div>
+              <div class="ru-callout"><i data-lucide="info"></i><span>Tailscale 尚未安装。安装将从官方软件源下载约 20 MB 组件，过程约 10–30 秒，完成后自动进入登录流程；不影响现有路由与 DHCP 配置。</span></div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-ts-install">一键安装</button></div>
+              <div class="ru-badmsg" id="msg-ts-install"></div>
+            </div>
+
+            <div class="ru-card" id="ts-installed" hidden>
+              <div class="ru-chead">
+                <div><h3>Tailscale</h3><div class="ru-sub">基于 WireGuard 的零配置虚拟组网，随时随地安全访问家中设备</div></div>
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                  <span class="ru-badge" id="ts-badge">—</span>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">运行<label class="ru-switch"><input type="checkbox" id="ts-run" aria-label="Tailscale 运行开关"><span></span></label></div>
+                </div>
+              </div>
+              <div id="ts-info">
+                <div class="ru-kv"><span class="k">登录账号</span><span class="v" id="ts-account">—</span></div>
+                <div class="ru-kv"><span class="k">Tailscale IPv4</span><span class="v" id="ts-ip">—</span></div>
+                <div class="ru-kv"><span class="k">主机名</span><span class="v" id="ts-host">—</span></div>
+                <div class="ru-kv"><span class="k">版本</span><span class="v" id="ts-ver">—</span></div>
+              </div>
+              <div class="ru-callout warn" id="ts-authurl" hidden style="margin-top:14px"><i data-lucide="info"></i><span id="ts-authurl-text">—</span></div>
+              <div class="ru-save">
+                <button class="ru-btn primary sm" id="btn-ts-login">登录 Tailscale</button>
+                <button class="ru-linkbtn" id="btn-ts-logout" style="font-size:13px">登出</button>
+              </div>
+              <div class="ru-hint">登录将跳转 Tailscale 官方授权页，确认后自动加入您的私有网络（tailnet）；可通过 Tailscale 控制台管理设备与访问策略。已默认关闭「接受 Tailscale DNS」，不会改动本机 DNS 配置。</div>
+            </div>
+          </section>
+
+          <!-- ============ 7 备份与升级 ============ -->
+          <section class="ru-page" id="pg-backup">
+            <div class="ru-card">
+              <div class="ru-chead">
+                <div><h3>系统版本</h3><div class="ru-sub">在线检查或上传升级包升级，升级期间请勿断电</div></div>
+                <span class="ru-badge blue" id="ver-badge">V—</span>
+              </div>
+              <div class="ru-frow" style="margin-top:6px">
+                <div class="ru-field"><div class="ru-flabel">当前版本</div><input class="ru-in" readonly id="ver-now"></div>
+                <button class="ru-btn primary" id="btn-ver-check">检查更新</button>
+              </div>
+              <div class="ru-frow">
+                <div class="ru-field"><div class="ru-flabel">升级源（GitHub 仓库或清单地址）</div><input class="ru-in" id="upg-source" placeholder="如 yourname/seedrou"></div>
+                <button class="ru-btn" id="btn-upg-source">保存升级源</button>
+              </div>
+              <div id="ver-line" hidden></div>
+              <div class="ru-badmsg" id="msg-upg"></div>
+              <div class="ru-dropbox" id="upg-drop">
+                <i data-lucide="upload"></i>
+                <div style="color:var(--ru-text);font-weight:500">手动升级</div>
+                <div>点击选择升级包文件（.tar.gz），将校验完整性后原子替换</div>
+                <input type="file" id="file-upgrade" accept=".tar.gz,.tgz" hidden>
+              </div>
+            </div>
+
+            <div class="ru-card">
+              <div class="ru-chead"><div><h3>备份与恢复</h3><div class="ru-sub">备份文件包含上网、局域网、QoS 与端口转发等全部配置</div></div></div>
+              <div class="ru-save" style="margin-top:10px">
+                <button class="ru-btn" id="btn-backup"><i data-lucide="download"></i>新建备份</button>
+                <button class="ru-btn" id="btn-restore"><i data-lucide="upload"></i>立即恢复</button>
+                <input type="file" id="file-restore" accept=".tar.gz,.tgz" hidden>
+              </div>
+              <div class="ru-hint">恢复前会校验备份文件结构，仅合并路由配置，不会改动系统密码之外的系统文件。</div>
+            </div>
+
+            <div class="ru-card danger">
+              <div class="ru-chead"><div><h3>恢复出厂设置</h3><div class="ru-sub">将清除全部路由配置（上网方式、网口绑定、静态分配、端口转发等），LAN IP 恢复为 192.168.10.1，并自动重启网络；系统与已安装软件保留</div></div></div>
+              <div class="ru-save" style="margin-top:10px"><button class="ru-btn danger" id="btn-factory"><i data-lucide="rotate-ccw"></i>立即恢复</button></div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ============ 登录页 ============ -->
+  <section class="ru-login" id="ru-login">
+    <div class="ru-lcard">
+      <div class="ru-llogo"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgl)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></div>
+      <h2>SeedRou</h2>
+      <div class="ru-lsub" id="ru-lsub">192.168.10.1 · 管理后台</div>
+      <form id="ru-loginform" autocomplete="off">
+        <div class="ru-flabel">管理密码</div>
+        <input class="ru-in" type="password" id="ru-loginpwd" placeholder="请输入管理密码" autocomplete="current-password">
+        <button class="ru-btn primary" type="submit" id="ru-loginbtn">登 录</button>
+      </form>
+      <div class="ru-lbad" id="ru-loginbad"></div>
+      <div class="ru-lfoot">忘记密码？长按机身 Reset 键 8 秒恢复出厂设置后重新登录</div>
+    </div>
+  </section>
+
+  <!-- 添加静态 IP 绑定弹窗 -->
+  <div class="ru-modal" id="ru-bind-modal" hidden>
+    <div class="ru-dialog" role="dialog" aria-modal="true" aria-label="添加静态 IP 绑定">
+      <div class="ru-dhead">
+        <div><h3>添加静态 IP 绑定</h3><div class="ru-sub">支持多行批量编辑，填写完成后一键绑定</div></div>
+        <button class="ru-iconbtn" id="bind-close" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="ru-bindgrid ru-bindhead">
+        <span>设备名</span><span>IP 末段</span><span>MAC 地址</span><span></span>
+      </div>
+      <div id="ru-bindrows"></div>
+      <button class="ru-addrow" id="bind-addrow"><i data-lucide="plus"></i>添加一行</button>
+      <div class="ru-badmsg" id="msg-bind"></div>
+      <div class="ru-hint" id="bind-hint">IP 末段取值 2–254，不能与已有绑定冲突；MAC 格式 xx:xx:xx:xx:xx:xx。</div>
+      <div class="ru-dfoot">
+        <button class="ru-btn" id="bind-cancel">取消</button>
+        <button class="ru-btn primary" id="bind-commit">一键绑定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加/编辑端口转发弹窗 -->
+  <div class="ru-modal" id="ru-fw-modal" hidden>
+    <div class="ru-dialog" role="dialog" aria-modal="true" aria-label="添加端口转发规则">
+      <div class="ru-dhead">
+        <div><h3 id="fw-modal-title">添加转发规则</h3><div class="ru-sub">将 WAN 侧指定端口转发到局域网设备；协议与外部端口组合不能重复</div></div>
+        <button class="ru-iconbtn" id="fw-close" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="ru-frow" style="margin-top:4px;flex-direction:column;align-items:stretch;gap:12px">
+        <div class="ru-field"><div class="ru-flabel">规则名称</div><input class="ru-in" id="fw-name" placeholder="如 NAS 外网访问"></div>
+        <div class="ru-frow" style="margin-top:0">
+          <div class="ru-field" style="max-width:160px"><div class="ru-flabel">协议</div>
+            <select class="ru-in" id="fw-proto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="both">TCP+UDP</option></select>
+          </div>
+          <div class="ru-field"><div class="ru-flabel">外部端口（1–65535，可填范围 8000-8010）</div><input class="ru-in" id="fw-wport" placeholder="如 443"></div>
+        </div>
+        <div class="ru-frow" style="margin-top:0">
+          <div class="ru-field"><div class="ru-flabel">目标 IP（局域网内）</div><input class="ru-in" id="fw-ip" placeholder="192.168.10.10"></div>
+          <div class="ru-field"><div class="ru-flabel">内部端口</div><input class="ru-in" id="fw-lport" placeholder="如 443"></div>
+        </div>
+      </div>
+      <div class="ru-badmsg" id="msg-fw"></div>
+      <div class="ru-dfoot">
+        <button class="ru-btn" id="fw-cancel">取消</button>
+        <button class="ru-btn primary" id="fw-commit">保存规则</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ru-toasts" id="ru-toasts"></div>
+</div>
+
+<script src="/static/icons.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

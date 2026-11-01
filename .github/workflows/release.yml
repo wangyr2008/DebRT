@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验 VERSION 与 tag 一致
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          FILE_VER="$(tr -d '[:space:]' < VERSION)"
+          if [ "$TAG" != "$FILE_VER" ]; then
+            echo "tag($TAG) 与 VERSION($FILE_VER) 不一致"; exit 1
+          fi
+
+      - name: 语法自检
+        run: |
+          for f in install.sh uninstall.sh priv/seedrou-priv priv/lib.sh priv/qdisc-apply \
+                   network/dispatcher/* network/ppp/ip-up.d/*; do bash -n "$f"; done
+          python3 -m py_compile panel/*.py priv/*.py
+
+      - name: 打包 seedrou-<ver>.tar.gz
+        run: |
+          VER="$(tr -d '[:space:]' < VERSION)"
+          tar -czf "seedrou-${VER}.tar.gz" \
+            --exclude='.github' \
+            panel priv config systemd network singbox sudoers \
+            install.sh uninstall.sh VERSION README.md
+          sha256sum "seedrou-${VER}.tar.gz" > "seedrou-${VER}.tar.gz.sha256"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+
+      - name: 上传到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            seedrou-${{ env.VER }}.tar.gz
+            seedrou-${{ env.VER }}.tar.gz.sha256
+          generate_release_notes: true

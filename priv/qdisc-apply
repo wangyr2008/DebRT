@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# SeedRou QoS（cake）：读 config.json，在 WAN 口做 egress cake + ifb 入向整形。
+# 由 apply 流水线、networkd-dispatcher 钩子与 ppp ip-up.d 调用；幂等。
+set -u
+PRIV_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=lib.sh
+source "${PRIV_DIR}/lib.sh"
+
+read -r WAN_DEV ENABLED DOWN UP <<EOF
+$(python3 - <<'PYEOF'
+import json
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+except Exception:
+    print(" off 0 0"); raise SystemExit
+if cfg.get("wan", {}).get("mode") == "pppoe":
+    dev = "ppp0"
+else:
+    dev = next((p["name"] for p in cfg.get("ports", []) if p.get("wan")), "")
+q = cfg.get("qos", {})
+print(dev, "on" if q.get("enabled") else "off", q.get("down", 0), q.get("up", 0))
+PYEOF
+)
+EOF
+
+# 载入 ifb（开机由 /etc/modules-load.d 保证，这里兜底）
+ip link add ifb0 type ifb 2>/dev/null || true
+ip link set ifb0 up 2>/dev/null || true
+
+if [ "$ENABLED" != "on" ] || [ -z "$WAN_DEV" ]; then
+  # 关闭/无 WAN：清理 qdisc，恢复默认 fq_codel 由内核自动接管
+  tc qdisc del dev "${WAN_DEV:-lo}" root 2>/dev/null || true
+  tc qdisc del dev "${WAN_DEV:-lo}" ingress 2>/dev/null || true
+  tc qdisc del dev ifb0 root 2>/dev/null || true
+  exit 0
+fi
+
+ip link show "$WAN_DEV" >/dev/null 2>&1 || exit 0   # ppp0 未拨上时跳过，等钩子再调
+
+tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort 2>/dev/null || true
+# 入向：把 WAN 收到的包镜像到 ifb0，在 ifb0 上做 ingress cake
+tc qdisc del dev "$WAN_DEV" ingress 2>/dev/null || true
+tc qdisc add dev "$WAN_DEV" handle ffff: ingress 2>/dev/null || true
+tc filter del dev "$WAN_DEV" parent ffff: 2>/dev/null || true
+tc filter add dev "$WAN_DEV" parent ffff: protocol all u32 match u32 0 0 action mirred egress redirect dev ifb0 2>/dev/null || true
+tc qdisc replace dev ifb0 root cake bandwidth "${DOWN}mbit" besteffort ingress 2>/dev/null || true
+exit 0

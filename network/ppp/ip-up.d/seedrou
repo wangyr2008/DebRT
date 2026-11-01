@@ -1,0 +1,17 @@
+#!/bin/sh
+# pppd ip-up.d 钩子：PPPoE 拨上后更新上游 DNS + 重放 QoS
+# 环境变量由 pppd 提供：$1=接口名 $2=tty $3=速率 $4=本地IP $5=对端IP $6=ipparam
+IFACE="$1"
+RUNDIR="/run/seedrou-dns"
+CONF="${RUNDIR}/upstream.conf"
+mkdir -p "$RUNDIR"
+
+{
+  echo "# 由 pppd ip-up.d 生成（$IFACE）— 请勿手工修改"
+  [ -f /etc/ppp/resolv.conf ] && grep -E '^nameserver' /etc/ppp/resolv.conf | awk '{print "server=" $2}'
+} > "${CONF}.tmp" 2>/dev/null
+mv -f "${CONF}.tmp" "$CONF"
+
+systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
+[ -x /usr/local/lib/seedrou/qdisc-apply ] && /usr/local/lib/seedrou/qdisc-apply
+exit 0

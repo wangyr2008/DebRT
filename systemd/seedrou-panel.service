@@ -1,0 +1,24 @@
+[Unit]
+Description=SeedRou 管理面板
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seedrou
+Group=seedrou
+# 绑定 80 端口所需的最小能力；面板无任何文件级 root 权限
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=/usr/bin/python3 /usr/local/lib/seedrou/panel/seedrou_panel.py --port 80
+Restart=on-failure
+RestartSec=3
+ReadWritePaths=/var/lib/seedrou /run/seedrou
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=no
+
+[Install]
+WantedBy=multi-user.target

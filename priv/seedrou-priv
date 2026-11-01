@@ -1,0 +1,979 @@
+#!/usr/bin/env bash
+# ============================================================================
+# SeedRou 特权入口 —— 面板经 sudo 白名单唯一直达的 root 脚本。
+#
+# 安全设计：
+#   * 子命令白名单分发，绝不 eval 用户输入；
+#   * 敏感数据（密码）只经 stdin 传递，不出现在参数/日志/回显；
+#   * 所有配置变更：校验 → lastgood 快照 → 原子写 → 语法预检 → 应用 → 验证 →
+#     失败自动回滚，并以可操作的 JSON 错误返回；
+#   * 与 sing-box / podman / tailscale 的共存契约见 COEXISTENCE.md：
+#     本脚本只操作自己的 nft 表 inet seedrou_base，永不 flush ruleset，
+#     永不 restart sing-box。
+# ============================================================================
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+PRIV_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=lib.sh
+source "${PRIV_DIR}/lib.sh"
+
+CMD="${1:-}"; [ $# -gt 0 ] && shift
+
+# ---------------------------------------------------------------------------
+# 认证
+# ---------------------------------------------------------------------------
+do_auth_verify() {
+  local pw lock_state out
+  pw="$(head -c 4096)"   # stdin 只读一次
+  [ -n "$pw" ] || die "AUTH_EMPTY" "请输入管理密码"
+  # 限速状态（5 次失败锁 60 秒）
+  lock_state='{"fails":0,"lock_until":0}'
+  [ -f "${SEEDROU_VAR}/auth-state.json" ] && lock_state="$(cat "${SEEDROU_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
+  out="$(python3 - "$pw" "$lock_state" <<'PYEOF'
+import hashlib, hmac, json, sys, time
+pw, state = sys.argv[1], json.loads(sys.argv[2])
+now = int(time.time())
+if state.get("lock_until", 0) > now:
+    print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
+                      "message": f"尝试次数过多，请 {state['lock_until'] - now + 1} 秒后重试",
+                      "hint": "密码不会因此失效；稍等即可再次尝试"}))
+    sys.exit(0)
+try:
+    rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
+    algo, iters, salt, want = rec.split("$", 3)
+    got = hashlib.pbkdf2_hmac(algo, pw.encode(), bytes.fromhex(salt), int(iters)).hex()
+    ok = hmac.compare_digest(got, want)
+except Exception:
+    ok = False
+if ok:
+    state = {"fails": 0, "lock_until": 0}
+else:
+    state["fails"] = int(state.get("fails", 0)) + 1
+    if state["fails"] >= 5:
+        state["lock_until"] = now + 60
+        print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
+                          "message": "连续 5 次密码错误，已临时锁定 60 秒",
+                          "hint": "若忘记密码：长按机身 Reset 键 8 秒恢复出厂，或在控制台执行 seedrou-priv factory-reset"}))
+    else:
+        left = 5 - state["fails"]
+        print(json.dumps({"ok": False, "code": "AUTH_BAD",
+                          "message": "管理密码不正确", "hint": f"还可尝试 {left} 次，超过后将临时锁定 60 秒"}))
+json.dump(state, open("/var/lib/seedrou/auth-state.json", "w"))
+sys.exit(0 if ok else 1)
+PYEOF
+)"
+  printf '%s\n' "$out"
+  case "$out" in *'"ok": true'*) exit 0 ;; *) exit 1 ;; esac
+}
+
+do_session_secret() {
+  python3 - <<'PYEOF'
+import json
+try:
+    s = json.load(open("/etc/seedrou/secrets.json")).get("session_secret", "")
+    print(json.dumps({"ok": True, "secret": s}))
+except Exception:
+    print(json.dumps({"ok": False, "code": "NO_SECRET", "message": "secrets.json 缺失或损坏", "hint": "请重新运行 install.sh"}))
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# 配置读取（不含任何明文密码）
+# ---------------------------------------------------------------------------
+do_config_get() {
+  python3 - <<'PYEOF'
+import json
+cfg = json.load(open("/etc/seedrou/config.json"))
+try:
+    has_pw = bool(json.load(open("/etc/seedrou/secrets.json")).get("pppoe_password"))
+except Exception:
+    has_pw = False
+cfg.setdefault("wan", {})["has_password"] = has_pw
+cfg.pop("notes", None)
+print(json.dumps({"ok": True, "config": cfg}, ensure_ascii=False))
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# 配置写入 + 应用（核心流水线）
+# ---------------------------------------------------------------------------
+do_config_set() {
+  local section="${1:-}"
+  [ -n "$section" ] || die "USAGE" "缺少配置段名称"
+  require_root
+  acquire_lock
+
+  local in_json norm tag stage man_json pre_wan acts failed
+  in_json="$(mktemp /run/seedrou/in.XXXXXX)"
+  cat > "$in_json"
+
+  # 1) 校验与规范化（失败时 validate.py 直接输出可操作的 JSON 错误）
+  if ! norm="$(python3 "${PRIV_DIR}/validate.py" "$section" < "$in_json")"; then
+    printf '%s\n' "$norm"; rm -f "$in_json"; exit 1
+  fi
+
+  # 1.5) 仅保存升级源：不涉及网络应用
+  if [ "$section" = "upgrade" ]; then
+    python3 - "$in_json" "$norm" <<'PYEOF'
+import json, sys
+norm = json.load(open(sys.argv[2]))["data"]
+cfg = json.load(open("/etc/seedrou/config.json"))
+cfg["upgrade"] = norm
+tmp = "/etc/seedrou/.config.tmp"
+json.dump(cfg, open(tmp, "w"), ensure_ascii=False, indent=1)
+import os
+os.chmod(tmp, 0o644)
+os.replace(tmp, "/etc/seedrou/config.json")
+PYEOF
+    rm -f "$in_json"
+    ok_out "message" "升级源已保存"
+    exit 0
+  fi
+
+  # 2) 快照 + 合并（密码只进 secrets）
+  local old_mode
+  old_mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))' 2>/dev/null || echo "")"
+  tag="s$(date +%s%N | tail -c 9)"
+  snapshot_lastgood "$tag"
+  local new_cfg new_sec
+  new_cfg="$(mktemp /run/seedrou/cfg.XXXXXX)"
+  new_sec="$(mktemp /run/seedrou/sec.XXXXXX)"
+  chmod 600 "$new_sec"
+  if ! python3 - "$section" "$in_json" "$norm" "$new_cfg" "$new_sec" <<'PYEOF'
+import json, sys
+section, in_file, norm_file, out_cfg, out_sec = sys.argv[1:6]
+cfg = json.load(open("/etc/seedrou/config.json"))
+sec_in = json.load(open(in_file))
+norm = json.load(open(norm_file))["data"]
+try:
+    secrets = json.load(open("/etc/seedrou/secrets.json"))
+except Exception:
+    secrets = {}
+if section == "bind":
+    cfg["ports"] = norm
+elif section == "wan":
+    pwd = norm.pop("password", None)
+    for k in ("mode", "username", "dns_mode", "dns", "ip", "mask", "gw"):
+        cfg.setdefault("wan", {})[k] = norm[k]
+    if pwd:
+        secrets["pppoe_password"] = pwd
+        cfg["wan"]["has_password"] = True
+elif section == "ipv6":
+    cfg["ipv6"] = norm
+elif section == "lan":
+    cfg["lan"] = norm
+elif section == "dhcp":
+    cfg["dhcp"] = norm
+elif section == "static":
+    cfg["static"] = norm
+elif section == "qos":
+    cfg["qos"] = norm
+elif section == "firewall":
+    if "wan_input_drop" in sec_in:
+        cfg.setdefault("firewall", {})["wan_input_drop"] = norm["wan_input_drop"]
+    if "portfw" in sec_in:
+        cfg["firewall"]["portfw"] = norm["portfw"]
+elif section == "upgrade":
+    cfg["upgrade"] = norm
+else:
+    sys.exit(9)
+json.dump(cfg, open(out_cfg, "w"), ensure_ascii=False, indent=1)
+if secrets:
+    json.dump(secrets, open(out_sec, "w"), ensure_ascii=False, indent=1)
+PYEOF
+  then
+    restore_lastgood "$tag"; rm -f "$in_json" "$new_cfg" "$new_sec"
+    die "MERGE" "配置合并失败" "本次修改未生效；请刷新页面重试"
+  fi
+
+  # 3) 生成原生配置到暂存目录（含跨段校验）
+  stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+  man_json="$stage/manifest.json"
+  if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json"; then
+    cat "$man_json"
+    restore_lastgood "$tag"; rm -rf "$stage" "$in_json" "$new_cfg" "$new_sec"
+    exit 1
+  fi
+  # 4) 语法预检
+  if ! pf_out="$(preflight_stage "$stage")"; then
+    printf '%s\n' "$pf_out"
+    restore_lastgood "$tag"; rm -rf "$stage" "$in_json" "$new_cfg" "$new_sec"
+    exit 1
+  fi
+
+  # 5) 应用：写配置 + 写原生文件 + 重启受影响服务
+  write_atomic "$CONFIG_JSON" 644 < "$new_cfg"
+  [ -s "$new_sec" ] && write_atomic "$SECRETS_JSON" 600 < "$new_sec"
+  rm -f "$in_json" "$new_cfg" "$new_sec"
+  apply_stage_files "$stage" "$man_json"
+  rm -rf "$stage"
+  pre_wan="$(wan_route_ok)"
+  acts="$(plan_for_section "$section")"
+  # 仅在模式/账号变化或网口重绑定时才重拨 PPPoE（避免改个 DNS 就断线重连）
+  local new_mode pppoe_needed="no"
+  new_mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))')"
+  [ "$old_mode" != "$new_mode" ] && pppoe_needed="yes"
+  [ "$section" = "bind" ] && [ "$new_mode" = "pppoe" ] && pppoe_needed="yes"
+  if [ "$section" = "wan" ] && printf '%s' "$norm" | python3 -c 'import json,sys;sys.exit(0 if json.load(sys.stdin).get("data",{}).get("password") else 1)' 2>/dev/null; then
+    pppoe_needed="yes"
+  fi
+  if [ "$pppoe_needed" != "yes" ]; then
+    acts="$(printf '%s\n' $acts | grep -v '^pppoe$' | tr '\n' ' ')"
+  fi
+  failed="$(run_actions "$acts")"
+
+  # 6) 验证
+  local mode wan_to tmo err_hint=""
+  mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))')"
+  if ! wait_dnsmasq 10; then
+    err_hint="dnsmasq 未能启动：journalctl -u dnsmasq -n 30"
+    failed="$failed dnsmasq"
+  elif [ "$pre_wan" = "yes" ]; then
+    if [ "$mode" = "pppoe" ] && [ "$section" = "wan" ]; then tmo=45; else tmo=25; fi
+    if ! wait_wan "$tmo"; then
+      if [ "$mode" = "pppoe" ]; then
+        if journalctl -u seedrou-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "PAP authentication failed|CHAP authentication failed|authentication failed"; then
+          err_hint="PPPoE 拨号被服务器拒绝（认证失败）：请检查宽带账号/密码是否正确；若账号正在其他设备上拨号，请先断开再试"
+        elif journalctl -u seedrou-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "timeout|LCP: timeout|No response"; then
+          err_hint="PPPoE 服务器无响应：请确认光猫已改为桥接模式、WAN 线已插在绑定的 WAN 口上"
+        else
+          err_hint="PPPoE 未能在预期时间内建立连接：journalctl -u seedrou-pppoe -n 40 查看详情"
+        fi
+      else
+        err_hint="应用后 WAN 未能恢复连接：请检查上级网络/网线；可尝试在「网络设置」重新保存上网设置"
+      fi
+      failed="$failed wan"
+    fi
+  fi
+
+  if [ -n "$failed" ] || [ -n "$err_hint" ]; then
+    # 回滚到修改前配置并重放
+    restore_lastgood "$tag"
+    local stage2 man2
+    stage2="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+    man2="$stage2/manifest.json"
+    if python3 "${PRIV_DIR}/netgen.py" --stage "$stage2" > "$man2" 2>/dev/null; then
+      apply_stage_files "$stage2" "$man2"
+      run_actions "$(plan_for_section "$section")" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$stage2"
+    [ -z "$err_hint" ] && err_hint="已自动恢复到修改前的可用配置，未生效的修改请检查后重试"
+    die "APPLY_ROLLED_BACK" "配置未能安全生效，已自动回滚" "$err_hint"
+  fi
+
+  # 7) 回应（WAN 方式切换给 sing-box 用户一句提示）
+  local msg="配置已保存并生效" hint_sb=""
+  if [ "$section" = "wan" ] && systemctl is-enabled --quiet sing-box.service 2>/dev/null; then
+    hint_sb="若已启用 sing-box，建议执行 sb restart 重新绑定出口接口"
+  fi
+  if [ "$section" = "lan" ]; then
+    msg="LAN 设置已生效；若管理地址已变化，请使用新 IP 重新登录"
+  fi
+  ok_out "message" "$msg" "hint_singbox" "$hint_sb"
+}
+
+# ---------------------------------------------------------------------------
+# 幂等收敛（开机 / 定时）
+# ---------------------------------------------------------------------------
+do_apply_all() {
+  require_root
+  local convergent=""; [ "${1:-}" = "--convergent" ] && convergent="1"
+  mkdir -p /run/seedrou-dns /run/seedrou
+  acquire_lock
+  local stage man_json
+  stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+  man_json="$stage/manifest.json"
+  if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+    die "CONFIG_CORRUPT" "配置生成失败（config.json 可能损坏）" "可从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+  fi
+
+  if [ -n "$convergent" ]; then
+    # 收敛模式：无漂移则只保证运行时状态（nft 表 / cake / 服务存活）
+    local drift=0 line rel mode
+    while IFS=$'\t' read -r rel mode; do
+      [ -f "/${rel}" ] || { drift=1; break; }
+      cmp -s "/${rel}" "${stage}/${rel}" || { drift=1; break; }
+    done < <(python3 - "$man_json" <<'PYEOF'
+import json, sys
+for f in json.load(open(sys.argv[1]))["files"]:
+    print(f"{f['path']}\t{f['mode']:04o}")
+PYEOF
+)
+    if [ "$drift" = "0" ] && wait_dnsmasq 1 && nft list table $NFT_TABLE >/dev/null 2>&1; then
+      svc_cake
+      systemctl is-enabled --quiet sing-box.service 2>/dev/null || true
+      ok_out "message" "无漂移，运行时已确认" "converged" "true"
+      exit 0
+    fi
+  fi
+
+  if ! pf_out="$(preflight_stage "$stage")"; then
+    die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
+  fi
+  apply_stage_files "$stage" "$man_json"
+  rm -rf "$stage"
+  run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true
+  wait_dnsmasq 15 || true
+  ok_out "message" "已按配置完成系统收敛"
+}
+
+# ---------------------------------------------------------------------------
+# 服务控制（podman / tailscale）
+# ---------------------------------------------------------------------------
+do_service_ctl() {
+  require_root
+  local name="${1:-}" action="${2:-}"
+  case "$name" in
+    podman)
+      case "$action" in
+        start)   systemctl start podman.socket podman.service 2>/dev/null; podman start --all >/dev/null 2>&1 || true ;;
+        stop)    podman stop --all >/dev/null 2>&1 || true; systemctl stop podman.service podman.socket 2>/dev/null || true ;;
+        enable)  systemctl enable --quiet podman.socket podman.service podman-restart.service 2>/dev/null || die "SVC" "设置开机自启失败" "请确认已安装 podman：apt install podman" ;;
+        disable) systemctl disable --quiet podman.socket podman.service podman-restart.service 2>/dev/null || true ;;
+        *) die "USAGE" "service-ctl podman 需要 start|stop|enable|disable" ;;
+      esac ;;
+    tailscale)
+      command -v tailscale >/dev/null 2>&1 || die "TS_NOT_INSTALLED" "Tailscale 尚未安装" "请在「其他工具」中先一键安装"
+      case "$action" in
+        start)   systemctl start tailscaled.service ;;
+        stop)    systemctl stop tailscaled.service ;;
+        enable)  systemctl enable --quiet tailscaled.service ;;
+        disable) systemctl disable --quiet tailscaled.service ;;
+        *) die "USAGE" "service-ctl tailscale 需要 start|stop|enable|disable" ;;
+      esac ;;
+    *) die "USAGE" "不支持的服务：${name}" ;;
+  esac
+  ok_out "message" "已完成 ${name} ${action}"
+}
+
+# ---------------------------------------------------------------------------
+# podman-ops
+# ---------------------------------------------------------------------------
+POD_LOCK=0
+pod_lock() { exec 8>/run/seedrou/podman.lock; flock -w 600 8 || die "BUSY" "另一个容器操作正在进行中，请稍后重试"; }
+
+podman_json() { python3 -c "$1"; }
+
+do_podman_ops() {
+  require_root
+  local action="${1:-}"; [ $# -gt 0 ] && shift
+  command -v podman >/dev/null 2>&1 || die "PODMAN_MISSING" "Podman 未安装" "请在系统上执行 apt install podman podman-compose"
+  pod_lock
+  case "$action" in
+    status)
+      local ver running autostart
+      ver="$(podman --version 2>/dev/null | awk '{print $3}')"
+      [ -n "$(podman ps -q 2>/dev/null | head -n 1)" ] && running="true" || running="false"
+      systemctl is-active --quiet podman.service && running="true"
+      systemctl is-enabled --quiet podman-restart.service 2>/dev/null && autostart="true" || autostart="false"
+      ok_out "installed" "true" "version" "${ver:-}" "running" "$running" "autostart" "$autostart" ;;
+    list-containers)
+      podman ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Ports}}' | podman_json '
+import sys, json
+out = []
+for line in sys.stdin:
+    parts = line.rstrip("\n").split("\t")
+    parts += [""] * (4 - len(parts))
+    out.append({"name": parts[0], "image": parts[1], "state": parts[2],
+                "ports": [p for p in parts[3].split(",") if p]})
+print(json.dumps({"ok": True, "containers": out}))' ;;
+    container)
+      local cname="${1:-}" cact="${2:-}" label
+      [ -n "$cname" ] && [ -n "$cact" ] || die "USAGE" "缺少容器名或操作"
+      case "$cact" in
+        start)  label="已启动" ;;
+        stop)   label="已停止" ;;
+        restart) label="已重启" ;;
+        remove) label="已删除" ;;
+        update) label="已更新" ;;
+        *) die "USAGE" "容器操作需为 start|stop|restart|update|remove" ;;
+      esac
+      case "$cact" in
+        start|stop|restart) podman "$cact" "$cname" >/dev/null 2>&1 || die "CT_FAIL" "容器 $cname ${cact} 失败" "可在系统上执行 podman logs --tail 20 $cname 查看原因" ;;
+        remove) podman rm -f "$cname" >/dev/null 2>&1 || die "CT_FAIL" "删除容器失败" "请确认容器名正确" ;;
+        update) do_podman_update "$cname" ;;
+      esac
+      ok_out "message" "容器 $cname ${label}" ;;
+    list-images)
+      podman images --format '{{.Names}}\t{{.Size}}' | podman_json '
+import sys, json
+imgs = {}
+order = []
+for line in sys.stdin:
+    name, size = (line.rstrip("\n").split("\t") + [""] * 2)[:2]
+    if not name: continue
+    tag = name.split(",")[0]
+    if tag not in imgs:
+        imgs[tag] = {"name": tag, "size": size, "used_by": 0}
+        order.append(tag)
+used = {}
+for line in __import__("subprocess").run(["podman","ps","-a","--format","{{.Image}}"],capture_output=True,text=True).stdout.splitlines():
+    used[line.strip()] = used.get(line.strip(), 0) + 1
+for it in imgs.values():
+    it["used_by"] = used.get(it["name"], 0)
+    it["size_text"] = it.pop("size")
+print(json.dumps({"ok": True, "images": list(imgs.values())}))' ;;
+    pull)
+      local img="${1:-}"
+      [ -n "$img" ] || die "USAGE" "缺少镜像名"
+      if ! podman pull --timeout 300s "$img" >/dev/null 2>&1; then
+        die "PULL_FAIL" "镜像 $img 拉取失败" "请检查镜像名与标签；若服务器在墙外，请确认网络可直连镜像仓库，或先配置镜像加速"
+      fi
+      ok_out "message" "镜像 $img 已拉取" ;;
+    image-rm)
+      local img="${1:-}"
+      [ -n "$img" ] || die "USAGE" "缺少镜像名"
+      podman rmi "$img" >/dev/null 2>&1 || die "IMG_FAIL" "删除镜像失败" "该镜像可能正被容器使用，或名称不完整（需含 tag）"
+      ok_out "message" "镜像已删除" ;;
+    compose-get)
+      ok_out "content" "$(python3 -c '
+import json, os
+p = "/etc/seedrou/compose.yaml"
+print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || echo '""')" ;;
+    compose-set)
+      write_atomic "${SEEDROU_ETC}/compose.yaml" 644
+      ok_out "message" "Compose 文件已保存" ;;
+    compose-deploy)
+      [ -f "${SEEDROU_ETC}/compose.yaml" ] || die "COMPOSE_EMPTY" "尚未保存 Compose 内容" "请先在文本框中填写并部署"
+      command -v podman-compose >/dev/null 2>&1 || die "COMPOSE_MISSING" "未安装 podman-compose" "在系统上执行 apt install podman-compose 后重试"
+      local logf logtail
+      logf="$(mktemp /run/seedrou/compose.XXXXXX)"
+      if ! podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou up -d >"$logf" 2>&1; then
+        logtail="$(tail -n 4 "$logf" | tr '\n' ' ' | cut -c1-260)"
+        rm -f "$logf"
+        die "COMPOSE_FAIL" "Compose 部署失败" "常见原因：语法错误、镜像名/标签不存在、端口被占用。日志：${logtail}"
+      fi
+      logtail="$(tail -n 3 "$logf" | tr '\n' ' ' | cut -c1-200)"
+      rm -f "$logf"
+      ok_out "message" "Compose 已部署" "log_tail" "$logtail" ;;
+    compose-stop)
+      podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou down >/dev/null 2>&1 || true
+      ok_out "message" "Compose 已停止（数据卷保留）" ;;
+    *) die "USAGE" "podman-ops 未知操作：${action}" ;;
+  esac
+}
+
+# 容器"更新"：拉最新镜像并按原端口/卷/环境重建
+do_podman_update() {
+  local cname="$1" img ports binds envs restart
+  img="$(podman inspect -f '{{.ImageName}}' "$cname" 2>/dev/null)"
+  [ -n "$img" ] || die "CT_FAIL" "无法读取容器 $cname 的镜像信息"
+  restart="$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$cname" 2>/dev/null)"
+  [ -n "$restart" ] && [ "$restart" != "no" ] || restart="unless-stopped"
+  if ! podman pull --timeout 300s "$img" >/dev/null 2>&1; then
+    die "PULL_FAIL" "拉取 $img 最新版本失败" "请检查网络与镜像仓库可达性"
+  fi
+  local args=()
+  while IFS= read -r p; do [ -n "$p" ] && args+=(-p "$p"); done < <(podman inspect -f '{{range $k,$v := .HostConfig.PortBindings}}{{range $v}}-p {{.HostIp}}:{{.HostPort}}:{{$k}}{{"\n"}}{{end}}{{end}}' "$cname" 2>/dev/null | sed 's/-p //')
+  while IFS= read -r b; do [ -n "$b" ] && args+=(-v "$b"); done < <(podman inspect -f '{{range .HostConfig.Binds}}{{.}}{{"\n"}}{{end}}' "$cname" 2>/dev/null)
+  while IFS= read -r e; do [ -n "$e" ] && args+=(-e "$e"); done < <(podman inspect -f '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' "$cname" 2>/dev/null | grep -vE '^(PATH|TERM|container|HOSTNAME|HOME)=')
+  podman stop -t 30 "$cname" >/dev/null 2>&1 || true
+  podman rm "$cname" >/dev/null 2>&1 || true
+  if ! podman run -d --name "$cname" --restart "$restart" "${args[@]}" "$img" >/dev/null 2>&1; then
+    die "CT_REBUILD_FAIL" "容器 $cname 重建失败" "已按端口/卷/环境变量重建；若容器使用了特殊参数请用 compose 管理"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# tailscale-ops
+# ---------------------------------------------------------------------------
+do_tailscale_ops() {
+  require_root
+  local action="${1:-}"
+  case "$action" in
+    status)
+      if ! command -v tailscale >/dev/null 2>&1; then ok_out "installed" "false"; exit 0; fi
+      local ver running state acc ip host auth_url=""
+      ver="$(tailscale version 2>/dev/null | head -n 1 | cut -d: -f1)"
+      systemctl is-active --quiet tailscaled.service && running="true" || running="false"
+      acc=""; ip=""; host=""; state="NeedsLogin"
+      if [ "$running" = "true" ]; then
+        eval "$(tailscale status --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("TS_STATE=NeedsLogin"); raise SystemExit
+print("TS_STATE=" + str(d.get("BackendState", "NeedsLogin")))
+self_ = d.get("Self") or {}
+ips = self_.get("TailscaleIPs") or []
+print("TS_IP=" + (ips[0] if ips else ""))
+print("TS_ACC=" + str((d.get("CurrentTailnet") or {}).get("Name") or ""))
+print("TS_HOST=" + str(self_.get("DNSName") or "").rstrip(".").split(".")[0])
+' )" || true
+        [ "$TS_STATE" = "Running" ] && acc="$TS_ACC" && ip="$TS_IP" && host="$TS_HOST"
+      fi
+      if [ -f /run/seedrou/ts-login.log ] && [ -z "$acc" ]; then
+        auth_url="$(grep -oE 'https://login\.tailscale\.com[^ ]*' /run/seedrou/ts-login.log 2>/dev/null | tail -n 1)"
+      fi
+      ok_out "installed" "true" "running" "$running" "logged_in" "$([ -n "$acc" ] && echo true || echo false)" \
+             "account" "$acc" "ip" "$ip" "hostname" "${host:-seedrou}" "version" "$ver" "auth_url" "$auth_url" ;;
+    install)
+      command -v tailscale >/dev/null 2>&1 && die "TS_INSTALLED" "Tailscale 已安装" "刷新页面即可使用"
+      export DEBIAN_FRONTEND=noninteractive
+      curl -fsSL --max-time 20 "https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg" -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
+        && curl -fsSL --max-time 20 "https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list" -o /etc/apt/sources.list.d/tailscale.list \
+        || die "TS_REPO_FAIL" "无法添加 Tailscale 官方软件源" "请确认路由器可访问 pkgs.tailscale.com；若被墙可手动下载 .deb 后 dpkg -i 安装"
+      apt-get update -qq 2>/dev/null || true
+      apt-get install -y -qq tailscale >/dev/null 2>&1 || die "TS_INSTALL_FAIL" "Tailscale 安装失败" "请检查软件源与网络后重试；也可手动安装后刷新本页"
+      systemctl enable --quiet tailscaled.service
+      systemctl start tailscaled.service
+      ok_out "message" "Tailscale 安装完成" ;;
+    login)
+      systemctl is-active --quiet tailscaled.service || systemctl start tailscaled.service
+      if tailscale status --json 2>/dev/null | grep -q '"BackendState": "Running"'; then
+        ok_out "message" "已经登录，无需重复登录"; exit 0
+      fi
+      mkdir -p /run/seedrou
+      # 已有登录流程在跑则复用其链接，避免重复 tailscale up 互相干扰
+      if pgrep -f "tailscale up --accept-dns" >/dev/null 2>&1 && [ -f /run/seedrou/ts-login.log ]; then
+        local u0; u0="$(grep -oE 'https://login\.tailscale\.com[^ ]*' /run/seedrou/ts-login.log 2>/dev/null | tail -n 1)"
+        ok_out "auth_url" "${u0:-}" "message" "授权进行中，请打开链接完成登录"
+        exit 0
+      fi
+      rm -f /run/seedrou/ts-login.log
+      setsid bash -c 'tailscale up --accept-dns=false --hostname=seedrou > /run/seedrou/ts-login.log 2>&1' >/dev/null 2>&1 &
+      sleep 3
+      local url
+      url="$(grep -oE 'https://login\.tailscale\.com[^ ]*' /run/seedrou/ts-login.log 2>/dev/null | tail -n 1)"
+      ok_out "auth_url" "${url:-}" "message" "$([ -n "$url" ] && echo "请在浏览器打开授权链接" || echo "授权链接生成中，请稍后刷新页面")" ;;
+    logout)
+      rm -f /run/seedrou/ts-login.log
+      tailscale logout >/dev/null 2>&1 || die "TS_LOGOUT_FAIL" "登出失败" "请确认 tailscaled 正在运行"
+      ok_out "message" "已登出 Tailscale" ;;
+    *) die "USAGE" "tailscale-ops 需要 status|install|login|logout" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# 管理密码
+# ---------------------------------------------------------------------------
+do_passwd_set() {
+  require_root
+  acquire_lock
+  local body
+  body="$(cat)"
+  local out rc
+  out="$(python3 - "$body" <<'PYEOF'
+import hashlib, hmac, json, sys, time, os
+body = json.loads(sys.argv[1])
+old, new = body.get("old", ""), body.get("new", "")
+secrets = json.load(open("/etc/seedrou/secrets.json"))
+def check(pw, rec):
+    try:
+        algo, iters, salt, want = rec.split("$", 3)
+        return hmac.compare_digest(hashlib.pbkdf2_hmac(algo, pw.encode(), bytes.fromhex(salt), int(iters)).hex(), want)
+    except Exception:
+        return False
+if not check(old, secrets.get("admin_pbkdf2", "")):
+    print(json.dumps({"ok": False, "code": "AUTH_BAD", "message": "原密码不正确", "hint": "请输入当前使用的管理密码"})); sys.exit(1)
+if not (8 <= len(new) <= 32):
+    print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)
+salt = os.urandom(16)
+h = hashlib.pbkdf2_hmac("sha256", new.encode(), salt, 600000).hex()
+secrets["admin_pbkdf2"] = f"pbkdf2$600000${salt.hex()}${h}"
+tmp = "/etc/seedrou/.secrets.tmp"
+with open(tmp, "w") as f:
+    json.dump(secrets, f, ensure_ascii=False, indent=1)
+    f.flush(); os.fsync(f.fileno())
+os.chmod(tmp, 0o600)
+os.replace(tmp, "/etc/seedrou/secrets.json")
+print(json.dumps({"ok": True, "message": "管理密码已更新"}))
+PYEOF
+)"
+  rc=$?
+  printf '%s\n' "$out"
+  exit $rc
+}
+
+# ---------------------------------------------------------------------------
+# 备份 / 恢复 / 恢复出厂
+# ---------------------------------------------------------------------------
+do_backup_create() {
+  require_root
+  local out_path="${1:?缺少输出路径}"
+  tar -C / -czf "$out_path" \
+    --exclude='var/lib/seedrou/backups' --exclude='var/lib/seedrou/lastgood' \
+    etc/seedrou var/lib/seedrou/notes.json 2>/dev/null || true
+  [ -s "$out_path" ] || die "BACKUP_FAIL" "备份打包失败" "请检查磁盘空间（df -h）"
+  # 备份含 secrets（PPPoE 密码）：仅面板用户可读
+  chown seedrou:seedrou "$out_path" 2>/dev/null || true
+  chmod 640 "$out_path"
+  ok_out "path" "$out_path"
+}
+
+do_backup_restore() {
+  require_root
+  acquire_lock
+  local src="${1:?缺少备份文件路径}"
+  [ -f "$src" ] || die "NO_FILE" "备份文件不存在"
+  # 成员白名单校验
+  if ! tar -tzf "$src" 2>/dev/null | python3 -c '
+import sys
+ok = True
+for line in sys.stdin:
+    p = line.rstrip("\n")
+    if not p: continue
+    if p.startswith("/"): ok = False; break
+    if ".." in p.split("/"): ok = False; break
+    if not (p.startswith("etc/seedrou") or p == "var/lib/seedrou/notes.json"): ok = False; break
+sys.exit(0 if ok else 1)
+'; then
+    die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
+  fi
+  snapshot_lastgood "r$(date +%s)"
+  local stage; stage="$(mktemp -d /run/seedrou/restore.XXXXXX)"
+  tar -C "$stage" -xzf "$src" 2>/dev/null || { rm -rf "$stage"; die "BACKUP_BAD" "备份文件解压失败（文件可能损坏）"; }
+  python3 -c 'import json;json.load(open("'"$stage"'/etc/seedrou/config.json"))' 2>/dev/null \
+    || { rm -rf "$stage"; die "BACKUP_BAD" "备份中的配置无法解析"; }
+  # 原子落盘
+  if [ -d "$stage/etc/seedrou" ]; then
+    while IFS= read -r -d '' f; do
+      rel="${f#$stage/}"
+      write_atomic "/${rel}" "$(stat -c %a "/$rel" 2>/dev/null || echo 600)" < "$f"
+    done < <(find "$stage/etc/seedrou" -type f -print0)
+  fi
+  [ -f "$stage/var/lib/seedrou/notes.json" ] && write_atomic "${SEEDROU_VAR}/notes.json" 644 < "$stage/var/lib/seedrou/notes.json"
+  rm -rf "$stage"
+  chmod 600 "$SECRETS_JSON" 2>/dev/null || true
+  # 重新生成 + 应用
+  do_apply_all >/dev/null 2>&1 || true
+  ok_out "message" "配置已从备份恢复并生效"
+}
+
+do_factory_reset() {
+  require_root
+  acquire_lock
+  snapshot_lastgood "f$(date +%s)"
+  tar -C / -czf "${SEEDROU_VAR}/lastgood/pre-factory-$(date +%s).tar.gz" etc/seedrou 2>/dev/null || true
+  # 发现网口：eth*/en* 排除 ppp/tun/br/veth
+  python3 - <<'PYEOF'
+import json, os, re
+ports = []
+for n in sorted(os.listdir("/sys/class/net")):
+    if re.match(r"^(eth\d+|en[psox]\S*)$", n):
+        ports.append({"name": n, "wan": len(ports) == 0, "lan": len(ports) > 0})
+if not ports:
+    ports = [{"name": "eth0", "wan": True, "lan": False}, {"name": "eth1", "wan": False, "lan": True}]
+cfg = {
+    "version": 1,
+    "ports": ports,
+    "wan": {"mode": "dhcp", "username": "", "dns_mode": "auto", "dns": [], "ip": "", "mask": "", "gw": "", "has_password": False},
+    "ipv6": {"enabled": False, "mode": "native", "dns_mode": "auto", "dns": [], "addr": "", "gw": "", "prefix": ""},
+    "lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
+    "dhcp": {"enabled": True, "pool_start": 100, "pool_end": 200, "lease": 120, "dns1": "", "dns2": "", "gw": ""},
+    "static": [],
+    "qos": {"enabled": False, "down": 0, "up": 0},
+    "firewall": {"wan_input_drop": True, "portfw": []},
+    "upgrade": {"source": ""},
+}
+try:
+    old = json.load(open("/etc/seedrou/config.json"))
+    cfg["upgrade"]["source"] = old.get("upgrade", {}).get("source", "")  # 升级源保留
+except Exception:
+    pass
+json.dump(cfg, open("/etc/seedrou/config.json.new", "w"), ensure_ascii=False, indent=1)
+PYEOF
+  mv -f "${CONFIG_JSON}.new" "$CONFIG_JSON"
+  # 宽带密码属于路由配置：一并清除；管理密码保留
+  python3 - <<'PYEOF'
+import json
+try:
+    s = json.load(open("/etc/seedrou/secrets.json"))
+    s.pop("pppoe_password", None)
+    json.dump(s, open("/etc/seedrou/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
+    import os; os.chmod("/etc/seedrou/.secrets.tmp", 0o600)
+    os.replace("/etc/seedrou/.secrets.tmp", "/etc/seedrou/secrets.json")
+except Exception:
+    pass
+PYEOF
+  systemctl disable --quiet seedrou-pppoe.service 2>/dev/null || true
+  do_apply_all >/dev/null 2>&1 || true
+  ok_out "message" "已恢复出厂设置（LAN 192.168.10.1，DHCP 池 .100–.200）"
+}
+
+# ---------------------------------------------------------------------------
+# 升级（GitHub releases / 清单 URL）
+# ---------------------------------------------------------------------------
+fetch_body() { # fetch_body URL -> body
+  local url="$1" prefix
+  for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+    curl -fsSL --connect-timeout 8 --max-time 30 "${prefix}${url}" 2>/dev/null && return 0
+  done
+  return 1
+}
+github_latest_ver() { # github_latest_ver owner/repo
+  local repo="$1" prefix out ver
+  for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+    out="$(curl -sIL --connect-timeout 8 --max-time 30 -o /dev/null -w '%{url_effective}' "${prefix}https://github.com/${repo}/releases/latest" 2>/dev/null || true)"
+    ver="$(printf '%s' "$out" | sed -n 's#.*/tag/v\{0,1\}\([0-9][0-9.]*\).*#\1#p')"
+    [ -n "$ver" ] && { printf '%s' "$ver"; return 0; }
+  done
+  return 1
+}
+cur_version() { cat "$VERSION_FILE" 2>/dev/null || echo "0.0.0"; }
+ver_ge() { python3 -c 'import sys;a,b=[x.split(".") for x in sys.argv[1:3]];print("yes" if [int(x) for x in a] >= [int(x) for x in b] else "no")' "$1" "$2"; }
+
+do_upgrade_check() {
+  local src; src="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("upgrade",{}).get("source",""))' 2>/dev/null || echo "")"
+  [ -n "$src" ] || die "UPG_NO_SOURCE" "尚未配置升级源" "请在「备份与升级」页填写 GitHub 仓库（如 yourname/seedrou）并保存"
+  local cur latest
+  cur="$(cur_version)"
+  if [[ "$src" == *"://"* ]]; then
+    local body
+    body="$(fetch_body "$src")" || die "UPG_NET" "无法访问升级源清单" "请检查升级源 URL 与网络连通性；也可稍后重试"
+    latest="$(printf '%s' "$body" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("version") or d.get("tag_name") or "")' 2>/dev/null || echo "")"
+    [ -n "$latest" ] || die "UPG_MANIFEST" "升级源清单格式不正确" "清单需为 JSON 且含 version 字段"
+  else
+    latest="$(github_latest_ver "$src")" || die "UPG_NET" "无法获取 GitHub 最新版本" "请检查仓库名（yourname/seedrou）与网络；GitHub 可能限流，可稍后重试"
+  fi
+  latest="${latest#v}"
+  if [ "$(ver_ge "$latest" "$cur")" = "no" ]; then
+    ok_out "up_to_date" "true" "current" "$cur" "latest" "$latest" "message" "已是最新版本 V${cur}"
+  elif [ "$latest" = "$cur" ]; then
+    ok_out "up_to_date" "true" "current" "$cur" "latest" "$latest" "message" "已是最新版本 V${cur}"
+  else
+    ok_out "up_to_date" "false" "current" "$cur" "latest" "$latest" "message" "发现新版本"
+  fi
+}
+
+do_upgrade_download() {
+  local ver="${1:-}"
+  [ -n "$ver" ] || die "USAGE" "缺少版本号"
+  local src repo asset
+  src="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("upgrade",{}).get("source",""))')"
+  ver="${ver#v}"
+  mkdir -p "${SEEDROU_VAR}/staging"
+  local out="${SEEDROU_VAR}/staging/pkg.tar.gz"
+  rm -f "$out" "${out}.sha256"
+  local prefix base="https://github.com" rc=1
+  if [[ "$src" == *"://"* ]]; then
+    local body
+    body="$(fetch_body "$src")" || die "UPG_NET" "无法访问升级源"
+    asset="$(printf '%s' "$body" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("url",""))' 2>/dev/null)"
+    [ -n "$asset" ] || die "UPG_MANIFEST" "清单缺少 url 字段"
+    for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${asset}" -o "$out" 2>/dev/null && { rc=0; break; }
+    done
+  else
+    repo="$src"
+    for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${base}/${repo}/releases/download/v${ver}/seedrou-${ver}.tar.gz" -o "$out" 2>/dev/null && { rc=0; break; }
+    done
+    if [ "$rc" -eq 0 ]; then
+      for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+        curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${base}/${repo}/releases/download/v${ver}/seedrou-${ver}.tar.gz.sha256" -o "${out}.sha256" 2>/dev/null && break
+      done
+    fi
+  fi
+  [ "$rc" -eq 0 ] && [ -s "$out" ] || die "UPG_NET" "下载升级包失败" "请检查升级源与网络；也可在页面手动上传升级包"
+  if [ -s "${out}.sha256" ]; then
+    # .sha256 内容记录的是原始资产名（seedrou-x.y.z.tar.gz），不能直接 -c；
+    # 提取期望哈希与实际文件比对
+    local want got
+    want="$(awk 'NR==1{print $1}' "${out}.sha256" 2>/dev/null)"
+    got="$(sha256sum "$out" 2>/dev/null | awk '{print $1}')"
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+      die "UPG_SHA" "升级包校验失败（sha256 不匹配）" "下载可能被篡改或损坏，请重试；连续失败请检查升级源"
+    fi
+  fi
+  ok_out "path" "$out"
+}
+
+do_upgrade_apply() {
+  require_root
+  acquire_lock
+  local pkg="${1:?缺少升级包路径}"
+  [ -f "$pkg" ] || die "NO_FILE" "升级包不存在"
+  # 1) 包结构校验
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^VERSION$' || die "UPG_BAD" "升级包缺少 VERSION 文件" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^panel/' || die "UPG_BAD" "升级包缺少 panel/ 目录" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^priv/' || die "UPG_BAD" "升级包缺少 priv/ 目录" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
+  # 2) 版本校验（允许同版本重装，拒绝降级）
+  local newver cur
+  newver="$(tar -xOzf "$pkg" VERSION 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$newver" ] || die "UPG_BAD" "升级包缺少 VERSION 文件"
+  cur="$(cur_version)"
+  [ "$(ver_ge "$newver" "$cur")" = "yes" ] || die "UPG_DOWNGRADE" "不能从 V${cur} 降级到 V${newver}" "如需回退旧版本，请先恢复出厂前的备份并手动放置旧版包"
+  # 3) 解压到暂存区 + 自检
+  local stg="/usr/local/lib/seedrou/.upgrade.$$"
+  rm -rf "$stg"; mkdir -p "$stg"
+  tar -C "$stg" -xzf "$pkg" 2>/dev/null || { rm -rf "$stg"; die "UPG_BAD" "升级包解压失败（文件损坏）"; }
+  local f
+  for f in "$stg"/priv/*; do bash -n "$f" 2>/dev/null || { rm -rf "$stg"; die "UPG_BAD" "升级包内脚本语法异常：$(basename "$f")"; }; done
+  python3 -m py_compile "$stg"/panel/*.py >/dev/null 2>&1 || { rm -rf "$stg"; die "UPG_BAD" "升级包内面板程序异常（py_compile 失败）"; }
+  for need in panel/static/index.html panel/static/app.js panel/static/app.css panel/static/icons.js; do
+    [ -f "$stg/$need" ] || { rm -rf "$stg"; die "UPG_BAD" "升级包缺少 $need"; }
+  done
+  # 4) 备份当前版本 → 原子换目录 → 修正属主
+  cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cat "$VERSION_FILE" 2>/dev/null || echo old)" 2>/dev/null || true
+  local old="/usr/local/lib/seedrou.prev.$$"
+  mv "/usr/local/lib/seedrou" "$old" && mv "$stg" "/usr/local/lib/seedrou" || { mv "$old" "/usr/local/lib/seedrou" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
+  chmod 755 /usr/local/lib/seedrou/seedrou-priv 2>/dev/null || true
+  chmod 600 /usr/local/lib/seedrou/priv/lib.sh 2>/dev/null || true
+  chown -R root:root /usr/local/lib/seedrou
+  rm -rf "$old"
+  cp /usr/local/lib/seedrou/VERSION "$VERSION_FILE" 2>/dev/null || true
+  # 5) 延迟重启面板（先让本次响应送达客户端）
+  systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" 2>/dev/null \
+    || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT" >/dev/null 2>&1 &
+  ok_out "message" "已升级到 V${newver}，面板即将重启"
+}
+
+# ---------------------------------------------------------------------------
+# 状态（/api/status 的特权部分）
+# ---------------------------------------------------------------------------
+do_status() {
+  python3 - <<'PYEOF'
+import json, os, subprocess, time
+
+cfg = json.load(open("/etc/seedrou/config.json"))
+wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+wans_set = set(wans) | {"ppp0"}
+
+def run(args, timeout=5):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+
+# WAN
+mode = cfg.get("wan", {}).get("mode", "")
+wan = {"mode": mode, "state": "down", "ip": "", "mask": "", "gw": "", "session_s": None, "connecting": False}
+try:
+    routes = json.loads(run(["ip", "-j", "route", "show", "default"]) or "[]")
+except Exception:
+    routes = []
+wan_dev = next((r.get("dev") for r in routes if r.get("dev") in wans_set), "")
+if wan_dev:
+    wan["state"] = "up"
+    addrs = json.loads(run(["ip", "-j", "-4", "addr", "show", "dev", wan_dev]) or "[]")
+    for a in addrs:
+        info = (a.get("addr_info") or [{}])[0]
+        wan["ip"] = info.get("local", "")
+        wan["mask"] = {"8": "255.0.0.0", "16": "255.255.0.0", "24": "255.255.255.0", "25": "255.255.255.128",
+                       "28": "255.255.255.240", "29": "255.255.255.248", "30": "255.255.255.252", "32": "255.255.255.255"}.get(str(info.get("prefixlen")), "")
+    wan["gw"] = next((r.get("gateway", "") for r in routes if r.get("dev") == wan_dev), "")
+    if mode == "pppoe":
+        try:
+            mono = int(run(["systemctl", "show", "seedrou-pppoe.service",
+                            "-p", "ActiveEnterTimestampMonotonic", "--value"]).strip() or 0)
+            up = float(open("/proc/uptime").read().split()[0])
+            if mono > 0:
+                wan["session_s"] = max(0, int(up - mono / 1e6))
+        except Exception:
+            wan["session_s"] = None
+else:
+    wan["connecting"] = mode == "pppoe"
+
+# IPv6 概览
+v6cfg = cfg.get("ipv6", {})
+v6 = {"enabled": v6cfg.get("enabled", False), "mode": v6cfg.get("mode", "native"), "addr": "", "dns": []}
+if v6["enabled"]:
+    dev = wan_dev or "br-lan"
+    out = run(["ip", "-j", "-6", "addr", "show", "dev", dev, "scope", "global"])
+    try:
+        for a in json.loads(out or "[]"):
+            for ai in a.get("addr_info", []):
+                if not ai.get("local", "").startswith("fe80") and not ai.get("local", "").startswith("fda1:9e3a"):
+                    v6["addr"] = ai.get("local", ""); break
+            if v6["addr"]: break
+    except Exception:
+        pass
+    if v6["mode"] == "nat6":
+        v6["addr"] = v6["addr"] or "fda1:9e3a:8b7f::1（ULA）"
+
+# 网口
+ports = []
+for p in cfg.get("ports", []):
+    n = p["name"]
+    base = f"/sys/class/net/{n}"
+    oper = ""
+    try:
+        oper = open(base + "/operstate").read().strip()
+    except Exception:
+        pass
+    speed = ""
+    try:
+        speed = open(base + "/speed").read().strip()
+        speed = f"{speed} Mbps" if speed and speed != "-1" else ""
+    except Exception:
+        speed = ""
+    ports.append({"name": n, "role": "wan" if p.get("wan") else ("lan" if p.get("lan") else "none"),
+                  "link": oper == "up", "speed": speed})
+
+# 系统
+def rc(args, timeout=5):
+    try:
+        return subprocess.run(args, capture_output=True, timeout=timeout).returncode
+    except Exception:
+        return 1
+dnsmasq_ok = rc(["systemctl", "is-active", "--quiet", "dnsmasq.service"]) == 0
+networkd_ok = rc(["systemctl", "is-active", "--quiet", "systemd-networkd.service"]) == 0
+nft_ok = rc(["nft", "list", "table", "inet", "seedrou_base"]) == 0
+leases = 0
+try:
+    with open("/var/lib/seedrou/dnsmasq.leases") as f:
+        leases = sum(1 for _ in f)
+except Exception:
+    pass
+
+ver = open("/usr/local/lib/seedrou/share/VERSION").read().strip() if os.path.exists("/usr/local/lib/seedrou/share/VERSION") else "0.0.0"
+print(json.dumps({
+    "wan": wan, "ipv6": v6, "ports": ports,
+    "lan": cfg.get("lan", {}),
+    "version": ver,
+    "system_ok": bool(dnsmasq_ok and networkd_ok and nft_ok),
+    "leases_count": leases,
+}, ensure_ascii=False))
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# 自检（安装后验证，不改系统）
+# ---------------------------------------------------------------------------
+do_selftest() {
+  python3 - <<'PYEOF'
+import json, os, shutil, subprocess, sys
+checks = []
+def add(name, ok, hint=""):
+    checks.append({"name": name, "ok": bool(ok), "hint": hint})
+add("config.json 存在且可解析", os.path.exists("/etc/seedrou/config.json") and json.load(open("/etc/seedrou/config.json")))
+add("secrets.json 存在", os.path.exists("/etc/seedrou/secrets.json"))
+for c in ("nft", "dnsmasq", "pppd", "curl", "python3", "ip"):
+    add(f"命令可用: {c}", bool(shutil.which(c)), f"apt install {c}" if c in ("nft", "dnsmasq", "pppd") else "")
+add("netgen 校验", subprocess.run(["python3", "/usr/local/lib/seedrou/netgen.py", "--check"], capture_output=True).returncode == 0)
+try:
+    out = subprocess.run(["nft", "list", "table", "inet", "seedrou_base"], capture_output=True).returncode
+    add("nft 表 seedrou_base 已加载", out == 0)
+except Exception:
+    add("nft 表 seedrou_base 已加载", False)
+add("sing-box 不受本脚本管理（仅检测）", True)
+bad = [c for c in checks if not c["ok"]]
+print(json.dumps({"ok": not bad, "checks": checks, "summary": f"{len(checks) - len(bad)}/{len(checks)} 通过"}, ensure_ascii=False))
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# 分发
+# ---------------------------------------------------------------------------
+case "$CMD" in
+  auth-verify)     do_auth_verify ;;
+  session-secret)  do_session_secret ;;
+  config-get)      do_config_get ;;
+  config-set)      do_config_set "$@" ;;
+  apply-all)       do_apply_all "$@" ;;
+  service-ctl)     do_service_ctl "$@" ;;
+  podman-ops)      do_podman_ops "$@" ;;
+  tailscale-ops)   do_tailscale_ops "$@" ;;
+  passwd-set)      do_passwd_set ;;
+  backup-create)   do_backup_create "$@" ;;
+  backup-restore)  do_backup_restore "$@" ;;
+  factory-reset)   do_factory_reset ;;
+  upgrade-check)   do_upgrade_check ;;
+  upgrade-download) do_upgrade_download "$@" ;;
+  upgrade-apply)   do_upgrade_apply "$@" ;;
+  status)          do_status ;;
+  selftest)        do_selftest ;;
+  *)               die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;
+esac

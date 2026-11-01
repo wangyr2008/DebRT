@@ -1,0 +1,12 @@
+{
+ "version": 1,
+ "ports": [],
+ "wan": {"mode": "dhcp", "username": "", "dns_mode": "auto", "dns": [], "ip": "", "mask": "", "gw": "", "has_password": false},
+ "ipv6": {"enabled": false, "mode": "native", "dns_mode": "auto", "dns": [], "addr": "", "gw": "", "prefix": ""},
+ "lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
+ "dhcp": {"enabled": true, "pool_start": 100, "pool_end": 200, "lease": 120, "dns1": "", "dns2": "", "gw": ""},
+ "static": [],
+ "qos": {"enabled": false, "down": 0, "up": 0},
+ "firewall": {"wan_input_drop": true, "portfw": []},
+ "upgrade": {"source": ""}
+}

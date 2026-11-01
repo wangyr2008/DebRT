@@ -1,0 +1,13 @@
+[Unit]
+Description=SeedRou 开机配置收敛（幂等重放 desired state）
+After=systemd-networkd.service
+Wants=systemd-networkd.service network-online.target
+Before=dnsmasq.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/seedrou/seedrou-priv apply-all
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
