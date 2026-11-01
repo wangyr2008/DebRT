@@ -110,7 +110,7 @@ jobs:
             d = json.load(sys.stdin)
             assert d.get("ok"), d
             assert d["wan"]["mode"] == "dhcp", d
-            assert d["system_ok"], d
+            # system_ok 在 --smoke 模式恒为 false（刻意不建 nft 表，避免断 runner SSH），不作断言
             print("HTTP 登录 + status OK，leases:", d["stats"]["devices"])'
 
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
