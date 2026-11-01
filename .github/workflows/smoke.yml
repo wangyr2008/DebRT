@@ -103,6 +103,11 @@ jobs:
       - name: 升级后 VERSION 与登录仍正常（B-02 + 会话密钥未丢）
         run: |
           sleep 1
-          grep -q "$(tr -d '[:space:]' < VERSION)" /usr/local/lib/seedrou/share/VERSION
-          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify)
+          ls -la /usr/local/lib/seedrou/share/ /usr/local/lib/seedrou/VERSION 2>&1 | sed 's/^/::error::VDIR /'
+          VER_LOCAL="$(tr -d '[:space:]' < VERSION)"
+          VER_INSTALLED="$(cat /usr/local/lib/seedrou/share/VERSION 2>/dev/null || echo MISSING)"
+          echo "checkout=$VER_LOCAL installed=$VER_INSTALLED"
+          [ "$VER_LOCAL" = "$VER_INSTALLED" ] || { echo "::error::升级后 share/VERSION 不一致（B-02 回归）"; exit 1; }
+          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify) || true
+          echo "$OUT" | sed 's/^/::error::AUTHPW /'
           echo "$OUT" | grep -q '"ok": true' || { echo "::error::升级后登录失效"; exit 1; }
