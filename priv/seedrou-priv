@@ -19,6 +19,26 @@ source "${PRIV_DIR}/lib.sh"
 
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 
+# 管理密码哈希记录解析：兼容 "pbkdf2$iters$salt$hash"（旧4段）与
+# "pbkdf2$sha256$iters$salt$hash"（新5段，算法显式）。历史缺陷：4 段格式的
+# 首段"pbkdf2"曾被当成摘要算法名传给 pbkdf2_hmac → 必抛异常 → 永远登录失败（五审 P-02）。
+_pw_parse() { python3 - "$1" <<'PWPY'
+import sys
+parts = sys.argv[1].split("$")
+if len(parts) == 5:
+    fmt, algo, iters, salt, want = parts
+    if fmt != "pbkdf2" or algo != "sha256":
+        raise SystemExit(1)
+elif len(parts) == 4:
+    fmt, iters, salt, want = parts
+    if fmt != "pbkdf2":
+        raise SystemExit(1)
+else:
+    raise SystemExit(1)
+print(iters, salt, want)
+PWPY
+}
+
 # ---------------------------------------------------------------------------
 # 认证
 # ---------------------------------------------------------------------------
@@ -42,8 +62,8 @@ if state.get("lock_until", 0) > now:
     sys.exit(0)
 try:
     rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
-    algo, iters, salt, want = rec.split("$", 3)
-    got = hashlib.pbkdf2_hmac(algo, pw.encode(), bytes.fromhex(salt), int(iters)).hex()
+    iters, salt, want = _pw_parse(rec)
+    got = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(iters)).hex()
     ok = hmac.compare_digest(got, want)
 except Exception:
     ok = False
@@ -407,7 +427,12 @@ podman_json() { python3 -c "$1"; }
 do_podman_ops() {
   require_root
   local action="${1:-}"; [ $# -gt 0 ] && shift
-  command -v podman >/dev/null 2>&1 || die "PODMAN_MISSING" "Podman 未安装" "请在系统上执行 apt install podman podman-compose"
+  if ! command -v podman >/dev/null 2>&1; then
+    if [ "$action" = "status" ]; then
+      ok_out "installed" "false" "running" "false" "autostart" "false"   # 五审 P-06：未安装也要给前端结构化结果
+    fi
+    die "PODMAN_MISSING" "Podman 未安装" "请在系统上执行 apt install podman podman-compose"
+  fi
   pod_lock
   case "$action" in
     status)
@@ -546,17 +571,17 @@ do_tailscale_ops() {
       acc=""; ip=""; host=""; state="NeedsLogin"
       if [ "$running" = "true" ]; then
         eval "$(tailscale status --json 2>/dev/null | python3 -c '
-import json, sys
+import json, shlex, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
     print("TS_STATE=NeedsLogin"); raise SystemExit
-print("TS_STATE=" + str(d.get("BackendState", "NeedsLogin")))
+print("TS_STATE=" + shlex.quote(str(d.get("BackendState", "NeedsLogin"))))
 self_ = d.get("Self") or {}
 ips = self_.get("TailscaleIPs") or []
-print("TS_IP=" + (ips[0] if ips else ""))
-print("TS_ACC=" + str((d.get("CurrentTailnet") or {}).get("Name") or ""))
-print("TS_HOST=" + str(self_.get("DNSName") or "").rstrip(".").split(".")[0])
+print("TS_IP=" + shlex.quote(ips[0] if ips else ""))
+print("TS_ACC=" + shlex.quote(str((d.get("CurrentTailnet") or {}).get("Name") or "")))
+print("TS_HOST=" + shlex.quote(str(self_.get("DNSName") or "").rstrip(".").split(".")[0]))
 ' )" || true
         [ "$TS_STATE" = "Running" ] && acc="$TS_ACC" && ip="$TS_IP" && host="$TS_HOST"
       fi
@@ -619,8 +644,9 @@ old, new = body.get("old", ""), body.get("new", "")
 secrets = json.load(open("/etc/seedrou/secrets.json"))
 def check(pw, rec):
     try:
-        algo, iters, salt, want = rec.split("$", 3)
-        return hmac.compare_digest(hashlib.pbkdf2_hmac(algo, pw.encode(), bytes.fromhex(salt), int(iters)).hex(), want)
+        iters, salt, want = _pw_parse(rec)
+        return hmac.compare_digest(
+            hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(iters)).hex(), want)
     except Exception:
         return False
 if not check(old, secrets.get("admin_pbkdf2", "")):
@@ -629,7 +655,7 @@ if not (8 <= len(new) <= 32):
     print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)
 salt = os.urandom(16)
 h = hashlib.pbkdf2_hmac("sha256", new.encode(), salt, 600000).hex()
-secrets["admin_pbkdf2"] = f"pbkdf2$600000${salt.hex()}${h}"
+secrets["admin_pbkdf2"] = f"pbkdf2$sha256$600000${salt.hex()}${h}"
 # 轮换会话密钥：改密后所有旧会话（含可能被盗的 cookie）立即失效（审计 B-17）
 secrets["session_secret"] = os.urandom(32).hex()
 tmp = "/etc/seedrou/.secrets.tmp"
@@ -733,7 +759,9 @@ do_factory_reset() {
   require_root
   acquire_lock
   snapshot_lastgood "f$(date +%s)"
-  tar -C / -czf "${SEEDROU_VAR}/lastgood/pre-factory-$(date +%s).tar.gz" etc/seedrou 2>/dev/null || true
+  local prebak="${SEEDROU_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
+  tar -C / -czf "$prebak" --exclude='etc/seedrou/secrets.json' etc/seedrou 2>/dev/null || true
+  chmod 600 "$prebak" 2>/dev/null || true
   # 发现网口：eth*/en* 排除 ppp/tun/br/veth
   python3 - <<'PYEOF'
 import json, os, re
@@ -924,7 +952,8 @@ sys.exit(0 if ok else 1)
   cur="$(cur_version)"
   [ "$(ver_ge "$newver" "$cur")" = "yes" ] || die "UPG_DOWNGRADE" "不能从 V${cur} 降级到 V${newver}" "如需回退旧版本，请先恢复出厂前的备份并手动放置旧版包"
   # 3) 解压到暂存区 + 自检
-  local stg="/usr/local/lib/seedrou/.upgrade.$$"
+  # 暂存区必须在被替换目录之外：放里面会随 mv 一起改名，第二步 mv 必 ENOENT（五审 P-03）
+  local stg="/usr/local/lib/.seedrou.upgrade.$$"
   rm -rf "$stg"; mkdir -p "$stg"
   tar -C "$stg" --no-same-owner --no-overwrite-dir -xzf "$pkg" 2>/dev/null || { rm -rf "$stg"; die "UPG_BAD" "升级包解压失败（文件损坏）"; }
   find "$stg" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -943,7 +972,7 @@ sys.exit(0 if ok else 1)
     [ -f "$stg/$need" ] || { rm -rf "$stg"; die "UPG_BAD" "升级包缺少 $need"; }
   done
   # 4) 备份当前版本 → 原子换目录 → 修正属主
-  cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cat "$VERSION_FILE" 2>/dev/null || echo old)" 2>/dev/null || true
+  cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cur_version)" 2>/dev/null || true
   local old="/usr/local/lib/seedrou.prev.$$"
   mv "/usr/local/lib/seedrou" "$old" && mv "$stg" "/usr/local/lib/seedrou" || { mv "$old" "/usr/local/lib/seedrou" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
   chmod 755 /usr/local/lib/seedrou/seedrou-priv 2>/dev/null || true
@@ -967,6 +996,7 @@ do_status() {
 import json, os, subprocess, time
 
 cfg = json.load(open("/etc/seedrou/config.json"))
+ULA_PREFIX_STATIC = "fda1:9e3a:8b7f"
 wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
 wans_set = set(wans) | {"ppp0"}
 
@@ -986,7 +1016,10 @@ except Exception:
 wan_dev = next((r.get("dev") for r in routes if r.get("dev") in wans_set), "")
 if wan_dev:
     wan["state"] = "up"
-    addrs = json.loads(run(["ip", "-j", "-4", "addr", "show", "dev", wan_dev]) or "[]")
+    try:
+        addrs = json.loads(run(["ip", "-j", "-4", "addr", "show", "dev", wan_dev]) or "[]")
+    except Exception:
+        addrs = []
     for a in addrs:
         info = (a.get("addr_info") or [{}])[0]
         wan["ip"] = info.get("local", "")
@@ -1007,18 +1040,20 @@ else:
 v6cfg = cfg.get("ipv6", {})
 v6 = {"enabled": v6cfg.get("enabled", False), "mode": v6cfg.get("mode", "native"), "addr": "", "dns": []}
 if v6["enabled"]:
-    dev = wan_dev or "br-lan"
-    out = run(["ip", "-j", "-6", "addr", "show", "dev", dev, "scope", "global"])
-    try:
-        for a in json.loads(out or "[]"):
-            for ai in a.get("addr_info", []):
-                if not ai.get("local", "").startswith("fe80") and not ai.get("local", "").startswith("fda1:9e3a"):
-                    v6["addr"] = ai.get("local", ""); break
-            if v6["addr"]: break
-    except Exception:
-        pass
     if v6["mode"] == "nat6":
-        v6["addr"] = v6["addr"] or "fda1:9e3a:8b7f::1（ULA）"
+        # NAT6 的语义就是 LAN 侧 ULA + 出向伪装，概览显示 ULA（五审 P-10）
+        v6["addr"] = f"{ULA_PREFIX_STATIC}::1（ULA）"
+    else:
+        dev = wan_dev or "br-lan"
+        out = run(["ip", "-j", "-6", "addr", "show", "dev", dev, "scope", "global"])
+        try:
+            for a in json.loads(out or "[]"):
+                for ai in a.get("addr_info", []):
+                    if not ai.get("local", "").startswith("fe80") and not ai.get("local", "").startswith("fda1:9e3a"):
+                        v6["addr"] = ai.get("local", ""); break
+                if v6["addr"]: break
+        except Exception:
+            pass
 
 # 网口
 ports = []
@@ -1115,7 +1150,11 @@ import json, os, shutil, subprocess, sys
 checks = []
 def add(name, ok, hint=""):
     checks.append({"name": name, "ok": bool(ok), "hint": hint})
-add("config.json 存在且可解析", os.path.exists("/etc/seedrou/config.json") and json.load(open("/etc/seedrou/config.json")))
+try:
+    json.load(open("/etc/seedrou/config.json"))
+    add("config.json 存在且可解析", True)
+except Exception as e:
+    add("config.json 存在且可解析", False, f"解析失败：{e}；可从 /var/lib/seedrou/lastgood 恢复")
 add("secrets.json 存在", os.path.exists("/etc/seedrou/secrets.json"))
 for c in ("nft", "dnsmasq", "pppd", "curl", "python3", "ip"):
     add(f"命令可用: {c}", bool(shutil.which(c)), f"apt install {c}" if c in ("nft", "dnsmasq", "pppd") else "")

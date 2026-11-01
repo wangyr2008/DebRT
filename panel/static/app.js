@@ -742,7 +742,7 @@ var ctLoaded = false;
 loaders.containers = function () { loadPodman(); loadContainers(); loadImages(); loadCompose(); ctLoaded = true; };
 function loadPodman() {
   return API.get("/api/podman/status").then(function (s) {
-    $id("ct-podman-sub").textContent = s.installed ? ("Podman " + s.version + " · 容器与镜像运行时") : "Podman 未安装（可在系统上执行 apt install podman）";
+    $id("ct-podman-sub").textContent = s.installed ? ("Podman " + s.version + " · 容器与镜像运行时") : "Podman 未安装（可在系统上执行 apt install podman podman-compose）";
     var badge = $id("ct-podman-badge");
     badge.textContent = !s.installed ? "未安装" : (s.running ? "运行中" : "已停止");
     badge.className = "ru-badge" + (s.running ? " green" : "");
@@ -750,7 +750,17 @@ function loadPodman() {
     $id("ct-podman-autostart").disabled = !s.installed;
     $id("btn-podman-toggle").textContent = s.running ? "停止服务" : "启动服务";
     $id("btn-podman-toggle").disabled = !s.installed;
-  }).catch(function (e) { if (e.code !== "UNAUTH") apiFail(e); });
+  }).catch(function (e) {
+    if (e.code === "UNAUTH") return;
+    // 未安装/出错时也要落状态，不能让徽标停在"—"（五审 P-06）
+    $id("ct-podman-sub").textContent = "Podman 未安装（可在系统上执行 apt install podman podman-compose）";
+    var badge = $id("ct-podman-badge");
+    badge.textContent = "未安装";
+    badge.className = "ru-badge";
+    $id("ct-podman-autostart").disabled = true;
+    $id("btn-podman-toggle").disabled = true;
+    if (e.code !== "PODMAN_MISSING") apiFail(e);
+  });
 }
 $id("ct-podman-autostart").addEventListener("change", function () {
   var on = $id("ct-podman-autostart").checked;

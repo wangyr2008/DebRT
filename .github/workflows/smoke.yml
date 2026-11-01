@@ -1,0 +1,82 @@
+name: smoke
+
+# 真实路径冒烟（五审建议）：在 Linux runner 上以真实模式执行 priv 关键链路。
+# mock 模式永远测不到这些（P-02 登录、P-03 升级换目录都是 mock 看不见的）。
+# 不做 apply-all / networkd 重启 —— runner 的网络不能动。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  real-path-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖（不装 podman，走 --no-podman 路径）
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            nftables dnsmasq ppp pppoe python3 curl ca-certificates sudo ethtool \
+            networkd-dispatcher iproute2
+
+      - name: 安装 SeedRou（--smoke：不碰网络服务）
+        run: sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash install.sh --no-podman --smoke
+
+      - name: 自检（配置损坏时也不许崩，五审 P-08）
+        run: sudo /usr/local/lib/seedrou/seedrou-priv selftest
+
+      - name: P-02 登录冒烟——正确密码必须通过
+        run: |
+          OUT=$(printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify)
+          echo "$OUT"
+          echo "$OUT" | grep -q '"ok": true' || { echo "::error::正确密码被拒绝（P-02 回归）"; exit 1; }
+
+      - name: P-02 错误密码必须拒绝
+        run: |
+          if printf 'wrong-password' | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify; then
+            echo "::error::错误密码被放行"; exit 1
+          fi
+          echo "错误密码正确拒绝"
+
+      - name: 改密码后旧密码失效、新密码可用
+        run: |
+          printf '{"old":"%s","new":"NewPW-456789"}' "$SEEDROU_ADMIN_PW" \
+            | sudo /usr/local/lib/seedrou/seedrou-priv passwd-set | grep -q '"ok": true'
+          if printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify; then
+            echo "::error::改密后旧密码仍可用"; exit 1
+          fi
+          printf 'NewPW-456789' | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify | grep -q '"ok": true'
+
+      - name: config-get 返回结构
+        run: sudo /usr/local/lib/seedrou/seedrou-priv config-get | python3 -c '
+          import json,sys
+          d = json.load(sys.stdin)
+          assert d["ok"], d
+          cfg = d["config"]
+          assert cfg["wan"]["mode"] == "dhcp", cfg["wan"]
+          assert cfg["lan"]["ip"] == "192.168.10.1", cfg["lan"]
+          assert "has_password" in cfg["wan"], cfg["wan"]
+          print("config-get OK")'
+
+      - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
+        run: |
+          VER=$(tr -d '[:space:]' < VERSION)
+          tar -czf "/tmp/seedrou-${VER}.tar.gz" --exclude='__pycache__' --exclude='*.pyc' \
+            panel priv config systemd network singbox sudoers install.sh uninstall.sh VERSION README.md
+          sha256sum "/tmp/seedrou-${VER}.tar.gz" > "/tmp/pkg.sha256"
+          # 同版本重装是允许路径；这一步会真实执行"解压→自检→换目录→延迟重启面板"
+          sudo /usr/local/lib/seedrou/seedrou-priv upgrade-apply "/tmp/seedrou-${VER}.tar.gz" | tee /tmp/upg.json
+          grep -q '"ok": true' /tmp/upg.json || { echo "::error::upgrade-apply 失败（P-03 回归）"; exit 1; }
+
+      - name: 升级后 VERSION 与登录仍正常（B-02 + 会话密钥未丢）
+        run: |
+          sleep 1
+          grep -q "$(tr -d '[:space:]' < VERSION)" /usr/local/lib/seedrou/share/VERSION
+          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify)
+          echo "$OUT" | grep -q '"ok": true' || { echo "::error::升级后登录失效"; exit 1; }

@@ -13,7 +13,13 @@ set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 NO_PODMAN=0
-[ "${1:-}" = "--no-podman" ] && NO_PODMAN=1
+SMOKE=0
+for ARG in "$@"; do
+  case "$ARG" in
+    --no-podman) NO_PODMAN=1 ;;
+    --smoke)     SMOKE=1 ;;
+  esac
+done
 
 LIB_DIR="/usr/local/lib/seedrou"
 SHARE_DIR="${LIB_DIR}/share"
@@ -110,8 +116,8 @@ fi
 # secrets（管理密码 + 会话密钥 + PPPoE 密码位）
 if [ ! -f "$ETC_DIR/secrets.json" ]; then
   c_info "设置管理密码（输入时不回显；直接回车则自动生成随机密码）..."
-  ADMIN_PW=""
-  if [ -t 0 ]; then
+  ADMIN_PW="${SEEDROU_ADMIN_PW:-}"   # CI 冒烟可经环境变量注入（--smoke 配套）
+  if [ -z "$ADMIN_PW" ] && [ -t 0 ]; then
     read -r -s -p "管理密码（8-32 位，回车=自动生成）: " ADMIN_PW || true
     echo
   fi
@@ -119,13 +125,15 @@ if [ ! -f "$ETC_DIR/secrets.json" ]; then
     ADMIN_PW="$(python3 -c 'import secrets;print("".join(secrets.choice("abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(12)))')"
     GENERATED=1
   fi
-  python3 - "$ADMIN_PW" <<'PYEOF'
-import hashlib, json, os, secrets, sys
-pw = sys.argv[1]
+  # 密码经环境变量传入（/proc environ 0400 root），不进 argv（五审 P-05）
+  ADMIN_PW="$ADMIN_PW" python3 - <<'PYEOF'
+import hashlib, json, os, secrets
+pw = os.environ["ADMIN_PW"]
 salt = os.urandom(16)
 h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 600000).hex()
 data = {
-    "admin_pbkdf2": f"pbkdf2$600000${salt.hex()}${h}",
+    # 五段格式：算法显式化（五审 P-02；priv 校验双向兼容旧四段）
+    "admin_pbkdf2": f"pbkdf2$sha256$600000${salt.hex()}${h}",
     "session_secret": secrets.token_hex(32),
     "pppoe_password": "",
 }
@@ -157,14 +165,20 @@ fi
 c_info "启用服务..."
 # Debian 自带 nftables.service 开机 flush ruleset —— 与 sing-box 表冲突，禁用之（见 COEXISTENCE.md）
 systemctl disable nftables.service >/dev/null 2>&1 || true
-systemctl daemon-reload
-systemctl enable --now dnsmasq.service >/dev/null 2>&1 || true
-systemctl enable seedrou-apply.service >/dev/null 2>&1
-systemctl enable --now seedrou-converge.timer >/dev/null 2>&1
-systemctl enable --now seedrou-panel.service >/dev/null 2>&1
+if [ "$SMOKE" = "1" ]; then
+  # CI 冒烟模式：不重启 networkd/dnsmasq、不跑 apply-all（避免断掉 runner 网络）
+  systemctl daemon-reload
+  systemctl enable --now seedrou-panel.service >/dev/null 2>&1 || true
+else
+  systemctl daemon-reload
+  systemctl enable --now dnsmasq.service >/dev/null 2>&1 || true
+  systemctl enable seedrou-apply.service >/dev/null 2>&1
+  systemctl enable --now seedrou-converge.timer >/dev/null 2>&1
+  systemctl enable --now seedrou-panel.service >/dev/null 2>&1
 
-c_info "首次配置收敛（生成网桥/防火墙/DHCP 配置并应用）..."
-"$LIB_DIR/seedrou-priv" apply-all || c_warn "首次收敛有告警，请查看上方输出；不影响面板访问"
+  c_info "首次配置收敛（生成网桥/防火墙/DHCP 配置并应用）..."
+  "$LIB_DIR/seedrou-priv" apply-all || c_warn "首次收敛有告警，请查看上方输出；不影响面板访问"
+fi
 
 # ---------------- 6. 自检与收尾 ----------------
 c_info "自检："
