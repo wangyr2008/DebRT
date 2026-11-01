@@ -980,6 +980,7 @@ sys.exit(0 if ok else 1)
     [ -f "$pyf" ] && chmod 644 "$pyf"
   done
   find /usr/local/lib/seedrou -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  rm -rf /usr/local/lib/seedrou/priv    # 扁平化后 priv/ 子目录是冗余副本，删掉避免"哪份生效"的歧义
   chown -R root:root /usr/local/lib/seedrou
   rm -rf "$old"
   # VERSION 同时落包根与 share/（审计 B-02：目录整体替换后 share/ 会消失，必须重建再拷贝）
@@ -1001,7 +1002,7 @@ import json, os, subprocess, time
 cfg = json.load(open("/etc/seedrou/config.json"))
 ULA_PREFIX_STATIC = "fda1:9e3a:8b7f"
 wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
-wans_set = set(wans) | {"ppp0"}
+wans_set = set(wans) | ({"ppp0"} if cfg.get("wan", {}).get("mode") == "pppoe" else set())
 
 def run(args, timeout=5):
     try:

@@ -100,7 +100,18 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 手动升级：Releases 页下载 `seedrou-x.y.z.tar.gz`，面板上传即可（仅支持 .tar.gz；
 Debian 没有 .bin/.img 固件的概念）。
 
-## 6. 目标机冒烟清单
+## 6. 升级与回滚
+
+- **在线升级**：面板「备份与升级」→ 检查更新 → 一键升级；或上传 `.tar.gz`。
+  升级只替换 `/usr/local/lib/seedrou`（面板+特权脚本），配置 `/etc/seedrou` 不动。
+- **自动回滚**：升级包校验失败/解压失败/自检失败均不会落盘，原版本原地保留；
+  每次升级前还会把当前版本备份到 `/var/lib/seedrou/lastgood/app-<版本>`。
+- **手动回退旧版本**：从 Releases 下载旧版 `.tar.gz` 走手动升级即可（系统拒绝降级时，
+  用 `lastgood/app-旧版本` 目录手工替换后 `systemctl restart seedrou-panel`）。
+- sudo 审计双重记录（journal + `/var/log/seedrou-sudo.log`，weekly 轮转），介意 journal
+  噪音可在 `journald.conf` 按 `SYSLOG_IDENTIFIER=sudo` 过滤。
+
+## 7. 目标机冒烟清单
 
 ```bash
 seedrou-priv selftest                       # 组件自检
@@ -118,7 +129,7 @@ systemctl stop sing-box && ping 223.5.5.5   # 直连自动恢复
 # 端口转发回环：从公网侧（或手机热点）访问 WAN_IP:外部端口 → 应到达 LAN 目标
 ```
 
-## 7. 目录结构
+## 8. 目录结构
 
 ```
 seedrou/
@@ -141,7 +152,7 @@ seedrou/
 └── .github/workflows/release.yml # tag → tar.gz + sha256 → Release
 ```
 
-## 8. 开发预览（无目标机也能看 UI）
+## 9. 开发预览（无目标机也能看 UI）
 
 ```bash
 python3 panel/seedrou_panel.py --mock --port 8080
@@ -150,7 +161,7 @@ python3 panel/seedrou_panel.py --mock --port 8080
 
 `--mock` 模式用固定数据驱动全部页面交互，便于改前端样式；真实模式不传 `--mock`。
 
-## 9. 已知边界
+## 10. 已知边界
 
 - 仅单 WAN；多宽带负载均衡未实现（勾选多个 WAN 口会明确报错）。
 - IPv6 Native 模式要求运营商下发 DHCPv6-PD（或 PPPoE + IPv6）；NAT6 模式无此要求。
