@@ -15,6 +15,7 @@ jobs:
     # 钉 24.04：26 的 runner 可能带 sudo-rs，其 visudo 连标准的 Defaults logfile= 都拒
     # （CI 实测）；真实目标是 Debian 13（经典 sudo 1.9.16），24.04 行为更接近
     runs-on: ubuntu-24.04
+    timeout-minutes: 15    # 防止单步挂住把 job 拖到默认 6 小时
     env:
       SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
     steps:
@@ -100,6 +101,12 @@ jobs:
             -d '{"password":"NewPW-456789"}' -c "$CK" http://127.0.0.1/api/login) || true
           echo "$OUT" | sed 's/^/::error::LOGIN /'
           echo "$OUT" | grep -q '"ok": true' || exit 1
+          curl -s --max-time 15 -b "$CK" http://127.0.0.1/api/status | python3 -c '
+            import json, sys
+            d = json.load(sys.stdin)
+            assert d.get("ok"), d
+            assert d["system_ok"], d
+            print("HTTP status OK")
           curl -s -b "$CK" http://127.0.0.1/api/status | python3 -c '
             import json, sys
             d = json.load(sys.stdin)
