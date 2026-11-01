@@ -267,7 +267,7 @@ loaders.overview = refreshStatus;
 loaders.network = refreshConfig;
 loaders.security = refreshConfig;
 loaders.backup = refreshConfig;
-setInterval(function () { if (LOGGED && document.visibilityState !== "hidden") refreshStatus(); }, 5000);
+setInterval(function () { if (LOGGED && document.visibilityState !== "hidden") refreshStatus(); }, 8000);
 
 /* ===================== 2 网络设置 ===================== */
 function chipHTML(role, p) {
