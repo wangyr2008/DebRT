@@ -27,14 +27,23 @@ jobs:
 
       - name: 安装 SeedRou（--smoke：不碰网络服务）
         run: |
+          set -o pipefail    # 关键：默认 run shell 只有 -e 没有 pipefail，tee 会掩盖 install.sh 的失败（六审）
           code=0
           sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::install.sh 失败（exit $code）"
-            tail -30 /tmp/install.log | sed 's/^/::error::/'    # 逐行注解，匿名 API 可读
+            tail -30 /tmp/install.log | sed 's/^/::error::/'
             exit 1
           fi
           tail -5 /tmp/install.log
+
+      - name: 断言安装产物（把"产物缺失"与"密码校验失败"分开）
+        run: |
+          sudo test -f /etc/seedrou/secrets.json       || { echo "::error::secrets.json 未生成，install.sh 提前退出了"; exit 1; }
+          sudo test -f /etc/seedrou/config.json        || { echo "::error::config.json 未生成"; exit 1; }
+          sudo test -f /usr/local/lib/seedrou/pwhash.py || { echo "::error::pwhash.py 未部署"; exit 1; }
+          sudo python3 -c 'import sys;sys.path.insert(0,"/usr/local/lib/seedrou");import pwhash;print("pwhash 可导入")'
+          sudo python3 -c 'import json;d=json.load(open("/etc/seedrou/secrets.json"));print("secrets 段数:", len(d["admin_pbkdf2"].split("$")))' 
 
       - name: 自检（配置损坏时也不许崩，五审 P-08）
         run: sudo /usr/local/lib/seedrou/seedrou-priv selftest
