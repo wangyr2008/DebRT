@@ -77,7 +77,10 @@ jobs:
           printf 'NewPW-456789' | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify | grep -q '"ok": true'
 
       - name: config-get 返回结构
-        run: sudo /usr/local/lib/seedrou/seedrou-priv config-get | python3 -c '
+        run: |
+          OUT=$(sudo /usr/local/lib/seedrou/seedrou-priv config-get) || true
+          echo "$OUT" | head -c 300; echo
+          echo "$OUT" | python3 -c '
           import json,sys
           d = json.load(sys.stdin)
           assert d["ok"], d
@@ -85,7 +88,7 @@ jobs:
           assert cfg["wan"]["mode"] == "dhcp", cfg["wan"]
           assert cfg["lan"]["ip"] == "192.168.10.1", cfg["lan"]
           assert "has_password" in cfg["wan"], cfg["wan"]
-          print("config-get OK")'
+          print("config-get OK")' || { echo "$OUT" | sed 's/^/::error::CFG /'; exit 1; }
 
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
         run: |
