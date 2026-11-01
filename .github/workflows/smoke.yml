@@ -31,8 +31,8 @@ jobs:
           sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log
           code=$?
           if [ "$code" -ne 0 ]; then
-            echo "::error::install.sh 失败（exit $code），末 60 行如下"
-            tail -60 /tmp/install.log
+            echo "::error::install.sh 失败（exit $code）"
+            tail -25 /tmp/install.log | sed 's/^/::error::/'    # 逐行注解，匿名 API 可读
             exit "$code"
           fi
           tail -5 /tmp/install.log
