@@ -26,7 +26,16 @@ jobs:
             networkd-dispatcher iproute2
 
       - name: 安装 SeedRou（--smoke：不碰网络服务）
-        run: sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash install.sh --no-podman --smoke
+        run: |
+          set -o pipefail
+          sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::install.sh 失败（exit $code），末 60 行如下"
+            tail -60 /tmp/install.log
+            exit "$code"
+          fi
+          tail -5 /tmp/install.log
 
       - name: 自检（配置损坏时也不许崩，五审 P-08）
         run: sudo /usr/local/lib/seedrou/seedrou-priv selftest
