@@ -77,6 +77,7 @@ install -m 644 "$SRC_DIR/systemd/seedrou-panel.service"   /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/seedrou-apply.service"   /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/seedrou-converge.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/seedrou-converge.timer"  /etc/systemd/system/
+install -m 644 "$SRC_DIR/systemd/seedrou-dns-sync.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/systemd/seedrou-pppoe.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/sysctl/70-seedrou.conf"  /etc/sysctl.d/
 install -m 644 "$SRC_DIR/network/modules/seedrou.conf"    /etc/modules-load.d/
@@ -170,10 +171,11 @@ if [ -f /etc/systemd/system/sing-box.service ]; then
   mkdir -p /etc/systemd/system/sing-box.service.d
   install -m 644 "$SRC_DIR/systemd/sing-box.service.d/10-seedrou-wait-wan.conf" \
     /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf
-  install -m 755 "$SRC_DIR/priv/singbox-cleanup" "$LIB_DIR/singbox-cleanup"
-  install -m 644 "$SRC_DIR/systemd/seedrou-singbox-cleanup.service" /etc/systemd/system/
-  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in + 崩溃清理单元（priv/wait-wan, singbox-cleanup）"
+  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in（priv/wait-wan）"
 fi
+# singbox-cleanup 单元/脚本无条件安装（幂等无害；后装 sing-box 的用户由 converge 补 drop-in）
+install -m 755 "$SRC_DIR/priv/singbox-cleanup" "$LIB_DIR/singbox-cleanup"
+install -m 644 "$SRC_DIR/systemd/seedrou-singbox-cleanup.service" /etc/systemd/system/
 # Debian 自带 nftables.service 开机 flush ruleset —— 与 sing-box 表冲突，禁用之（见 COEXISTENCE.md）
 systemctl disable nftables.service >/dev/null 2>&1 || true
 if [ "$SMOKE" = "1" ]; then

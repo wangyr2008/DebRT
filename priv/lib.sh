@@ -219,16 +219,18 @@ maintain_singbox_dropin() {
   [ -f /usr/local/lib/seedrou/wait-wan ] || return 0
   [ -f "$di" ] && return 0
   mkdir -p /etc/systemd/system/sing-box.service.d
+  # 内容与发行版 systemd/sing-box.service.d/10-seedrou-wait-wan.conf 保持一致
   cat > "$di" <<'DPEOF'
 # 由 SeedRou 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
 [Unit]
 After=network-online.target
 Wants=network-online.target
+OnFailure=seedrou-singbox-cleanup.service
 [Service]
 ExecStartPre=/usr/local/lib/seedrou/wait-wan
 TimeoutStartSec=210
 Restart=on-failure
-RestartSec=15
+RestartSec=3
 DPEOF
   systemctl daemon-reload
   echo "wait-wan: 已为 sing-box 安装 WAN 就绪 drop-in"

@@ -997,13 +997,30 @@ sys.exit(0 if ok else 1)
   find /usr/local/lib/seedrou -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
   rm -rf /usr/local/lib/seedrou/priv    # 扁平化后 priv/ 子目录是冗余副本，删掉避免"哪份生效"的歧义
   chown -R root:root /usr/local/lib/seedrou
+  # 单元同步（复审 v0.1.12 2.2）：升级包的新 systemd 能力落到 /etc/systemd，
+  # 否则只有全新安装才生效、升级用户拿不到 dns-sync/cleanup/重启策略
+  if [ -d /usr/local/lib/seedrou/systemd ]; then
+    mkdir -p /etc/systemd/system/dnsmasq.service.d /etc/systemd/system/sing-box.service.d
+    local uf
+    for uf in /usr/local/lib/seedrou/systemd/*.service \
+              /usr/local/lib/seedrou/systemd/*.timer; do
+      [ -f "$uf" ] && install -m 644 "$uf" /etc/systemd/system/
+    done
+    for uf in /usr/local/lib/seedrou/systemd/dnsmasq.service.d/* \
+              /usr/local/lib/seedrou/systemd/sing-box.service.d/*; do
+      [ -f "$uf" ] && install -m 644 "$uf" "/etc/systemd/system/$(echo "$uf" | sed 's|.*systemd/||')"
+    done
+    systemctl daemon-reload
+    systemctl enable seedrou-panel.service seedrou-dns-sync.service seedrou-converge.timer >/dev/null 2>&1 || true
+  fi
   rm -rf "$old"
   # VERSION 同时落包根与 share/（审计 B-02：目录整体替换后 share/ 会消失，必须重建再拷贝）
   mkdir -p "$SEEDROU_SHARE"
   cp /usr/local/lib/seedrou/VERSION "$SEEDROU_SHARE/VERSION" 2>/dev/null || true
-  # 5) 延迟重启面板（先让本次响应送达客户端）
-  systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" 2>/dev/null \
-    || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT" >/dev/null 2>&1 &
+  # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
+  systemctl daemon-reload
+  systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" seedrou-converge.service 2>/dev/null \
+    || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT seedrou-converge.service" >/dev/null 2>&1 &
   ok_out "message" "已升级到 V${newver}，面板即将重启"
 }
 
