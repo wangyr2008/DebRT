@@ -6,7 +6,9 @@ Before=dnsmasq.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/seedrou/seedrou-priv apply-all
+# 开机用收敛模式：配置文件跨重启持久化，无漂移时不重启 networkd/dnsmasq
+# （全量重启会导致 LAN 客户端开机闪断——真机实测），仅在 nft 表缺失时重建防火墙
+ExecStart=/usr/local/lib/seedrou/seedrou-priv apply-all --convergent
 TimeoutStartSec=180
 
 [Install]

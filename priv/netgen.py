@@ -205,6 +205,10 @@ def gen_dnsmasq(cfg):
         lines.append("dhcp-option=option:dns-server," + ",".join(dns))
     for s in cfg.get("static", []):
         lines.append(f"dhcp-host={s['mac']},{s['ip']},{s['name']}")
+    if not v6.get("enabled"):
+        # IPv6 关闭时过滤 AAAA：上游可能返回 AAAA，但本机无 v6 路由只会让客户端
+        # 拿着不可达的 v6 地址连接失败（真机首装实测， China Mobile 上游带 v6 DNS）
+        lines.append("filter-AAAA")
     lines.append("")
     lines.append("# 上游 DNS")
     lines.append("no-resolv")

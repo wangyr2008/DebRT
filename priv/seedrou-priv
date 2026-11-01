@@ -362,9 +362,12 @@ for f in json.load(open(sys.argv[1]))["files"]:
     print(f"{f['path']}\t{f['mode']:04o}")
 PYEOF
 )
-    if [ "$drift" = "0" ] && wait_dnsmasq 1 && nft list table $NFT_TABLE >/dev/null 2>&1; then
+    if [ "$drift" = "0" ]; then
+      # 无漂移：nft 规则不跨重启，缺表则只重建防火墙+QoS；绝不重启 networkd/dnsmasq
+      # （开机全量重启会让 LAN 客户端闪断——真机实测），dnsmasq 稍后带着有效配置自行启动
+      nft list table $NFT_TABLE >/dev/null 2>&1 || svc_nft
       svc_cake
-      systemctl is-enabled --quiet sing-box.service 2>/dev/null || true
+      sync_dns_upstream
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0
     fi
@@ -378,6 +381,7 @@ PYEOF
   rm -rf "$stage"
   run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true
   wait_dnsmasq 15 || true
+  sync_dns_upstream
   ok_out "message" "已按配置完成系统收敛${migrated:+。}$migrated"
 }
 

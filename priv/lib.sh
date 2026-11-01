@@ -211,6 +211,18 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
   esac
 }
 
+# 按 config.json 的 WAN 口重建 DNS 上游（幂等；/run 重启即清，dispatcher 未触发时由此兜底）
+sync_dns_upstream() {
+  local hook=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
+  [ -x "$hook" ] || return 0
+  local wan_if if
+  wan_if="$(python3 -c 'import json;print(",".join(p["name"] for p in json.load(open("'"$CONFIG_JSON"'")).get("ports",[]) if p.get("wan")) or "")' 2>/dev/null)"
+  for if in ${wan_if//,/ }; do
+    ip -4 addr show "$if" 2>/dev/null | grep -q inet && "$hook" "$if" routable
+  done
+  return 0
+}
+
 svc_restart_networkd() {
   systemctl daemon-reload
   systemctl restart systemd-networkd.service 2>/dev/null || systemctl restart systemd-networkd
