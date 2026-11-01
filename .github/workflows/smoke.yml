@@ -12,7 +12,9 @@ on:
 
 jobs:
   real-path-smoke:
-    runs-on: ubuntu-latest
+    # 钉 24.04：26 的 runner 可能带 sudo-rs，其 visudo 连标准的 Defaults logfile= 都拒
+    # （CI 实测）；真实目标是 Debian 13（经典 sudo 1.9.16），24.04 行为更接近
+    runs-on: ubuntu-24.04
     env:
       SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
     steps:
@@ -27,6 +29,7 @@ jobs:
 
       - name: 安装 SeedRou（--smoke：不碰网络服务）
         run: |
+          visudo --version | head -1    # 留底：确认 runner 的 sudo 实现
           set -o pipefail    # 关键：默认 run shell 只有 -e 没有 pipefail，tee 会掩盖 install.sh 的失败（六审）
           code=0
           sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
