@@ -968,8 +968,18 @@ sys.exit(0 if ok else 1)
   cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cur_version)" 2>/dev/null || true
   local old="/usr/local/lib/seedrou.prev.$$"
   mv "/usr/local/lib/seedrou" "$old" && mv "$stg" "/usr/local/lib/seedrou" || { mv "$old" "/usr/local/lib/seedrou" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
-  chmod 755 /usr/local/lib/seedrou/seedrou-priv 2>/dev/null || true
-  chmod 600 /usr/local/lib/seedrou/priv/lib.sh 2>/dev/null || true
+  # 布局对齐（CI 冒烟揭出）：install.sh 是扁平布局（seedrou-priv/lib.sh/*.py 在根），
+  # 而升级包保持 priv/ 子目录 —— 换目录后必须把 priv/* 拷回根并重整权限，
+  # 否则 sudo 调用的 /usr/local/lib/seedrou/seedrou-priv 直接消失
+  cp -f /usr/local/lib/seedrou/priv/* /usr/local/lib/seedrou/ 2>/dev/null || true
+  local exef pyf
+  for exef in seedrou-priv qdisc-apply wan-addr-sync; do
+    [ -f "/usr/local/lib/seedrou/$exef" ] && chmod 755 "/usr/local/lib/seedrou/$exef"
+  done
+  for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
+    [ -f "$pyf" ] && chmod 644 "$pyf"
+  done
+  find /usr/local/lib/seedrou -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
   chown -R root:root /usr/local/lib/seedrou
   rm -rf "$old"
   # VERSION 同时落包根与 share/（审计 B-02：目录整体替换后 share/ 会消失，必须重建再拷贝）
