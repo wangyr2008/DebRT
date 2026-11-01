@@ -100,7 +100,10 @@ jobs:
           OUT=$(curl -s -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
             -d '{"password":"NewPW-456789"}' -c "$CK" http://127.0.0.1/api/login) || true
           echo "$OUT" | sed 's/^/::error::LOGIN /'
-          echo "$OUT" | grep -q '"ok": true' || exit 1
+          echo "$OUT" | grep -q '"ok": true' || {
+            sudo journalctl -u seedrou-panel -n 8 --no-pager | sed 's/^/::error::PJ /'
+            exit 1
+          }
           curl -s --max-time 15 -b "$CK" http://127.0.0.1/api/status | python3 -c '
             import json, sys
             d = json.load(sys.stdin)

@@ -178,8 +178,14 @@ def priv_verify_password(password: str):
             input=password + "\n", capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         raise AuthError(504, "TIMEOUT", "密码校验超时", "请稍后重试")
+    if not (p.stdout or "").strip():
+        # priv 崩溃（traceback 在 stderr）：不能当成"密码不正确"——CI 上曾据此误判（真机回归要求）
+        err_tail = "; ".join((p.stderr or "").strip().splitlines()[-3:])
+        raise AuthError(500, "AUTH_INTERNAL", "密码校验服务无输出",
+                        f"exit={p.returncode} stderr: {err_tail[:300]}")
     try:
-        data = json.loads(p.stdout or "{}")
+        data = json.loads(p.stdout)
     except json.JSONDecodeError:
-        raise AuthError(500, "AUTH_INTERNAL", "密码校验服务异常", "请在系统上执行 seedrou-priv selftest 检查")
+        err_tail = "; ".join((p.stderr or "").strip().splitlines()[-3:])
+        raise AuthError(500, "AUTH_INTERNAL", "密码校验服务返回异常", f"stderr: {err_tail[:300]}")
     return data.get("ok", False), (None if data.get("ok") else data)
