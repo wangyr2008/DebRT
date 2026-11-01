@@ -57,12 +57,31 @@ write_atomic() {
 }
 
 # ---------------- 锁 ----------------
+# 幂等：已持锁（嵌套调用，如 backup-restore 内部再跑 apply-all）直接返回，避免释放重取的竞态窗口
 acquire_lock() {
+  [ -n "${_SEEDROU_LOCK_HELD:-}" ] && return 0
   mkdir -p "$SEEDROU_RUN" 2>/dev/null || true
   exec 9>"$LOCK_FILE" || die "LOCK" "无法打开锁文件 $LOCK_FILE"
   if ! flock -n 9; then
     die "BUSY" "另一项配置变更正在进行中" "请稍等几秒后重试；若频繁出现请检查是否有其他管理员同时在操作"
   fi
+  _SEEDROU_LOCK_HELD=1
+}
+
+# 清理已从配置中移除的网口对应的 networkd 文件（apply 只写不删的遗留）
+cleanup_stale_port_networks() {
+  python3 - <<'PYEOF' | while read -r f; do [ -n "$f" ] && rm -f "$f"; done
+import json, glob, os
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+    names = {p["name"] for p in cfg.get("ports", [])}
+except Exception:
+    raise SystemExit
+for f in glob.glob("/etc/systemd/network/30-*.network"):
+    base = os.path.basename(f)[3:-len(".network")]
+    if base not in names:
+        print(f)
+PYEOF
 }
 
 # ---------------- 配置读写 ----------------

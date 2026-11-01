@@ -17,6 +17,7 @@ if BASE not in sys.path:
 
 import api  # noqa: E402
 import auth  # noqa: E402
+import sysinfo  # noqa: E402
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
 
@@ -26,6 +27,7 @@ MAX_BODY = 128 * 1024 * 1024  # 上传上限 128MB
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "SeedRouPanel/0.1"
+    timeout = 60  # 读 body 的 socket 超时：谎报 Content-Length 的请求不能无限挂住 drain 循环
 
     # ---------- 基础 ----------
     def log_message(self, fmt, *args):
@@ -37,8 +39,24 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             n = 0
         if n > MAX_BODY:
+            # 超限也要把 body 读完丢弃，否则 keep-alive 连接会错位（审计 C-13）
+            try:
+                remaining = n
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:  # 读超时：客户端谎报 Content-Length 且不发送
+                self.close_connection = True
+                raise api.ApiError(400, "BODY_READ", "请求体读取超时", "客户端未按 Content-Length 发送数据")
+            self.close_connection = True
             raise api.ApiError(413, "TOO_LARGE", "上传内容过大", "升级包/备份包应在 128MB 以内")
-        return self.rfile.read(n) if n > 0 else b""
+        try:
+            return self.rfile.read(n) if n > 0 else b""
+        except OSError:
+            self.close_connection = True
+            raise api.ApiError(400, "BODY_READ", "请求体读取失败", "连接中断或读取超时，请重试")
 
     def _send(self, code, body: bytes, ctype="application/json; charset=utf-8", extra=None):
         self.send_response(code)
@@ -51,6 +69,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
+        if self.command == "HEAD":   # HEAD 不写 body，避免 keep-alive 下客户端解析错位（审计 C-12）
+            return
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
@@ -86,12 +106,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # CSRF：变更请求需自定义头 + 同源
             if method == "POST" and not auth.csrf_ok(self.headers):
+                self.close_connection = True  # body 未读即拒绝：必须关闭连接，避免 keep-alive 错位
                 self._send_json({"ok": False, "code": "CSRF",
                                  "message": "请求缺少安全校验头",
                                  "hint": "请刷新页面后重试；请勿通过非管理页面脚本调用本接口"}, 403)
                 return
             body = self._read_body()
-            code, obj, extra = api.handle(method, self.path, body, self.headers)
+            code, obj, extra = api.handle(method, self.path, body, self.headers,
+                                          client_ip=self.client_address[0] if self.client_address else "")
             if isinstance(obj, (bytes, bytearray)):  # 二进制下载（备份包）
                 extra = dict(extra or {})
                 ctype = extra.pop("Content-Type", "application/octet-stream")
@@ -142,6 +164,7 @@ def main():
 
     api.init(mock=args.mock)
     auth.init(mock=args.mock)
+    sysinfo.init(mock=args.mock)  # 审计 C-16：此前 MOCK 标志从未被置位
 
     httpd = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     httpd.daemon_threads = True

@@ -64,11 +64,12 @@ def cross_validate(cfg):
         if ip == lan_ip:
             fail("STATIC_NOT_IN_LAN", f"静态绑定「{s['name']}」的 IP 与路由器 LAN IP 相同",
                  f"请改用 {net} 内其他未占用地址")
-    # DHCP 池必须在子网内
+    # DHCP 池必须在子网内（掩码 >= /24 由 validate 保证，末段拼法才成立）
     dh = cfg.get("dhcp", {})
     if dh.get("enabled"):
-        p0 = ipaddress.IPv4Address(f"{str(net.network_address).rsplit('.', 1)[0]}.{dh['pool_start']}")
-        p1 = ipaddress.IPv4Address(f"{str(net.network_address).rsplit('.', 1)[0]}.{dh['pool_end']}")
+        pre = str(net.network_address).rsplit(".", 1)[0]
+        p0 = ipaddress.IPv4Address(f"{pre}.{dh['pool_start']}")
+        p1 = ipaddress.IPv4Address(f"{pre}.{dh['pool_end']}")
         if p0 not in net or p1 not in net:
             fail("DHCP_NOT_IN_LAN",
                  f"DHCP 地址池 {p0}-{p1} 不在 LAN 网段 {net} 内",
@@ -93,7 +94,6 @@ def cross_validate(cfg):
 
 def gen_wan_network(cfg):
     wifs = wan_ifaces(cfg)
-    names = "|".join(wifs)  # systemd .network Match Name= 支持通配；多口用空格分隔列表
     match = " ".join(wifs)
     v6 = cfg.get("ipv6", {})
     lines = ["# 由 SeedRou 生成 — 请勿手工修改", "[Match]", f"Name={match}", "", "[Network]"]
@@ -104,8 +104,8 @@ def gen_wan_network(cfg):
         lines += ["DHCP=no", "IPv6AcceptRA=no",
                   f"Address={cfg['wan']['ip']}/{mask_prefix(cfg['wan']['mask'])}",
                   f"Gateway={cfg['wan']['gw']}"]
-    else:  # pppoe — 底层口只做链路，IP 由 ppp0 承载
-        lines += ["DHCP=no", "IPv6AcceptRA=no", "LinkLocalAddressing=ipv4", "ConfigureWithoutCarrier=yes"]
+    else:  # pppoe — 底层口只做链路，IP 由 ppp0 承载；不给 IPv4 link-local（避免 WAN 二层暴露面）
+        lines += ["DHCP=no", "IPv6AcceptRA=no", "LinkLocalAddressing=no", "ConfigureWithoutCarrier=yes"]
     if mode == "dhcp":
         lines += ["", "[DHCPv4]", "UseDNS=yes", "UseGateway=yes", "UseNTP=no", "UseHostname=no"]
         if v6.get("enabled") and v6.get("mode") == "native":
@@ -126,12 +126,22 @@ def gen_lan_network(cfg):
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
              "IPForward=yes"]
     # LAN 桥成员口由 30-<name>.network 绑定（见 gen_port_networks）
+    # IPv6：RA 统一由 networkd 发布（dnsmasq 不再发 RA，避免双 RA 源，见审计 B-21）
     if v6.get("enabled"):
         if v6.get("mode") == "nat6":
             lines += [f"Address={ULA_PREFIX}::1/64"]
         elif v6.get("mode") == "static" and v6.get("prefix"):
-            lines += [f"Address={v6['prefix'].split('/')[0]}::1/{v6['prefix'].split('/')[1]}"]
-        lines += ["IPv6SendRA=yes", "", "[IPv6PrefixDelegation]", "DHCPv6PrefixDelegation=yes", "RouterLifetimeSec=600"]
+            pnet = ipaddress.IPv6Network(v6["prefix"], strict=False)
+            host = ipaddress.IPv6Address(int(pnet.network_address) + 1)  # 网段 ::1
+            lines += [f"Address={host}/{pnet.prefixlen}"]
+        lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600"]
+        if v6.get("mode") in ("nat6", "static"):
+            # NAT6/静态有确定的 LAN v6 地址，可直告 DNS；native 的地址来自上游 PD，届时由 DHCPv4 DNS 兜底
+            lan_v6 = f"{ULA_PREFIX}::1" if v6.get("mode") == "nat6" else \
+                str(ipaddress.IPv6Address(int(ipaddress.IPv6Network(v6["prefix"], strict=False).network_address) + 1))
+            lines += [f"DNS={lan_v6}"]
+        if v6.get("mode") == "native":
+            lines += ["", "[IPv6PrefixDelegation]", "DHCPv6PrefixDelegation=yes"]
         if v6.get("mode") == "nat6":
             lines += ["", "[IPv6Prefix]", f"Prefix={ULA_PREFIX}::/64"]
         elif v6.get("mode") == "static" and v6.get("prefix"):
@@ -170,8 +180,10 @@ def gen_dnsmasq(cfg):
              "domain=lan",
              "local=/lan/",
              "cache-size=1000",
-             "dhcp-leasefile=/var/lib/seedrou/dnsmasq.leases"]
+             # Debian 默认租约路径：dnsmasq 启动期以 root 打开，包内目录权限即保证可写（审计 B-04）
+             "dhcp-leasefile=/var/lib/misc/dnsmasq.leases"]
     if dh.get("enabled"):
+        # 掩码 >= /24 时 network_address 末段必为 0，前三段即池前缀（validate 已限制掩码 >= /24）
         pre = str(net.network_address).rsplit(".", 1)[0]
         lines.append(f"dhcp-range={pre}.{dh['pool_start']},{pre}.{dh['pool_end']},{dh.get('lease', 120)}m")
         gw = dh.get("gw") or lan_ip
@@ -191,30 +203,32 @@ def gen_dnsmasq(cfg):
             lines.append(f"server={d}")
     else:
         lines.append("conf-dir=/run/seedrou-dns,*.conf")
-    if v6.get("enabled") and v6.get("mode") in ("native", "nat6"):
-        lines += ["", "# IPv6 RA / SLAAC", "dhcp-range=::,constructor:br-lan,ra-names,64"]
+    # 注意：RA 统一由 networkd 发布（见 gen_lan_network），dnsmasq 不发 RA（审计 B-21 单一 RA 源）
     return "\n".join(lines) + "\n"
 
 
 def gen_nft(cfg):
-    # PPPoE 模式下三层流量在 ppp0 上（底层口只承载 PPP 帧），WAN_IFS 必须用 ppp0
+    # PPPoE 模式下三层流量在 ppp0 上；但物理口也必须纳入防火墙（input 过滤 + hairpin），
+    # 否则其 link-local 地址会暴露面板 80 端口（审计 B-05）
     if cfg["wan"]["mode"] == "pppoe":
-        wifs = ["ppp0"]
+        wifs = ["ppp0"] + wan_ifaces(cfg)
     else:
         wifs = wan_ifaces(cfg)
     wan_set = ", ".join(f'"{i}"' for i in wifs)
     net = lan_net(cfg)
     fw = cfg.get("firewall", {})
     v6 = cfg.get("ipv6", {})
-    dnat = []
+    dnat, dnat_lan = [], []
     for r in fw.get("portfw", []):
         if not r.get("enabled"):
             continue
         tgt = r["ip"] + (f':{r["lport"]}' if r["lport"] != r["wport"].split("-")[0] else "")
         if r["proto"] in ("tcp", "both"):
             dnat.append(f'    iifname $WAN_IFS tcp dport {r["wport"]} dnat ip to {tgt}')
+            dnat_lan.append(f'    iifname $LAN_BR tcp dport {r["wport"]} dnat ip to {tgt}')
         if r["proto"] in ("udp", "both"):
             dnat.append(f'    iifname $WAN_IFS udp dport {r["wport"]} dnat ip to {tgt}')
+            dnat_lan.append(f'    iifname $LAN_BR udp dport {r["wport"]} dnat ip to {tgt}')
     lines = [
         "#!/usr/sbin/nft -f",
         "# SeedRou 基础防火墙 —— 只操作本表 inet seedrou_base，",
@@ -250,9 +264,9 @@ def gen_nft(cfg):
         "    type filter hook forward priority filter; policy accept;",
         "    ct state established,related accept",
         "    ct state invalid drop",
-        "    iifname $WAN_IFS ct status dnat accept",
+        "    ct status dnat accept",
         "    iifname $WAN_IFS drop",
-        "    # 其余转发（LAN→WAN、LAN↔tun/tailscale/podman 等）按 policy 放行",
+        "    # 其余转发（LAN→WAN、LAN↔tun/tailscale/podman、LAN hairpin 等）按 policy 放行",
         "  }",
         "",
         "  chain forward_mss {",
@@ -261,14 +275,14 @@ def gen_nft(cfg):
         "  }",
         "",
     ]
-    if dnat:
-        lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] + dnat + ["  }", ""]
-    else:
-        lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;", "  }", ""]
+    # hairpin：LAN 内用公网 IP 访问自己 —— LAN 侧也要做 DNAT（审计 C-20）
+    lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] + dnat + dnat_lan + ["  }", ""]
     lines += [
         "  chain srcnat {",
         "    type nat hook postrouting priority srcnat; policy accept;",
         "    ip saddr $LAN_NET oifname $WAN_IFS masquerade",
+        "    # hairpin 回程伪装（LAN→LAN 经 DNAT 后源地址仍是 LAN，需改写为 LAN_BR 地址）",
+        "    ip saddr $LAN_NET ip daddr $LAN_NET oifname $LAN_BR masquerade",
     ]
     if v6.get("enabled") and v6.get("mode") == "nat6":
         lines.append(f"    ip6 saddr {ULA_PREFIX}::/48 oifname $WAN_IFS masquerade")
@@ -289,6 +303,7 @@ def gen_pppd(cfg, password):
         f"user {shell_quote(wan['username'])}",
         f"plugin rp-pppoe.so {wif}",
         "noipdefault",
+        "noauth",          # 对端是运营商接入服务器；与 Debian dsl-provider 模板一致（审计 B-20）
         "usepeerdns",
         "defaultroute",
         "persist",

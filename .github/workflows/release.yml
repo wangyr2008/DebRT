@@ -31,7 +31,7 @@ jobs:
         run: |
           VER="$(tr -d '[:space:]' < VERSION)"
           tar -czf "seedrou-${VER}.tar.gz" \
-            --exclude='.github' \
+            --exclude='__pycache__' --exclude='*.pyc' \
             panel priv config systemd network singbox sudoers \
             install.sh uninstall.sh VERSION README.md
           sha256sum "seedrou-${VER}.tar.gz" > "seedrou-${VER}.tar.gz.sha256"

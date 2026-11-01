@@ -17,9 +17,13 @@ _secret_ts = 0
 SESSION_TTL = 12 * 3600
 COOKIE = "sr_sess"
 
-# 面板侧登录限速（内存态；priv 侧还有持久限速，双层防御）
+# 面板侧登录限速（按来源 IP，内存态；priv 侧还有全局兜底限速，双层防御 —— 审计 B-18）
 _fails = {}
 FAIL_LIMIT, LOCK_S = 5, 60
+
+# 已登出令牌的撤销表（内存态，进程重启即清；无状态 HMAC 会话的补偿机制，
+# 否则登出后旧 cookie 重放仍然有效直到过期）
+_revoked = set()
 
 
 class AuthError(Exception):
@@ -37,7 +41,7 @@ def _secret():
     if MOCK:
         return b"mock-session-secret"
     now = time.time()
-    if _secret_cache and now - _secret_ts < 300:
+    if _secret_cache and now - _secret_ts < 60:  # 短缓存：改密轮换密钥后旧会话尽快失效
         return _secret_cache
     import subprocess
     out = subprocess.run(
@@ -88,7 +92,15 @@ def _cookie_val(headers) -> str:
 
 
 def logged_in(headers) -> bool:
-    return verify_token(_cookie_val(headers))
+    tok = _cookie_val(headers)
+    if not tok or hashlib.sha256(tok.encode()).hexdigest() in _revoked:
+        return False
+    return verify_token(tok)
+
+
+def revoke(token: str):
+    if token:
+        _revoked.add(hashlib.sha256(token.encode()).hexdigest())
 
 
 def session_cookie(token: str) -> str:
@@ -115,31 +127,27 @@ def csrf_ok(headers) -> bool:
 
 
 # ---------------- 登录 ----------------
-def client_key(headers) -> str:
-    # 无代理场景取 X-Forwarded-For 不可信，直接用连接信息（handler 传入 client addr）更准；
-    # 这里退化为 Host+UA 混合，限速仅是辅助层。
-    return (headers.get("Host") or "") + "|" + (headers.get("User-Agent") or "")[:80]
-
-
-def login_locked(headers):
-    k = client_key(headers)
-    rec = _fails.get(k)
+def login_locked(client_ip: str):
+    rec = _fails.get(client_ip or "unknown")
     if rec and rec.get("lock_until", 0) > time.time():
         return int(rec["lock_until"] - time.time()) + 1
     return 0
 
 
-def login_fail(headers):
-    k = client_key(headers)
-    rec = _fails.setdefault(k, {"fails": 0, "lock_until": 0})
+def login_fail(client_ip: str):
+    rec = _fails.setdefault(client_ip or "unknown", {"fails": 0, "lock_until": 0})
     rec["fails"] += 1
     if rec["fails"] >= FAIL_LIMIT:
         rec["lock_until"] = time.time() + LOCK_S
         rec["fails"] = 0
+    # 顺手清理过期项，避免长期运行内存增长
+    now = time.time()
+    for k in [k for k, v in _fails.items() if v.get("lock_until", 0) < now and v["fails"] == 0]:
+        _fails.pop(k, None)
 
 
-def login_ok(headers):
-    _fails.pop(client_key(headers), None)
+def login_ok(client_ip: str):
+    _fails.pop(client_ip or "unknown", None)
 
 
 def priv_verify_password(password: str):

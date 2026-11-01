@@ -9,7 +9,7 @@ import re
 import time
 
 MOCK = False
-_lease_file = "/var/lib/seedrou/dnsmasq.leases"
+_lease_file = "/var/lib/misc/dnsmasq.leases"   # Debian dnsmasq 默认租约路径（审计 B-04）
 _notes_file = "/var/lib/seedrou/notes.json"
 
 _cpu_prev = None  # (ts, idle, total)
@@ -34,7 +34,7 @@ _MOCK_STATUS = {
         {"name": "eth4", "role": "none", "link": False, "speed": ""},
     ],
     "lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
-    "version": "0.1.0",
+    "version": "0.1.1",
     "system_ok": True,
     "leases_count": 5,
 }
@@ -155,6 +155,23 @@ def temp_cpu():
     return None
 
 
+def temp_disk():
+    """第一块盘的温度；需要 smartmontools（未装返回 None，UI 显示 —）。"""
+    import subprocess
+    try:
+        out = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
+        dev = (json.loads(out or "{}").get("devices") or [{}])[0].get("name", "")
+        if not dev:
+            return None
+        info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
+        for t in (json.loads(info or "{}").get("temperature", {}) or {}).values():
+            if isinstance(t, (int, float)) and 0 < t < 120:
+                return int(t)
+    except Exception:
+        return None
+    return None
+
+
 def uptime_s():
     try:
         return int(float(open("/proc/uptime").read().split()[0]))
@@ -219,7 +236,7 @@ def leases(static_list):
                     continue
                 exp, mac, ip, host = int(parts[0]), parts[1].upper(), parts[2], parts[3]
                 items[mac] = {"name": None if host == "*" else host, "ip": ip, "mac": mac,
-                              "static": False, "lease_left": fmt_lease_left(exp, now)}
+                              "static": False, "lease_text": fmt_lease_left(exp, now)}
     except FileNotFoundError:
         pass
     for s in static_list:

@@ -84,7 +84,7 @@ def _json_body(body: bytes):
 
 def _version():
     if MOCK:
-        return "0.1.0"
+        return "0.1.1"
     try:
         return open(VERSION_FILE).read().strip()
     except Exception:
@@ -110,7 +110,7 @@ def _save_upload(body: bytes, prefix: str) -> str:
 
 
 # ---------------- 路由 ----------------
-def handle(method, path, body: bytes, headers):
+def handle(method, path, body: bytes, headers, client_ip=""):
     route = path.rstrip("/") or "/"
     q = route[len("/api"):] if route.startswith("/api") else route
 
@@ -119,7 +119,7 @@ def handle(method, path, body: bytes, headers):
         return 200, {"ok": True, "logged": auth.logged_in(headers),
                      "lan_ip": _lan_ip(), "version": _version()}, None
     if q == "/login" and method == "POST":
-        return do_login(body, headers)
+        return do_login(body, headers, client_ip)
 
     # ---- 登录态 ----
     if not auth.logged_in(headers):
@@ -168,8 +168,8 @@ def handle(method, path, body: bytes, headers):
 
 
 # ---------------- 登录/登出 ----------------
-def do_login(body, headers):
-    locked = auth.login_locked(headers)
+def do_login(body, headers, client_ip=""):
+    locked = auth.login_locked(client_ip)
     if locked:
         return 423, {"ok": False, "code": "AUTH_LOCKED", "message": f"尝试次数过多，请 {locked} 秒后重试",
                      "hint": "密码不会因此失效；稍等即可再次尝试"}, None
@@ -179,17 +179,23 @@ def do_login(body, headers):
         return 400, {"ok": False, "code": "AUTH_EMPTY", "message": "请输入管理密码"}, None
     ok, err = auth.priv_verify_password(password)
     if not ok:
-        auth.login_fail(headers)
+        auth.login_fail(client_ip)
         err = err or {}
         return (423 if err.get("code") == "AUTH_LOCKED" else 401), {
             "ok": False, "code": err.get("code", "AUTH_BAD"),
             "message": err.get("message", "管理密码不正确"), "hint": err.get("hint", "")}, None
-    auth.login_ok(headers)
+    auth.login_ok(client_ip)
     token = auth.make_token()
     return 200, {"ok": True}, {"Set-Cookie": auth.session_cookie(token)}
 
 
 def do_logout(body, headers):
+    # 服务端同时撤销该令牌：登出后旧 cookie 重放不再有效
+    raw = headers.get("Cookie") or ""
+    for part in raw.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == auth.COOKIE:
+            auth.revoke(v)
     return 200, {"ok": True}, {"Set-Cookie": auth.clear_cookie()}
 
 
@@ -223,7 +229,7 @@ def get_status(body, headers):
         "cpu": None if MOCK else sysinfo.cpu_pct(),
         "cpu_temp": None if MOCK else sysinfo.temp_cpu(),
         "mem": None if MOCK else sysinfo.mem_pct(),
-        "disk_temp": None,  # 需 smartctl；默认不采集，避免依赖
+        "disk_temp": None if MOCK else sysinfo.temp_disk(),  # 需 smartmontools（审计 C-02）
         "uptime_s": None if MOCK else sysinfo.uptime_s(),
     }
     if MOCK:
@@ -265,13 +271,18 @@ def post_notes(body, headers):
     notes = data.get("notes", {})
     if not isinstance(notes, dict):
         raise ApiError(400, "BAD_JSON", "备注格式不正确")
+    # 载荷包含表格里的全部行：空值 = 用户清除了该备注，需要落盘删除（审计 B-10）
     clean = {}
     for k, v in notes.items():
-        if re.fullmatch(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", str(k)) and isinstance(v, str) and len(v) <= 32:
+        if not re.fullmatch(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", str(k)) or not isinstance(v, str):
+            continue
+        if len(v.strip()) > 32:
+            raise ApiError(400, "BAD_NOTE", "备注最长 32 字")
+        if v.strip():
             clean[k.upper()] = v.strip()
     if MOCK:
         return 200, {"ok": True}, None
-    sysinfo.save_notes(clean)
+    sysinfo.save_notes(clean)  # save_notes 是整体替换：清除的备注自然消失
     return 200, {"ok": True, "message": "备注已保存"}, None
 
 
@@ -388,11 +399,9 @@ def get_backup(body, headers):
     try:
         with open(out_path, "rb") as f:
             data = f.read()
-    finally:
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
+    except OSError:
+        raise ApiError(500, "BACKUP_FAIL", "备份文件读取失败", "请检查磁盘空间（df -h）")
+    # 保留最近 10 份（生成即删会让轮转形同虚设，审计 C-08）
     return 200, data, {
         "Content-Type": "application/gzip",
         "Content-Disposition": f'attachment; filename="{name}"',
@@ -416,7 +425,7 @@ def mock_priv(args, input_text):
         return sysinfo.mock_status()
     if cmd == "config-set":
         section = rest[0]
-        cfg = sysinfo.mock_config()
+        cfg = sysinfo._MOCK_CONFIG  # 直接改模块态：mock 保存可持久（审计 C-09）
         data = json.loads(input_text or "{}")
         if section == "bind":
             cfg["ports"] = data.get("ports", cfg["ports"])

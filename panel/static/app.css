@@ -181,6 +181,8 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-port .pstat{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11.5px;color:var(--ru-text2)}
 
 /* ===== bind rows (modal) ===== */
+/* .ru-bindrow 仅作 JS 定位钩子，无独立样式（审计 C-19） */
+#router-ui .ru-bindrow{display:grid}
 #router-ui .ru-bindgrid{display:grid;grid-template-columns:1.15fr 168px 1.15fr 30px;gap:8px;align-items:center;margin-bottom:8px}
 #router-ui .ru-bindhead{font-size:11.5px;color:var(--ru-text2);margin-bottom:2px}
 #router-ui .ru-ipseg{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ru-text2);white-space:nowrap}

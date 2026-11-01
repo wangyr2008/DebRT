@@ -1,10 +1,14 @@
 #!/bin/sh
-# pppd ip-up.d 钩子：PPPoE 拨上后更新上游 DNS + 重放 QoS
+# pppd ip-up.d 钩子：PPPoE 拨上后记录会话起点 + 更新上游 DNS + 重放 QoS
 # 环境变量由 pppd 提供：$1=接口名 $2=tty $3=速率 $4=本地IP $5=对端IP $6=ipparam
 IFACE="$1"
-RUNDIR="/run/seedrou-dns"
-CONF="${RUNDIR}/upstream.conf"
-mkdir -p "$RUNDIR"
+RUNDIR="/run/seedrou"
+DNSDIR="/run/seedrou-dns"
+CONF="${DNSDIR}/upstream.conf"
+mkdir -p "$RUNDIR" "$DNSDIR"
+
+# 会话起点（掉线重拨即归零；概览页"已连接 N 天"以此为准，审计 B-22）
+date +%s > "${RUNDIR}/ppp-session-start" 2>/dev/null
 
 {
   echo "# 由 pppd ip-up.d 生成（$IFACE）— 请勿手工修改"

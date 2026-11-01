@@ -71,6 +71,7 @@ function request(method, path, body, opts) {
   }
   return fetch(path, init).then(function (res) {
     if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }
+
     var ct = res.headers.get("Content-Type") || "";
     if (ct.indexOf("application/json") < 0) {
       if (!res.ok) throw { code: "HTTP_" + res.status, message: "服务器返回异常状态 " + res.status, hint: "请刷新页面重试；若持续出现请查看面板日志 journalctl -u seedrou-panel" };
@@ -95,6 +96,7 @@ function apiFail(err) {
 /* ===================== 登录态 ===================== */
 var loginEl = $id("ru-login"), shellEl = $id("ru-shell");
 function setLogged(v) {
+  LOGGED = v;  // 登出后停掉轮询（审计 C-10）
   loginEl.hidden = v;
   shellEl.hidden = !v;
   if (v) { show("overview"); loadAll(); }
@@ -262,6 +264,9 @@ function renderOverview(st) {
   $id("ver-badge").textContent = "V" + (st.version || "—");
 }
 loaders.overview = refreshStatus;
+loaders.network = refreshConfig;
+loaders.security = refreshConfig;
+loaders.backup = refreshConfig;
 setInterval(function () { if (LOGGED && document.visibilityState !== "hidden") refreshStatus(); }, 5000);
 
 /* ===================== 2 网络设置 ===================== */
@@ -291,7 +296,7 @@ function renderNetwork(cfg) {
   onV6ModeChange();
   setSeg("seg-v6dns", v6.dns_mode || "auto");
   $id("v6-dns1").value = (v6.dns && v6.dns[0]) || ""; $id("v6-dns2").value = (v6.dns && v6.dns[1]) || "";
-  $id("v6-addr").value = v6.addr || ""; $id("v6-gw").value = v6.gw || "";
+  $id("v6-addr").value = v6.addr || ""; $id("v6-gw").value = v6.gw || ""; $id("v6-prefix").value = v6.prefix || "";
 
   $id("lan-ip").value = lan.ip; $id("lan-mask").value = lan.mask;
   $id("dhcp-enable").checked = !!dh.enabled;
@@ -410,8 +415,10 @@ $id("btn-v6-save").addEventListener("click", function () {
     dns_mode: segValue($id("seg-v6dns")),
     dns1: $id("v6-dns1").value.trim(), dns2: $id("v6-dns2").value.trim(),
     addr: $id("v6-addr").value.trim(), gw: $id("v6-gw").value.trim(),
+    prefix: $id("v6-prefix").value.trim(),
   };
   if (data.enabled && data.dns_mode === "manual" && !data.dns1) { apiFail({ message: "手动配置 DNS 时，DNS 服务器 1 必填", hint: "可填 240c::6666 等公共 IPv6 DNS" }); return; }
+  if (data.enabled && data.mode === "static" && !data.prefix) { apiFail({ message: "静态 IPv6 模式需要填写 LAN IPv6 前缀", hint: "填运营商分配或自拟的 /64 前缀，如 2001:db8:abcd::/64" }); return; }
   btnBusy(btn, true);
   API.post("/api/config/ipv6", data).then(function (r) {
     btnBusy(btn, false); toast("ok", "IPv6 设置已保存并生效", r.message || "");
@@ -494,12 +501,12 @@ $id("btn-qos-save").addEventListener("click", function () {
 
 /* ===================== 静态绑定弹窗 ===================== */
 var bindModal = $id("ru-bind-modal");
-function bindAddRow(name, last, mac) {
+function bindAddRow(name, last, mac, prefix) {
   var row = document.createElement("div");
   row.className = "ru-bindgrid ru-bindrow";
   row.innerHTML =
     '<input class="ru-in" placeholder="如：iPhone 15 Pro" value="' + esc(name || "") + '">' +
-    '<span class="ru-ipseg" id="bind-prefix"><span class="bp">192.168.10.</span><input class="ru-in" placeholder="100" inputmode="numeric" value="' + esc(last || "") + '"></span>' +
+    '<span class="ru-ipseg"><span class="bp">' + esc(prefix || "192.168.10.") + '</span><input class="ru-in" placeholder="100" inputmode="numeric" value="' + esc(last || "") + '"></span>' +
     '<input class="ru-in" placeholder="AA:BB:CC:DD:EE:FF" value="' + esc(mac || "") + '" style="text-transform:uppercase">' +
     '<button class="ru-iconbtn" data-delrow aria-label="移除该行"><i data-lucide="x"></i></button>';
   $id("ru-bindrows").appendChild(row);
@@ -511,9 +518,9 @@ function bindAddRow(name, last, mac) {
 }
 function openBindModal() {
   $id("ru-bindrows").innerHTML = "";
-  bindAddRow("", "", "");
-  showBad("msg-bind", "");
   var prefix = CFG && CFG.lan ? lanPrefix(CFG.lan.ip) + "." : "192.168.10.";
+  bindAddRow("", "", "", prefix);  // 前缀跟 LAN 实际网段走（审计 B-11）
+  showBad("msg-bind", "");
   $id("bind-hint").textContent = "IP 末段取值 2–254（子网 " + prefix + "0/24），不能与已有绑定冲突；MAC 格式 xx:xx:xx:xx:xx:xx。";
   bindModal.hidden = false;
 }
@@ -522,7 +529,10 @@ $id("btn-dev-addbind").addEventListener("click", openBindModal);
 $id("bind-close").addEventListener("click", function () { bindModal.hidden = true; });
 $id("bind-cancel").addEventListener("click", function () { bindModal.hidden = true; });
 bindModal.addEventListener("click", function (e) { if (e.target === bindModal) bindModal.hidden = true; });
-$id("bind-addrow").addEventListener("click", function () { bindAddRow("", "", ""); });
+$id("bind-addrow").addEventListener("click", function () {
+  var prefix = CFG && CFG.lan ? lanPrefix(CFG.lan.ip) + "." : "192.168.10.";
+  bindAddRow("", "", "", prefix);
+});
 $id("bind-commit").addEventListener("click", function () {
   var rows = $id("ru-bindrows").querySelectorAll(".ru-bindrow");
   var list = (CFG && CFG.static ? CFG.static.slice() : []);
@@ -579,8 +589,7 @@ loaders.devices = loadLeases;
 $id("btn-notes-save").addEventListener("click", function () {
   var btn = this, notes = {};
   root.querySelectorAll("[data-note-mac]").forEach(function (inp) {
-    var v = inp.value.trim();
-    if (v) notes[inp.getAttribute("data-note-mac")] = v;
+    notes[inp.getAttribute("data-note-mac")] = inp.value.trim();  // 空值也要提交：语义是"清除备注"
   });
   btnBusy(btn, true);
   API.post("/api/notes", { notes: notes }).then(function () {
@@ -757,7 +766,7 @@ function loadContainers() {
   return API.get("/api/podman/containers").then(function (data) {
     var list = data.containers || [];
     var tb = $id("ct-tbody");
-    if (!list.length) { tb.innerHTML = '<tr><td colspan="5" class="ru-empty">暂无容器；可在下方 Compose 编排或用镜像手动创建</td></tr>'; return; }
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="5" class="ru-empty">暂无容器；可在下方「Compose 编排」中部署</td></tr>'; return; }
     var html = "";
     list.forEach(function (c) {
       var running = c.state === "running";
@@ -900,7 +909,7 @@ function loadTailscale() {
     $id("ts-account").textContent = ts.logged_in ? ts.account : "未登录";
     $id("ts-ip").textContent = ts.logged_in ? ts.ip : "—";
     $id("ts-host").textContent = ts.hostname || "—";
-    $id("ts-ver").textContent = ts.version ? ts.version + (ts.updatable ? "（有可用更新，可在系统上执行 tailscale update）" : "") : "—";
+    $id("ts-ver").textContent = ts.version || "—";
     $id("btn-ts-login").hidden = ts.logged_in;
     $id("btn-ts-logout").hidden = !ts.logged_in;
     var au = $id("ts-authurl");

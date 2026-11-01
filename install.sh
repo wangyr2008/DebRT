@@ -135,8 +135,8 @@ fi
 chmod 600 "$ETC_DIR/secrets.json" 2>/dev/null || true
 chmod 644 "$ETC_DIR/config.json" 2>/dev/null || true
 
-# 租约文件归面板用户（dnsmasq 以 root 写入，面板只读）
-touch /var/lib/seedrou/dnsmasq.leases && chown seedrou:seedrou /var/lib/seedrou/dnsmasq.leases
+# 租约文件用 Debian dnsmasq 默认路径 /var/lib/misc/dnsmasq.leases（审计 B-04：
+# dnsmasq 启动期以 root 打开该文件，面板作为 seedrou 可读 644 的租约用于设备列表）
 
 # 路由器自身 DNS → 本机 dnsmasq（备份原文件）
 if [ ! -f /etc/resolv.conf.seedrou.bak ]; then

@@ -12,6 +12,12 @@ import sys
 ERR = {"ok": False, "code": "VALIDATE", "message": "", "hint": ""}
 
 
+def deterministic_id(seed: str) -> str:
+    """端口转发规则的稳定 id：跨进程一致（Python 内置 hash 每进程随机，不能用）。"""
+    import hashlib
+    return "r" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
+
+
 def fail(code, msg, hint=""):
     ERR.update(code=code, message=msg, hint=hint)
     print(json.dumps(ERR, ensure_ascii=False))
@@ -45,6 +51,13 @@ def is_mask(s):
         return isinstance(ipaddress.ip_address(s), ipaddress.IPv4Address) and s.isdigit() is False
     except ValueError:
         return False
+
+
+def mask_prefix(s):
+    try:
+        return ipaddress.IPv4Network(f"0.0.0.0/{s}", strict=False).prefixlen
+    except ValueError:
+        return 0
 
 
 def mask_ok(s):
@@ -178,7 +191,11 @@ def norm_lan(section, data, cur=None):
     ip = as_str(data.get("ip"), "LAN IP")
     mask = as_str(data.get("mask"), "LAN 子网掩码")
     need(is_ipv4(ip), "LAN_IP_BAD", f"LAN IP {ip!r} 无效", "示例：192.168.10.1")
-    need(mask_ok(mask), "LAN_MASK_BAD", f"LAN 子网掩码 {mask!r} 无效", "支持 255.255.255.0 或 255.255.0.0")
+    need(mask_ok(mask), "LAN_MASK_BAD", f"LAN 子网掩码 {mask!r} 无效", "示例：255.255.255.0")
+    # DHCP 池按「IP 末段」配置（UI 语义），仅支持 /24 及更长子网（审计 B-07）
+    need(24 <= mask_prefix(mask) <= 30, "LAN_MASK_BAD",
+         f"LAN 子网掩码 {mask} 过宽",
+         "DHCP 地址池按末段配置，仅支持 /24–/30（255.255.255.0 及更细）；如需更大网段请拆分为多个 /24")
     need(not ip.endswith(".0") and not ip.endswith(".255"), "LAN_IP_BAD", "LAN IP 不能是网段地址或广播地址")
     need(ipaddress.IPv4Address(ip).is_private, "LAN_IP_PUBLIC",
          "LAN IP 不能使用公网地址", f"{ip} 属于公网段；请使用 192.168.x.x / 10.x.x.x / 172.16–31.x.x 等私网地址")
@@ -292,7 +309,7 @@ def norm_firewall(section, data):
                     fail("FW_CONFLICT", f"外部端口 {wport} 与规则「{pname}」的 {ep[1]} 冲突（{pp.upper()}）",
                          "同一协议的外部端口不能重叠；可改用其他端口或合并规则")
             used[(pp, wport)] = name
-        out["portfw"].append({"id": as_str(r.get("id"), "id") or ("r" + str(abs(hash(name + wport)) % 10**8)),
+        out["portfw"].append({"id": as_str(r.get("id"), "id") or deterministic_id(name + "|" + wport + "|" + proto),
                               "name": name, "proto": proto, "wport": wport, "ip": ip,
                               "lport": lport, "enabled": enabled})
     return out
@@ -300,9 +317,22 @@ def norm_firewall(section, data):
 
 def norm_upgrade(section, data):
     src = as_str(data.get("source"), "升级源")
-    if src and "://" not in src:
-        need(re.fullmatch(r"[\w.\-/]{3,100}", src), "UPG_SOURCE_BAD",
-             f"升级源 {src!r} 格式不正确", "填 GitHub 仓库（如 yourname/seedrou）或完整清单 URL")
+    if src:
+        # 仅允许两种形态（审计 B-14）：owner/repo（GitHub）或 https:// 清单地址。
+        # 拒绝 file://、http://、内网地址等 —— 该值会以 root 身份被 curl 访问。
+        if "://" in src:
+            need(src.startswith("https://"), "UPG_SOURCE_BAD",
+                 "升级源 URL 仅支持 https://",
+                 "示例：https://example.com/seedrou-manifest.json；或直接填 GitHub 仓库名")
+            host = src.split("/", 3)[2] if len(src.split("/", 3)) > 3 else ""
+            need(bool(re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{2,5})?", host)), "UPG_SOURCE_BAD",
+                 f"升级源主机名 {host!r} 不合法", "请填正常的 https 地址")
+            need(not re.fullmatch(r"(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?|localhost).*",
+                                  host, re.I), "UPG_SOURCE_BAD",
+                 "升级源不能指向内网地址", "请使用公网 https 地址")
+        else:
+            need(re.fullmatch(r"[\w.\-]+/[\w.\-]{1,100}", src), "UPG_SOURCE_BAD",
+                 f"升级源 {src!r} 格式不正确", "填 GitHub 仓库（如 wangyr2008/SeedRou）或完整 https 清单 URL")
     return {"source": src}
 
 

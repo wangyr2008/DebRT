@@ -156,8 +156,10 @@
                   </select>
                 </div>
                 <div class="ru-field" id="blk-v6static" hidden>
-                  <div class="ru-flabel">IPv6 地址 / 前缀</div>
+                  <div class="ru-flabel">WAN IPv6 地址 / 前缀</div>
                   <input class="ru-in" id="v6-addr" placeholder="如 2001:db8:1::2/64">
+                  <div class="ru-flabel" style="margin-top:12px">LAN IPv6 前缀（用于向下分发）</div>
+                  <input class="ru-in" id="v6-prefix" placeholder="如 2001:db8:abcd::/64">
                 </div>
                 <div class="ru-field" id="blk-v6gw" hidden>
                   <div class="ru-flabel">IPv6 网关</div>
@@ -187,7 +189,7 @@
               <div class="ru-frow" style="margin-top:6px">
                 <div class="ru-field"><div class="ru-flabel">LAN IP 地址</div><input class="ru-in" id="lan-ip"></div>
                 <div class="ru-field" style="max-width:220px"><div class="ru-flabel">子网掩码</div>
-                  <select class="ru-in" id="lan-mask"><option>255.255.255.0</option><option>255.255.0.0</option></select>
+                  <select class="ru-in" id="lan-mask"><option>255.255.255.0</option><option>255.255.255.128</option><option>255.255.255.192</option><option>255.255.255.224</option></select>
                 </div>
               </div>
               <div class="ru-badmsg" id="msg-lanip"></div>
@@ -409,7 +411,7 @@
             </div>
 
             <div class="ru-card">
-              <div class="ru-chead"><div><h3>备份与恢复</h3><div class="ru-sub">备份文件包含上网、局域网、QoS 与端口转发等全部配置</div></div></div>
+              <div class="ru-chead"><div><h3>备份与恢复</h3><div class="ru-sub">备份包含上网、局域网、QoS 与端口转发等全部配置（不含宽带密码与管理密码，恢复后如需重新拨号请再填写）</div></div></div>
               <div class="ru-save" style="margin-top:10px">
                 <button class="ru-btn" id="btn-backup"><i data-lucide="download"></i>新建备份</button>
                 <button class="ru-btn" id="btn-restore"><i data-lucide="upload"></i>立即恢复</button>

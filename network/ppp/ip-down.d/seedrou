@@ -1,0 +1,7 @@
+#!/bin/sh
+# pppd ip-down.d 钩子：会话结束，清掉会话起点（概览页不再显示旧会话时长）
+rm -f /run/seedrou/ppp-session-start 2>/dev/null
+# 上游 DNS 也随之失效，交给下次拨号重建；保留旧文件会让 dnsmasq 指向已失效链路，删掉更干净
+rm -f /run/seedrou-dns/upstream.conf 2>/dev/null
+systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
+exit 0

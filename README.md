@@ -123,7 +123,7 @@ systemctl stop sing-box && ping 223.5.5.5   # 直连自动恢复
 ```
 seedrou/
 ├── install.sh / uninstall.sh     # 目标机部署
-├── VERSION                       # 0.1.0（beta 从 0.1 起版）
+├── VERSION                       # 0.1.1（beta 从 0.1 起版）
 ├── panel/                        # 管理面板（Python3 标准库 + 静态前端）
 │   ├── seedrou_panel.py api.py auth.py sysinfo.py
 │   └── static/ index.html app.css app.js icons.js
@@ -157,3 +157,5 @@ python3 panel/seedrou_panel.py --mock --port 8080
 - 「更新」容器按端口/卷/环境变量重建，特殊参数容器建议用 Compose 管理。
 - 硬盘温度需要 `smartmontools`（未安装时显示 —，不影响其他功能）。
 - 面板为 HTTP 明文（局域网惯例）；如需 HTTPS 可自行在前置反代加 TLS。
+- 备份包不含 secrets（管理密码/宽带密码），恢复后如需 PPPoE 拨号需重新输入密码。
+- LAN 子网掩码支持 /24–/30（DHCP 地址池按「IP 末段」配置的语义决定）。
