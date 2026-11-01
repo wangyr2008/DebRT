@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# sing-box 进入 failed 状态时的残留清理（由 OnFailure= 触发）。
+# 目标：硬崩溃（SIGKILL/OOM）留下的 auto_route/重定向残留不得影响不需要
+# sing-box 的客户端——直连立即恢复；sing-box 重启后会自动重建自己的表。
+set -u
+systemctl is-active --quiet sing-box.service && exit 0        # 活着就不动
+ip link show tun0 >/dev/null 2>&1 && exit 0                   # tun 还在（启动中），不动
+
+# nft 残留表（sing-box 重启时会自动重建）
+nft list tables 2>/dev/null | grep -q "table sing-box" && nft delete table sing-box 2>/dev/null
+
+# ip rule 残留（特征：fwmark 0x2023/0x2024 + 表 2022）
+while read -r prio rest; do
+    ip rule del priority "$prio" 2>/dev/null || true
+done < <(ip rule show | awk '$1 ~ /^(9000|9001)$/ && /0x202[34]/ {print $1}')
+
+# 表 2022 已空、无引用则一并删除
+ip rule show | grep -q "lookup 2022" || ip route flush table 2022 2>/dev/null || true
+logger -t seedrou-cleanup "sing-box failed 残留已清理，直连已恢复"
+exit 0

@@ -170,7 +170,9 @@ if [ -f /etc/systemd/system/sing-box.service ]; then
   mkdir -p /etc/systemd/system/sing-box.service.d
   install -m 644 "$SRC_DIR/systemd/sing-box.service.d/10-seedrou-wait-wan.conf" \
     /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf
-  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in（priv/wait-wan）"
+  install -m 755 "$SRC_DIR/priv/singbox-cleanup" "$LIB_DIR/singbox-cleanup"
+  install -m 644 "$SRC_DIR/systemd/seedrou-singbox-cleanup.service" /etc/systemd/system/
+  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in + 崩溃清理单元（priv/wait-wan, singbox-cleanup）"
 fi
 # Debian 自带 nftables.service 开机 flush ruleset —— 与 sing-box 表冲突，禁用之（见 COEXISTENCE.md）
 systemctl disable nftables.service >/dev/null 2>&1 || true
