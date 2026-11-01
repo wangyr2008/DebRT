@@ -294,24 +294,43 @@ do_apply_all() {
   stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
-    # /16 历史配置：自动迁移为 /24（保留 IP 与地址池），避免"重启即无 NAT"（复审 R-04）
-    if grep -q 'LAN_MASK_TOO_WIDE' "$man_json" 2>/dev/null; then
+    # 存量不兼容配置的自动纠正（四审 M-01/M-02/M-03）：
+    #   LAN_MASK_TOO_WIDE            → 掩码迁回 /24（保留 IP 与地址池）
+    #   V6_NATIVE_PPPPOE_UNSUPPORTED → IPv6 模式改为 NAT6（PPPoE 线路无 PD 客户端）
+    # 迁移成功则重试一次生成；任何其他失败原样透传错误并中止（保证不部署半套配置）。
+    if grep -qE 'LAN_MASK_TOO_WIDE|V6_NATIVE_PPPPOE_UNSUPPORTED' "$man_json" 2>/dev/null; then
       snapshot_lastgood "m$(date +%s)"
-      if python3 - <<'PYEOF'
+      MIGFIX="$(python3 - <<'INNERPYEOF'
 import json, os
 cfg = json.load(open("/etc/seedrou/config.json"))
-cfg.setdefault("lan", {})["mask"] = "255.255.255.0"
+fixes = []
+if cfg.get("lan", {}).get("mask") != "255.255.255.0":
+    cfg["lan"]["mask"] = "255.255.255.0"
+    fixes.append("LAN 掩码迁移为 /24")
+if cfg.get("wan", {}).get("mode") == "pppoe" and cfg.get("ipv6", {}).get("enabled") \
+        and cfg.get("ipv6", {}).get("mode") == "native":
+    cfg["ipv6"]["mode"] = "nat6"
+    fixes.append("PPPoE 线路的 IPv6 切换为 NAT6")
 json.dump(cfg, open("/etc/seedrou/.config.tmp", "w"), ensure_ascii=False, indent=1)
 os.replace("/etc/seedrou/.config.tmp", "/etc/seedrou/config.json")
-PYEOF
-      then
-        migrated="已自动把 LAN 子网掩码迁移为 255.255.255.0（历史 /16 配置不再受支持，地址池末段保持不变）"
+print("；".join(fixes))
+INNERPYEOF
+)"
+      if [ -n "$MIGFIX" ]; then
+        migrated="已自动修正不兼容的存量配置（$MIGFIX）"
         rm -rf "$stage"
         stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
         man_json="$stage/manifest.json"
+        if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+          # 迁移成功：继续正常流程（跳过下方 die）
+          :
+        else
+          cat "$man_json" 2>/dev/null
+          die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
+        fi
       fi
     fi
-    if [ ! -s "$man_json" ] || ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+    if [ -z "$migrated" ]; then
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
       die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
     fi
