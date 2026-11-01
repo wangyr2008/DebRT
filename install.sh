@@ -182,6 +182,10 @@ else
   systemctl daemon-reload
   systemctl enable --now dnsmasq.service >/dev/null 2>&1 || true
   systemctl enable --now networkd-dispatcher.service >/dev/null 2>&1 || true
+  # dnsmasq 崩溃秒级拉起（事件机制；全网 DNS 不能等 30 分钟 timer）
+  mkdir -p /etc/systemd/system/dnsmasq.service.d
+  install -m 644 "$SRC_DIR/systemd/dnsmasq.service.d/10-seedrou-restart.conf" \
+    /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf
   systemctl enable --now seedrou-dns-sync.service >/dev/null 2>&1 || true
   systemctl enable seedrou-apply.service >/dev/null 2>&1
   systemctl enable --now seedrou-converge.timer >/dev/null 2>&1
