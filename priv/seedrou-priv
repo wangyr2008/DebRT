@@ -988,7 +988,7 @@ sys.exit(0 if ok else 1)
   # 否则 sudo 调用的 /usr/local/lib/seedrou/seedrou-priv 直接消失
   cp -f /usr/local/lib/seedrou/priv/* /usr/local/lib/seedrou/ 2>/dev/null || true
   local exef pyf
-  for exef in seedrou-priv qdisc-apply wan-addr-sync; do
+  for exef in seedrou-priv qdisc-apply wan-addr-sync wait-wan singbox-cleanup wait-dns-upstream; do
     [ -f "/usr/local/lib/seedrou/$exef" ] && chmod 755 "/usr/local/lib/seedrou/$exef"
   done
   for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
