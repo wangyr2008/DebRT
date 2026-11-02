@@ -270,7 +270,7 @@ function renderOverview(st) {
   }
   $id("ov-ports").innerHTML = ph || '<div class="ru-empty">未检测到网口</div>';
   srRenderIcons($id("ov-ports"));
-  $id("ru-sidefoot").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理员已登录";
+  $id("ru-sidefoot-text").textContent = "管理员已登录";
   $id("ru-lsub").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理后台";
   $id("ru-sidever").textContent = "V" + (st.version || "—");
   $id("ver-now").value = "V" + (st.version || "—") + (st.build ? "（Build " + st.build + "）" : "");
@@ -1092,9 +1092,15 @@ $id("btn-factory").addEventListener("click", function () {
 });
 
 /* ===================== 启动 ===================== */
+$id("btn-panel-logout").addEventListener("click", function () {
+  API.post("/api/logout", {}).then(function () {
+    setLogged(false);
+    toast("ok", "已退出登录");
+  }).catch(apiFail);
+});
+
 API.get("/api/session").then(function (s) {
   setLogged(s.logged);
-  if (s.lan_ip) $id("ru-lsub").textContent = s.lan_ip + " · 管理后台";
 }).catch(function () { setLogged(false); });
 
 })();
