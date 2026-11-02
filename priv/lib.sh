@@ -83,8 +83,7 @@ try:
 except Exception:
     raise SystemExit
 try:
-    lines = open("/etc/network/interfaces").read().split("
-")
+    lines = open("/etc/network/interfaces").read().split("\n")
 except OSError:
     raise SystemExit
 drop = []
@@ -92,8 +91,7 @@ for n in names:
     drop += [f"allow-hotplug {n}", f"iface {n} inet dhcp"]
 out = [l for l in lines if l.strip() not in drop]
 if out != lines:
-    open("/etc/network/interfaces", "w").write("
-".join(out))
+    open("/etc/network/interfaces", "w").write("\n".join(out))
     print("ifupdown: removed stale config for managed ports", file=__import__("sys").stderr)
 PYX
     pkill -x dhcpcd 2>/dev/null || true
