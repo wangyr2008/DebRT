@@ -228,6 +228,9 @@ function renderOverview(st) {
   var badge = $id("ov-hero-badge");
   badge.textContent = st.system_ok ? "运行正常" : "部分异常";
   badge.className = "ru-badge" + (st.system_ok ? " green" : " red");
+  /* 上次收敛失败提示（converge_failed 标记由 apply/收敛落盘，成功时清除） */
+  var warnBox = $id("ov-converge-warn");
+  if (warnBox) warnBox.hidden = !st.converge_failed;
 
   $id("ov-devices").textContent = (st.stats.devices != null ? st.stats.devices : "—") + " 台";
   $id("ov-cpu").textContent = st.stats.cpu != null ? st.stats.cpu + "%" : "—";

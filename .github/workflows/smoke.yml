@@ -81,15 +81,8 @@ jobs:
         run: |
           OUT=$(sudo /usr/local/lib/seedrou/seedrou-priv config-get) || true
           echo "$OUT" | head -c 300; echo
-          echo "$OUT" | python3 -c '
-          import json,sys
-          d = json.load(sys.stdin)
-          assert d["ok"], d
-          cfg = d["config"]
-          assert cfg["wan"]["mode"] == "dhcp", cfg["wan"]
-          assert cfg["lan"]["ip"] == "192.168.10.1", cfg["lan"]
-          assert "has_password" in cfg["wan"], cfg["wan"]
-          print("config-get OK")' || { echo "$OUT" | sed 's/^/::error::CFG /'; exit 1; }
+          echo "$OUT" | python3 .github/scripts/check_config.py \
+            || { echo "$OUT" | sed 's/^/::error::CFG /'; exit 1; }
 
       - name: HTTP 登录 + /api/status 真实链路（2026-11 首装揭出 status 缺 ok 字段）
         run: |

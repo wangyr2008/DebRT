@@ -22,6 +22,10 @@ die() { # die CODE MESSAGE [HINT]
   json_out "{\"ok\":false,\"code\":\"$1\",\"message\":$(py_quote "$2"),\"hint\":$(py_quote "${3:-}")}"
   exit 1
 }
+
+# 收敛失败标记（供面板概览显示"上次收敛失败"提示；仅收敛流程手动调用）
+mark_converge_failed() { mkdir -p "$SEEDROU_RUN"; touch "$SEEDROU_RUN/converge-failed"; }
+clear_converge_failed() { rm -f "$SEEDROU_RUN/converge-failed" 2>/dev/null || true; }
 py_quote() { python3 -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$1"; }
 ok_out() { # ok_out [KEY VAL ...] -> {"ok":true,...}（值尝试按 JSON 解析，true/false/数字为真类型）
   python3 - "$@" <<'PYEOF'

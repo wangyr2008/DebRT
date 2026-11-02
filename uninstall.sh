@@ -30,7 +30,6 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf \
       /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
       /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/singbox-cleanup \
-      /etc/systemd/system/seedrou-singbox-cleanup.service /usr/local/lib/seedrou/singbox-cleanup \
       /etc/dnsmasq.d/seedrou.conf /etc/nftables.d/seedrou-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
       /etc/ppp/peers/seedrou

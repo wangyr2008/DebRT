@@ -340,13 +340,15 @@ INNERPYEOF
           :
         else
           cat "$man_json" 2>/dev/null
-          die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
+          mark_converge_failed
+    die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
         fi
       fi
     fi
     if [ -z "$migrated" ]; then
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
-      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+      mark_converge_failed
+    die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
     fi
   fi
 
@@ -371,12 +373,14 @@ PYEOF
       # 注意：收敛单元 Before=dnsmasq，此处同步 start dnsmasq 会与排序中的启动任务
       # 互相等待形成死锁（真机实测）——崩溃恢复由 dnsmasq 的 Restart=on-failure 负责
       maintain_singbox_dropin
+      clear_converge_failed
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0
     fi
   fi
 
   if ! pf_out="$(preflight_stage "$stage")"; then
+    mark_converge_failed
     die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
   fi
   apply_stage_files "$stage" "$man_json"
@@ -386,6 +390,7 @@ PYEOF
   wait_dnsmasq 15 || true
   sync_dns_upstream
   maintain_singbox_dropin
+  clear_converge_failed
   ok_out "message" "已按配置完成系统收敛${migrated:+。}$migrated"
 }
 
@@ -987,9 +992,14 @@ sys.exit(0 if ok else 1)
   # 而升级包保持 priv/ 子目录 —— 换目录后必须把 priv/* 拷回根并重整权限，
   # 否则 sudo 调用的 /usr/local/lib/seedrou/seedrou-priv 直接消失
   cp -f /usr/local/lib/seedrou/priv/* /usr/local/lib/seedrou/ 2>/dev/null || true
-  local exef pyf
-  for exef in seedrou-priv qdisc-apply wan-addr-sync wait-wan singbox-cleanup wait-dns-upstream; do
-    [ -f "/usr/local/lib/seedrou/$exef" ] && chmod 755 "/usr/local/lib/seedrou/$exef"
+  local exef
+  # 机制级：有 shebang 的文件一律 755（不再依赖白名单，新脚本不会漏）
+  for exef in /usr/local/lib/seedrou/priv/*; do
+    [ -f "$exef" ] && head -c 2 "$exef" | grep -q '#!' && chmod 755 "$exef"
+  done
+  for exef in /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/wait-dns-upstream \
+              /usr/local/lib/seedrou/singbox-cleanup /usr/local/lib/seedrou/qdisc-apply; do
+    [ -f "$exef" ] && chmod 755 "$exef"
   done
   for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
     [ -f "$pyf" ] && chmod 644 "$pyf"
@@ -1010,13 +1020,17 @@ sys.exit(0 if ok else 1)
               /usr/local/lib/seedrou/systemd/sing-box.service.d/*; do
       [ -f "$uf" ] && install -m 644 "$uf" "/etc/systemd/system/$(echo "$uf" | sed 's|.*systemd/||')"
     done
-    systemctl daemon-reload
     systemctl enable seedrou-panel.service seedrou-dns-sync.service seedrou-converge.timer >/dev/null 2>&1 || true
   fi
+  systemctl daemon-reload
   rm -rf "$old"
   # VERSION 同时落包根与 share/（审计 B-02：目录整体替换后 share/ 会消失，必须重建再拷贝）
   mkdir -p "$SEEDROU_SHARE"
   cp /usr/local/lib/seedrou/VERSION "$SEEDROU_SHARE/VERSION" 2>/dev/null || true
+  # 升级后自检并落日志（七审建议：升级目前只验证面板能起）
+  /usr/local/lib/seedrou/seedrou-priv selftest >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
+    logger -t seedrou-upgrade "selftest 有失败项，详见 /var/log/seedrou-upgrade-selftest.log"
+
   # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
   systemctl daemon-reload
   systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" seedrou-converge.service 2>/dev/null \
@@ -1168,6 +1182,7 @@ for vp in ("/usr/local/lib/seedrou/share/VERSION", "/usr/local/lib/seedrou/VERSI
         continue
 print(json.dumps({
     "ok": True,
+    "converge_failed": os.path.exists("/run/seedrou/converge-failed"),
     "wan": wan, "ipv6": v6, "ports": ports,
     "lan": cfg.get("lan", {}),
     "version": ver,
