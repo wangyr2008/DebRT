@@ -19,7 +19,7 @@ jobs:
     env:
       SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装依赖（不装 podman，走 --no-podman 路径）
         run: |

@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 校验 VERSION 与 tag 一致
         run: |
@@ -38,9 +38,9 @@ jobs:
           echo "VER=$VER" >> "$GITHUB_ENV"
 
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            seedrou-${{ env.VER }}.tar.gz
-            seedrou-${{ env.VER }}.tar.gz.sha256
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ env.VER }}" \
+            "seedrou-${{ env.VER }}.tar.gz" "seedrou-${{ env.VER }}.tar.gz.sha256" \
+            --title "SeedRou v${{ env.VER }}" --generate-notes --repo "$GITHUB_REPOSITORY"
