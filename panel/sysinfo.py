@@ -22,6 +22,8 @@ def init(mock=False):
 
 # ---------------- mock 数据 ----------------
 _MOCK_STATUS = {
+    "ok": True,
+    "converge_failed": False,
     "wan": {"mode": "pppoe", "state": "up", "ip": "219.142.78.166", "mask": "255.255.255.0",
             "gw": "219.142.78.1", "session_s": 2 * 86400 + 14 * 3600, "connecting": False,
             "dns": ["223.5.5.5", "119.29.29.29"]},
