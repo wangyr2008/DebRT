@@ -368,8 +368,8 @@ PYEOF
       nft list table $NFT_TABLE >/dev/null 2>&1 || svc_nft
       svc_cake
       sync_dns_upstream
-      # 服务存活兜底：systemctl start 对已启动单元是空操作，崩溃则拉起（无闪断）
-      systemctl is-active --quiet dnsmasq.service || systemctl start dnsmasq.service
+      # 注意：收敛单元 Before=dnsmasq，此处同步 start dnsmasq 会与排序中的启动任务
+      # 互相等待形成死锁（真机实测）——崩溃恢复由 dnsmasq 的 Restart=on-failure 负责
       maintain_singbox_dropin
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0

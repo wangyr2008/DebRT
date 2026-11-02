@@ -1,8 +1,9 @@
 [Unit]
 Description=SeedRou 开机配置收敛（幂等重放 desired state）
+# 不设 Before=dnsmasq：收敛/全量路径里对 dnsmasq 的 restart 会与该排序形成
+# 启动任务死锁（真机实测）；dnsmasq 若早于配置启动，路径内的 restart 会纠正它
 After=systemd-networkd.service
-Wants=systemd-networkd.service network-online.target
-Before=dnsmasq.service
+Wants=systemd-networkd.service
 
 [Service]
 Type=oneshot

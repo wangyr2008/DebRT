@@ -223,8 +223,6 @@ maintain_singbox_dropin() {
   cat > "$di" <<'DPEOF'
 # 由 SeedRou 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
 [Unit]
-After=network-online.target
-Wants=network-online.target
 OnFailure=seedrou-singbox-cleanup.service
 [Service]
 ExecStartPre=/usr/local/lib/seedrou/wait-wan
