@@ -992,10 +992,12 @@ sys.exit(0 if ok else 1)
   # 而升级包保持 priv/ 子目录 —— 换目录后必须把 priv/* 拷回根并重整权限，
   # 否则 sudo 调用的 /usr/local/lib/seedrou/seedrou-priv 直接消失
   cp -f /usr/local/lib/seedrou/priv/* /usr/local/lib/seedrou/ 2>/dev/null || true
-  local exef
-  # 机制级：有 shebang 的文件一律 755（不再依赖白名单，新脚本不会漏）
+  local exef base
+  # 机制级：有 shebang 的文件一律 755（不再依赖白名单，新脚本不会漏）。
+  # 注意 chmod 的是根目录副本（sudo 实际调用路径），不是 priv/ 子目录里的那份
   for exef in /usr/local/lib/seedrou/priv/*; do
-    [ -f "$exef" ] && head -c 2 "$exef" | grep -q '#!' && chmod 755 "$exef"
+    [ -f "$exef" ] && head -c 2 "$exef" | grep -q '#!' && \
+      chmod 755 "/usr/local/lib/seedrou/$(basename "$exef")"
   done
   for exef in /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/wait-dns-upstream \
               /usr/local/lib/seedrou/singbox-cleanup /usr/local/lib/seedrou/qdisc-apply; do
