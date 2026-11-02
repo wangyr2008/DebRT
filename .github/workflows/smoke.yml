@@ -127,6 +127,9 @@ jobs:
       - name: 租约合并单测（损坏行 / 永久 / 静态徽标）
         run: python3 .github/scripts/test_leases.py
 
+      - name: 内嵌 Python 编译检查（十一审 P1 回归守卫）
+        run: python3 .github/scripts/check_inline_py.py
+
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
         run: |
           VER=$(tr -d '[:space:]' < VERSION)
