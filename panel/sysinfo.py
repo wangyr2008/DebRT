@@ -118,6 +118,23 @@ def cpu_pct():
         if d_total > 0:
             return max(0, min(100, round(100 * (1 - d_idle / d_total))))
         return None
+    if _cpu_prev is None:
+        # 首次调用：短间隔补采一次，立即出值而不是显示 "-"（用户实测反馈）
+        time.sleep(0.2)
+        try:
+            with open("/proc/stat") as f:
+                parts2 = f.readline().split()[1:]
+            vals2 = [int(x) for x in parts2]
+            idle2 = vals2[3] + (vals2[4] if len(vals2) > 4 else 0)
+            total2 = sum(vals2)
+        except Exception:
+            _cpu_prev = (now, idle, total)
+            return None
+        d_idle = idle2 - idle
+        d_total = total2 - total
+        _cpu_prev = (now, idle2, total2)
+        if d_total > 0:
+            return max(0, min(100, round(100 * (1 - d_idle / d_total))))
     _cpu_prev = (now, idle, total)
     return None
 

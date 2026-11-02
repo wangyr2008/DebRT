@@ -28,7 +28,8 @@
           <button class="ru-navitem" data-nav="tools"><i data-lucide="wrench"></i>其他工具</button>
           <button class="ru-navitem" data-nav="backup"><i data-lucide="database-backup"></i>备份与升级</button>
         </nav>
-        <div class="ru-sidefoot" id="ru-sidefoot">192.168.10.1 · 管理员已登录</div>
+        <div class="ru-sidefoot" id="ru-sidefoot"><span id="ru-sidefoot-ip">192.168.10.1</span> · 管理员已登录</div>
+        <div style="margin-top:8px"><button class="ru-linkbtn" id="btn-panel-logout" style="font-size:12px;padding:2px 0">登出</button></div>
       </aside>
 
       <main class="ru-main">
@@ -436,7 +437,7 @@
     <div class="ru-lcard">
       <div class="ru-llogo"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgl)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></div>
       <h2>SeedRou</h2>
-      <div class="ru-lsub" id="ru-lsub">192.168.10.1 · 管理后台</div>
+      <div class="ru-lsub" id="ru-lsub">管理后台</div>
       <form id="ru-loginform" autocomplete="off">
         <div class="ru-flabel">管理密码</div>
         <input class="ru-in" type="password" id="ru-loginpwd" placeholder="请输入管理密码" autocomplete="current-password">

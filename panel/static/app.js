@@ -236,7 +236,9 @@ function renderOverview(st) {
   $id("ov-cpu").textContent = st.stats.cpu != null ? st.stats.cpu + "%" : "—";
   $id("ov-cputemp").textContent = st.stats.cpu_temp != null ? st.stats.cpu_temp + "℃" : "—";
   $id("ov-mem").textContent = st.stats.mem != null ? st.stats.mem + "%" : "—";
-  $id("ov-disktemp").textContent = st.stats.disk_temp != null ? st.stats.disk_temp + "℃" : "—";
+  var diskEl = $id("ov-disktemp");
+  diskEl.textContent = st.stats.disk_temp != null ? st.stats.disk_temp + "℃" : "—";
+  diskEl.title = st.disk_temp_note || (st.stats.disk_temp != null ? "SMART 读取" : "需安装 smartmontools");
   $id("ov-uptime").textContent = st.stats.uptime_s != null ? fmtDur(st.stats.uptime_s) : "—";
 
   /* 只读上网信息 */
@@ -268,7 +270,7 @@ function renderOverview(st) {
   }
   $id("ov-ports").innerHTML = ph || '<div class="ru-empty">未检测到网口</div>';
   srRenderIcons($id("ov-ports"));
-  $id("ru-sidefoot").textContent = (st.lan && st.lan.ip ? st.lan.ip : "") + " · 管理员已登录";
+  $id("ru-sidefoot").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理员已登录";
   $id("ru-lsub").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理后台";
   $id("ru-sidever").textContent = "V" + (st.version || "—");
   $id("ver-now").value = "V" + (st.version || "—") + (st.build ? "（Build " + st.build + "）" : "");

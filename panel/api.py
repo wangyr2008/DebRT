@@ -254,8 +254,6 @@ def get_status(body, headers):
         _status_cache["ts"] = now
         _status_cache["data"] = st
     st["version"] = _version()  # mock/真实统一由 VERSION 文件决定（复审 R-06）
-    if not MOCK:
-        st.setdefault("wan", {}).setdefault("dns", _wan_dns())
     stats = {
         "devices": st.get("leases_count"),
         "cpu": None if MOCK else sysinfo.cpu_pct(),

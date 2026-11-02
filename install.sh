@@ -40,7 +40,7 @@ die() { c_err "$*"; exit 1; }
 c_info "安装软件包（nftables dnsmasq ppp python3 等，视网络情况 1-5 分钟）..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || c_warn "apt update 失败（软件源可能暂不可达），尝试直接安装"
-PKGS=(nftables dnsmasq ppp pppoe python3 curl ca-certificates sudo ethtool networkd-dispatcher iproute2)
+PKGS=(nftables dnsmasq ppp pppoe python3 curl ca-certificates sudo ethtool networkd-dispatcher iproute2 smartmontools)
 [ "$NO_PODMAN" = "0" ] && PKGS+=(podman podman-compose uidmap)
 apt-get install -y -qq "${PKGS[@]}" || die "软件包安装失败，请检查软件源（/etc/apt/sources.list）与网络"
 

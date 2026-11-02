@@ -12,7 +12,7 @@ files = []
 for pat in ("priv/*", "install.sh", "uninstall.sh", "network/ppp/*/*", "network/dispatcher/*"):
     files += [f for f in sorted(glob.glob(pat)) if os.path.isfile(f)]
 
-pat = re.compile(r"python3\s+-\s*\S*\s*<<'(\w+)'\n(.*?)\n\1\b", re.S)
+pat = re.compile(r"python3\s+-[^\n]*?<<'(\w+)'\n(.*?)\n\1\b", re.S)
 bad, total = [], 0
 for f in files:
     src = open(f, encoding="utf-8").read()

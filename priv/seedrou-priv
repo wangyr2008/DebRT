@@ -1190,6 +1190,14 @@ try:
         pass
     if cached is None:
         import shutil as _sh
+        if not _sh.which("smartctl"):
+            with open("/run/seedrou/disk-unavailable", "w") as f:
+                f.write("smartmontools 未安装")
+        elif not (json.loads(subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout or "{}").get("devices") or []):
+            with open("/run/seedrou/disk-unavailable", "w") as f:
+                f.write("未找到磁盘")
+        else:
+            pass  # 正常采集，见下
         if _sh.which("smartctl"):
             scan = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
             dev = (json.loads(scan or "{}").get("devices") or [{}])[0].get("name", "")
@@ -1222,6 +1230,7 @@ print(json.dumps({
     "version": ver,
     "system_ok": bool(dnsmasq_ok and networkd_ok and nft_ok),
     "disk_temp": disk_temp,
+    "disk_temp_note": (open("/run/seedrou/disk-unavailable").read().strip() if os.path.exists("/run/seedrou/disk-unavailable") else ""),
     "leases_count": leases,
 }, ensure_ascii=False))
 PYEOF
