@@ -15,7 +15,7 @@ jobs:
     # 钉 24.04：26 的 runner 可能带 sudo-rs，其 visudo 连标准的 Defaults logfile= 都拒
     # （CI 实测）；真实目标是 Debian 13（经典 sudo 1.9.16），24.04 行为更接近
     runs-on: ubuntu-24.04
-    timeout-minutes: 15    # 防止单步挂住把 job 拖到默认 6 小时
+    timeout-minutes: 25    # 防止挂死拖到默认 6 小时；15 曾两次撞上 runner 拥塞（排队5分+慢跑15分被取消）
     env:
       SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
     steps:
