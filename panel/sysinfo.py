@@ -13,6 +13,7 @@ _lease_file = "/var/lib/misc/dnsmasq.leases"   # Debian dnsmasq 默认租约路�
 _notes_file = "/var/lib/seedrou/notes.json"
 
 _cpu_prev = None  # (ts, idle, total)
+_cpu_last = None  # 上一次成功计算的占用率（采样间隔过短时复用）
 
 
 def init(mock=False):
@@ -101,7 +102,7 @@ def mock_config():
 
 # ---------------- 真实采集 ----------------
 def cpu_pct():
-    global _cpu_prev
+    global _cpu_prev, _cpu_last
     try:
         with open("/proc/stat") as f:
             parts = f.readline().split()[1:]
@@ -109,15 +110,15 @@ def cpu_pct():
         idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
         total = sum(vals)
     except Exception:
-        return None
+        return _cpu_last
     now = time.time()
     if _cpu_prev and now - _cpu_prev[0] >= 0.5:
         d_idle = idle - _cpu_prev[1]
         d_total = total - _cpu_prev[2]
         _cpu_prev = (now, idle, total)
         if d_total > 0:
-            return max(0, min(100, round(100 * (1 - d_idle / d_total))))
-        return None
+            _cpu_last = max(0, min(100, round(100 * (1 - d_idle / d_total))))
+        return _cpu_last
     if _cpu_prev is None:
         # 首次调用：短间隔补采一次，立即出值而不是显示 "-"（用户实测反馈）
         time.sleep(0.2)
@@ -134,8 +135,11 @@ def cpu_pct():
         d_total = total2 - total
         _cpu_prev = (now, idle2, total2)
         if d_total > 0:
-            return max(0, min(100, round(100 * (1 - d_idle / d_total))))
+            _cpu_last = max(0, min(100, round(100 * (1 - d_idle / d_total))))
+        return _cpu_last
+    # 采样间隔 <0.5s（快速切页/连续调用）：保留基准，返回上次计算值
     _cpu_prev = (now, idle, total)
+    return _cpu_last
     return None
 
 

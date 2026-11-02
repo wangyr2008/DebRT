@@ -790,7 +790,13 @@ $id("btn-podman-toggle").addEventListener("click", function () {
     loadPodman(); loadContainers();
   }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
 });
-$id("btn-ct-refresh").addEventListener("click", function () { loadContainers(); loadImages(); });
+$id("btn-ct-refresh").addEventListener("click", function () {
+  var btn = this;
+  btn.disabled = true;
+  Promise.all([loadContainers(), loadImages()]).then(function () {
+    btn.disabled = false;
+  }).catch(function () { btn.disabled = false; loadPodman(); });
+});
 
 function loadContainers() {
   return API.get("/api/podman/containers").then(function (data) {
@@ -1101,6 +1107,7 @@ $id("btn-panel-logout").addEventListener("click", function () {
 
 API.get("/api/session").then(function (s) {
   setLogged(s.logged);
+  if (s.version) $id("ru-lsub").textContent = "管理后台 · v" + s.version;
 }).catch(function () { setLogged(false); });
 
 })();
