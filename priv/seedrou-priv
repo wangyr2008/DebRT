@@ -340,15 +340,15 @@ INNERPYEOF
           :
         else
           cat "$man_json" 2>/dev/null
-          mark_converge_failed
-    die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
+      mark_converge_failed
+      die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
         fi
       fi
     fi
     if [ -z "$migrated" ]; then
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
-      mark_converge_failed
-    die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+        mark_converge_failed
+      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
     fi
   fi
 
@@ -380,8 +380,8 @@ PYEOF
   fi
 
   if ! pf_out="$(preflight_stage "$stage")"; then
-    mark_converge_failed
-    die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
+      mark_converge_failed
+      die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
   fi
   apply_stage_files "$stage" "$man_json"
   cleanup_stale_port_networks

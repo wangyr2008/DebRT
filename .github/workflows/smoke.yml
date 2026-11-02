@@ -126,6 +126,8 @@ jobs:
       - name: 升级后 VERSION 与登录仍正常（B-02 + 会话密钥未丢）
         run: |
           sleep 1
+          sudo test -x /usr/local/lib/seedrou/seedrou-priv \
+            || { echo "::error::seedrou-priv 丢失执行位（扁平化回归）"; exit 1; }
           ls -la /usr/local/lib/seedrou/share/ /usr/local/lib/seedrou/VERSION 2>&1 | sed 's/^/::error::VDIR /'
           VER_LOCAL="$(tr -d '[:space:]' < VERSION)"
           VER_INSTALLED="$(cat /usr/local/lib/seedrou/share/VERSION 2>/dev/null || echo MISSING)"
