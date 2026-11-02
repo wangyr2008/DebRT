@@ -251,6 +251,9 @@ sync_dns_upstream() {
   [ -n "$wan_if" ] || return 0
   for if in ${wan_if//,/ }; do
     ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' && "$hook" "$if" routable
+    # resolv.conf 断言：dhcpcd 等可能覆写它（真机首装实测）——收敛时顺带修正
+    grep -q "nameserver 127.0.0.1" /etc/resolv.conf 2>/dev/null || \
+      printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:2\n' > /etc/resolv.conf 2>/dev/null || true
   done
   return 0
 }

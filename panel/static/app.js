@@ -272,7 +272,6 @@ function renderOverview(st) {
   $id("ru-lsub").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理后台";
   $id("ru-sidever").textContent = "V" + (st.version || "—");
   $id("ver-now").value = "V" + (st.version || "—") + (st.build ? "（Build " + st.build + "）" : "");
-  $id("ver-badge").textContent = "V" + (st.version || "—");
 }
 loaders.overview = refreshStatus;
 loaders.network = refreshConfig;

@@ -219,16 +219,23 @@ def leases(static_list):
                 parts = line.split()
                 if len(parts) < 4:
                     continue
-                exp, mac, ip, host = int(parts[0]), parts[1].upper(), parts[2], parts[3]
+                try:
+                    exp = int(parts[0])           # 损坏行直接跳过，不让整页 500
+                except ValueError:
+                    continue
+                mac, ip, host = parts[1].upper(), parts[2], parts[3]
+                # expiry=0 是 dnsmasq 的无限租约，显示"永久"
+                left = "永久" if exp == 0 else fmt_lease_left(exp, now)
                 items[mac] = {"name": None if host == "*" else host, "ip": ip, "mac": mac,
-                              "static": False, "lease_text": fmt_lease_left(exp, now)}
+                              "static": False, "lease_text": left}
     except FileNotFoundError:
         pass
     for s in static_list:
-        mac = s["mac"].upper()
-        it = items.get(mac) or {"name": None, "ip": s["ip"], "mac": mac, "lease_left": ""}
-        it.update({"static": True, "name": s["name"], "ip": s["ip"]})
-        items[mac] = it
+        mac = str(s.get("mac", "")).upper()   # 手改配置可能缺 mac 字段——容错而非 500
+        if not mac or mac in items:
+            continue
+        items[mac] = {"name": s.get("name", ""), "ip": s.get("ip", ""), "mac": mac,
+                      "static": True, "lease_text": ""}
     out = []
     for mac in sorted(items):
         it = items[mac]

@@ -176,6 +176,14 @@ fi
 # singbox-cleanup 单元/脚本无条件安装（幂等无害；后装 sing-box 的用户由 converge 补 drop-in）
 install -m 755 "$SRC_DIR/priv/singbox-cleanup" "$LIB_DIR/singbox-cleanup"
 install -m 644 "$SRC_DIR/systemd/seedrou-singbox-cleanup.service" /etc/systemd/system/
+# 接管网口：清理 ifupdown/dhcpcd 残留——否则 dhcpcd 会在网桥端口上跑 DHCP 客户端、
+# 覆写 /etc/resolv.conf、留下指向 link-local 的死默认路由（真机首装实测）
+if [ -f /etc/network/interfaces ] && [ -f "$ETC_DIR/config.json" ]; then
+  for IF in $(python3 -c 'import json;print(" ".join(p["name"] for p in json.load(open("'$ETC_DIR'/config.json")).get("ports",[])))' 2>/dev/null); do
+    sed -i "\#^allow-hotplug ${IF}\$#d; \#^iface ${IF} inet #d" /etc/network/interfaces 2>/dev/null || true
+  done
+fi
+pkill -x dhcpcd 2>/dev/null || true
 # Debian 自带 nftables.service 开机 flush ruleset —— 与 sing-box 表冲突，禁用之（见 COEXISTENCE.md）
 systemctl disable nftables.service >/dev/null 2>&1 || true
 if [ "$SMOKE" = "1" ]; then

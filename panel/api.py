@@ -120,7 +120,11 @@ def _save_upload(body: bytes, prefix: str) -> str:
 
 
 # ---------------- 路由 ----------------
+_status_cache = {"ts": 0.0, "data": None}
+
+
 def handle(method, path, body: bytes, headers, client_ip=""):
+    path = path.split("?", 1)[0]        # 带查询串的 /api/xxx 一律 404 属于埋雷（审计 3）
     route = path.rstrip("/") or "/"
     q = route[len("/api"):] if route.startswith("/api") else route
 
@@ -135,6 +139,12 @@ def handle(method, path, body: bytes, headers, client_ip=""):
     if not auth.logged_in(headers):
         raise ApiError(401, "UNAUTH", "登录已过期", "请重新登录")
 
+    if method == "HEAD":
+        raise ApiError(405, "METHOD_NOT_ALLOWED", "HEAD 不支持", "扫描器请使用 GET；本接口无副作用") if q == "/backup" else None
+    if method == "HEAD":
+        # HEAD 会触发与 GET 相同的处理器——/api/backup 每次 HEAD 都会 root 打包一次（审计 2）
+        if q == "/backup":
+            raise ApiError(405, "METHOD_NOT_ALLOWED", "HEAD 不支持", "扫描器请使用 GET")
     if method == "GET":
         table = {
             "/status": get_status, "/config": get_config, "/leases": get_leases,
@@ -231,7 +241,16 @@ def _wan_dns():
 
 
 def get_status(body, headers):
-    st = sysinfo.mock_status() if MOCK else priv("status", timeout=30)
+    # 3 秒缓存：前端 8s 轮询 + 每次内部 ~9 个子进程，缓存显著降载且无感（移交清单性能项）
+    now = time.time()
+    if now - _status_cache["ts"] < 3 and _status_cache["data"] is not None:
+        st = _status_cache["data"]
+    else:
+        st = sysinfo.mock_status() if MOCK else priv("status", timeout=30)
+        _status_cache["ts"] = now
+        _status_cache["data"] = st
+    if not MOCK:
+        st.setdefault("wan", {}).setdefault("dns", _wan_dns())
     st["version"] = _version()  # mock/真实统一由 VERSION 文件决定（复审 R-06）
     if not MOCK:
         st.setdefault("wan", {}).setdefault("dns", _wan_dns())
@@ -438,6 +457,20 @@ def mock_priv(args, input_text):
         section = rest[0]
         cfg = sysinfo._MOCK_CONFIG  # 直接改模块态：mock 保存可持久（审计 C-09）
         data = json.loads(input_text or "{}")
+        # mock 也过一遍真实校验（审计 6：此前 mock 下校验分支全部不可达）；
+        # validate.py 读 /etc/seedrou/config.json 取 cur，缺失时以 None 安全跳过交叉校验
+        import os as _os
+        vpy = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "priv", "validate.py")
+        if _os.path.exists(vpy):
+            p = subprocess.run([sys.executable, vpy, section], input=json.dumps(data, ensure_ascii=False),
+                               capture_output=True, text=True, timeout=20)
+            if p.returncode != 0:
+                try:
+                    err = json.loads(p.stdout or "{}")
+                except json.JSONDecodeError:
+                    err = {}
+                raise ApiError(400, err.get("code", "VALIDATE"),
+                               err.get("message", "校验失败"), err.get("hint", ""))
         if section == "bind":
             cfg["ports"] = data.get("ports", cfg["ports"])
         elif section == "wan":

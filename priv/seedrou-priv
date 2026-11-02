@@ -127,20 +127,29 @@ do_config_set() {
     printf '%s\n' "$norm"; rm -f "$in_json"; exit 1
   fi
 
-  # 1.5) 仅保存升级源：不涉及网络应用
+  # 1.5) 仅保存升级源：不涉及网络应用（norm 写临时文件再传，与主路径一致——
+  # 此前把 norm JSON 字符串当文件路径 open()，保存静默失败，真机实测）
   if [ "$section" = "upgrade" ]; then
-    python3 - "$in_json" "$norm" <<'PYEOF'
-import json, sys
-norm = json.load(open(sys.argv[2]))["data"]
+    local norm_file
+    norm_file="$(mktemp /run/seedrou/norm.XXXXXX)"
+    chmod 600 "$norm_file"
+    printf '%s' "$norm" > "$norm_file"
+    if ! python3 - "$in_json" "$norm_file" <<'PYEOF'
+import json, sys, os
+in_file, norm_file = sys.argv[1], sys.argv[2]
+norm = json.load(open(norm_file))["data"]
 cfg = json.load(open("/etc/seedrou/config.json"))
 cfg["upgrade"] = norm
 tmp = "/etc/seedrou/.config.tmp"
 json.dump(cfg, open(tmp, "w"), ensure_ascii=False, indent=1)
-import os
 os.chmod(tmp, 0o644)
 os.replace(tmp, "/etc/seedrou/config.json")
 PYEOF
-    rm -f "$in_json"
+    then
+      rm -f "$in_json" "$norm_file"
+      die "MERGE" "升级源保存失败" "请重试；若持续出现请截图反馈"
+    fi
+    rm -f "$in_json" "$norm_file"
     ok_out "message" "升级源已保存"
     exit 0
   fi
@@ -479,30 +488,36 @@ print(json.dumps({"ok": True, "containers": out}))' ;;
         *) die "USAGE" "容器操作需为 start|stop|restart|update|remove" ;;
       esac
       case "$cact" in
-        start|stop|restart) podman "$cact" "$cname" >/dev/null 2>&1 || die "CT_FAIL" "容器 $cname ${cact} 失败" "可在系统上执行 podman logs --tail 20 $cname 查看原因" ;;
+        start|restart)
+          if ! podman "$cact" "$cname" >/dev/null 2>&1; then
+            # OCI/cgroup 阶段的失败 logs 是空的，真实原因在 State.Error（真机实测）
+            local serr; serr="$(podman inspect -f '{{.State.Error}}' "$cname" 2>/dev/null | cut -c1-200)"
+            die "CT_FAIL" "容器 $cname ${cact} 失败" "原因：${serr:-无（可执行 podman logs --tail 20 $cname 查看）}"
+          fi ;;
+        stop) podman stop -t 10 "$cname" >/dev/null 2>&1 || die "CT_FAIL" "容器 $cname 停止失败" "" ;;
         remove) podman rm -f "$cname" >/dev/null 2>&1 || die "CT_FAIL" "删除容器失败" "请确认容器名正确" ;;
         update) do_podman_update "$cname" ;;
       esac
       ok_out "message" "容器 $cname ${label}" ;;
     list-images)
-      podman images --format '{{.Names}}\t{{.Size}}' | podman_json '
-import sys, json
-imgs = {}
-order = []
-for line in sys.stdin:
-    name, size = (line.rstrip("\n").split("\t") + [""] * 2)[:2]
-    if not name: continue
-    tag = name.split(",")[0]
-    if tag not in imgs:
-        imgs[tag] = {"name": tag, "size": size, "used_by": 0}
-        order.append(tag)
+      # 按镜像 ID 匹配使用状态：容器 .Image 的拼写与 images .Names 首个 tag 经常
+      # 不一致，按名称匹配会误报"未使用"（真机实测 sub-store 在用却显示未使用）
+      podman images --format '{{.ID}}\t{{.Names}}\t{{.Size}}' | podman_json '
+import sys, json, subprocess
+def short(i): return (i or "")[:12]
 used = {}
-for line in __import__("subprocess").run(["podman","ps","-a","--format","{{.Image}}"],capture_output=True,text=True).stdout.splitlines():
-    used[line.strip()] = used.get(line.strip(), 0) + 1
-for it in imgs.values():
-    it["used_by"] = used.get(it["name"], 0)
-    it["size_text"] = it.pop("size")
-print(json.dumps({"ok": True, "images": list(imgs.values())}))' ;;
+for line in subprocess.run(["podman","ps","-a","--format","{{.ImageID}}"],capture_output=True,text=True).stdout.splitlines():
+    k = short(line.strip())
+    if k: used[k] = used.get(k, 0) + 1
+imgs, order = {}, []
+for line in sys.stdin:
+    iid, names, size = (line.rstrip("\n").split("\t") + [""] * 3)[:3]
+    k = short(iid)
+    if not k or k in imgs: continue
+    first_tag = (names.split(",")[0] if names else "") or "<none>"
+    imgs[k] = {"name": first_tag, "id": k, "size_text": size, "used_by": used.get(k, 0)}
+    order.append(k)
+print(json.dumps({"ok": True, "images": [imgs[k] for k in order]}))' ;;
     pull)
       local img="${1:-}"
       [ -n "$img" ] || die "USAGE" "缺少镜像名"
@@ -529,10 +544,20 @@ print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || e
       local logf logtail
       logf="$(mktemp /run/seedrou/compose.XXXXXX)"
       if ! podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou up -d >"$logf" 2>&1; then
+        # pod 建立时 cgroup slice 竞态：报 OCI "No such file or directory" 且容器
+        # State=created——重试一次即好（真机实测一次）
+        if grep -qiE "no such file or directory|OCI runtime" "$logf" && \
+           grep -qE "State=created|created" "$(podman ps -a --filter label=com.docker.compose.project=seedrou --format '{{.Names}}' 2>/dev/null | head -1 | xargs -r podman inspect -f '{{.State.Status}} {{.State.Error}}' 2>/dev/null)" 2>/dev/null; then
+          sleep 2
+          podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou up -d >>"$logf" 2>&1 || true
+        fi
+      fi
+      if ! podman ps -a --filter label=com.docker.compose.project=seedrou --format '{{.Names}}' | head -1 | xargs -r test -n; then
         logtail="$(tail -n 4 "$logf" | tr '\n' ' ' | cut -c1-260)"
         rm -f "$logf"
         die "COMPOSE_FAIL" "Compose 部署失败" "常见原因：语法错误、镜像名/标签不存在、端口被占用。日志：${logtail}"
       fi
+      rm -f "$logf"
       logtail="$(tail -n 3 "$logf" | tr '\n' ' ' | cut -c1-200)"
       rm -f "$logf"
       ok_out "message" "Compose 已部署" "log_tail" "$logtail" ;;
@@ -578,6 +603,13 @@ do_tailscale_ops() {
   require_root
   local action="${1:-}"
   case "$action" in
+    start)
+      systemctl is-enabled --quiet tailscaled.service 2>/dev/null || systemctl enable --quiet tailscaled.service 2>/dev/null || true
+      systemctl start tailscaled.service
+      ok_out "message" "Tailscale 已启动" ;;
+    stop)
+      systemctl stop tailscaled.service
+      ok_out "message" "Tailscale 已停止" ;;
     status)
       if ! command -v tailscale >/dev/null 2>&1; then ok_out "installed" "false"; exit 0; fi
       local ver running state acc ip host auth_url=""
@@ -638,7 +670,7 @@ print("TS_HOST=" + shlex.quote(str(self_.get("DNSName") or "").rstrip(".").split
       rm -f /run/seedrou/ts-login.log
       tailscale logout >/dev/null 2>&1 || die "TS_LOGOUT_FAIL" "登出失败" "请确认 tailscaled 正在运行"
       ok_out "message" "已登出 Tailscale" ;;
-    *) die "USAGE" "tailscale-ops 需要 status|install|login|logout" ;;
+    *) die "USAGE" "tailscale-ops 需要 status|install|login|logout|start|stop" ;;
   esac
 }
 
@@ -1208,6 +1240,10 @@ try:
     add("config.json 存在且可解析", True)
 except Exception as e:
     add("config.json 存在且可解析", False, f"解析失败：{e}；可从 /var/lib/seedrou/lastgood 恢复")
+if os.path.exists("/etc/resolv.conf"):
+    rc = open("/etc/resolv.conf").read()
+    add("/etc/resolv.conf 指向本机 dnsmasq", "nameserver 127.0.0.1" in rc,
+        "被 dhcpcd 等覆写；重跑安装或收敛会自动修复")
 add("secrets.json 存在", os.path.exists("/etc/seedrou/secrets.json"))
 for c in ("nft", "dnsmasq", "pppd", "curl", "python3", "ip"):
     add(f"命令可用: {c}", bool(shutil.which(c)), f"apt install {c}" if c in ("nft", "dnsmasq", "pppd") else "")
