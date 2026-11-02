@@ -72,6 +72,34 @@ acquire_lock() {
   _SEEDROU_LOCK_HELD=1
 }
 
+# 接管网口时清理 /etc/network/interfaces 里的 ifupdown 残留（真机首装实测：
+# dhcpcd 会在网桥端口上跑 DHCP 客户端并覆写 resolv.conf）
+cleanup_ifupdown_for_ports() {
+    [ -f /etc/network/interfaces ] || return 0
+    python3 - <<'PYX'
+import json
+try:
+    names = [p["name"] for p in json.load(open("/etc/seedrou/config.json")).get("ports", [])]
+except Exception:
+    raise SystemExit
+try:
+    lines = open("/etc/network/interfaces").read().split("
+")
+except OSError:
+    raise SystemExit
+drop = []
+for n in names:
+    drop += [f"allow-hotplug {n}", f"iface {n} inet dhcp"]
+out = [l for l in lines if l.strip() not in drop]
+if out != lines:
+    open("/etc/network/interfaces", "w").write("
+".join(out))
+    print("ifupdown: removed stale config for managed ports", file=__import__("sys").stderr)
+PYX
+    pkill -x dhcpcd 2>/dev/null || true
+    return 0
+}
+
 # 清理已从配置中移除的网口对应的 networkd 文件（apply 只写不删的遗留）
 cleanup_stale_port_networks() {
   python3 - <<'PYEOF' | while read -r f; do [ -n "$f" ] && rm -f "$f"; done

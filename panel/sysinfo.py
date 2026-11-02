@@ -231,11 +231,18 @@ def leases(static_list):
     except FileNotFoundError:
         pass
     for s in static_list:
-        mac = str(s.get("mac", "")).upper()   # 手改配置可能缺 mac 字段——容错而非 500
-        if not mac or mac in items:
+        mac = str(s.get("mac") or "").upper()   # None/缺字段安全（str(None)="NONE" 的坑）
+        if not mac:
             continue
-        items[mac] = {"name": s.get("name", ""), "ip": s.get("ip", ""), "mac": mac,
-                      "static": True, "lease_text": ""}
+        it = items.get(mac)
+        if it:
+            # 已有租约：只补静态标记与绑定信息，保留租期文本（复审 P1-2）
+            it.update({"static": True, "name": s.get("name") or it.get("name"),
+                       "ip": s.get("ip") or it.get("ip")})
+        else:
+            # 离线静态绑定：无租约也进列表
+            items[mac] = {"name": s.get("name", ""), "ip": s.get("ip", ""), "mac": mac,
+                          "static": True, "lease_text": ""}
     out = []
     for mac in sorted(items):
         it = items[mac]

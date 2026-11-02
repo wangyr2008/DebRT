@@ -88,7 +88,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- HTTP ----------
     def do_HEAD(self):
-        self.do_GET()
+        if self.path.startswith("/api/"):
+            # /api 的 HEAD：处理器照常跑（鉴权/405 语义正确），_send 会吞掉 body
+            self._api("HEAD")
+        else:
+            self.do_GET()
 
     def do_GET(self):
         if self.path.startswith("/api/"):

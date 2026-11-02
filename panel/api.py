@@ -11,6 +11,7 @@ import os
 import re
 import secrets as pysecrets
 import subprocess
+import sys
 import time
 
 import auth
@@ -139,13 +140,14 @@ def handle(method, path, body: bytes, headers, client_ip=""):
     if not auth.logged_in(headers):
         raise ApiError(401, "UNAUTH", "登录已过期", "请重新登录")
 
-    if method == "HEAD":
-        raise ApiError(405, "METHOD_NOT_ALLOWED", "HEAD 不支持", "扫描器请使用 GET；本接口无副作用") if q == "/backup" else None
-    if method == "HEAD":
-        # HEAD 会触发与 GET 相同的处理器——/api/backup 每次 HEAD 都会 root 打包一次（审计 2）
-        if q == "/backup":
-            raise ApiError(405, "METHOD_NOT_ALLOWED", "HEAD 不支持", "扫描器请使用 GET")
-    if method == "GET":
+    if method == "HEAD" and q == "/backup":
+        # HEAD 会走与 GET 相同的处理器——/api/backup 每次 HEAD 都会 root 打包一次（审计 2）
+        raise ApiError(405, "METHOD_NOT_ALLOWED", "HEAD 不支持", "扫描器请使用 GET")
+
+    # HEAD 按 GET 语义查表（鉴权/405 正确），body 由 _send 吞掉
+    lookup_method = "GET" if method == "HEAD" else method
+
+    if lookup_method == "GET":
         table = {
             "/status": get_status, "/config": get_config, "/leases": get_leases,
             "/podman/status": lambda b, h: (200, priv("podman-ops", "status"), None),
@@ -158,7 +160,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
         fn = table.get(q)
         if fn:
             return fn(body, headers)
-    else:
+    elif lookup_method == "POST":
         m = re.fullmatch(r"/config/(bind|wan|ipv6|lan|dhcp|static|qos|firewall|upgrade)", q)
         if m:
             return post_config_section(m.group(1), body)
@@ -247,10 +249,10 @@ def get_status(body, headers):
         st = _status_cache["data"]
     else:
         st = sysinfo.mock_status() if MOCK else priv("status", timeout=30)
+        if not MOCK:
+            st.setdefault("wan", {}).setdefault("dns", _wan_dns())
         _status_cache["ts"] = now
         _status_cache["data"] = st
-    if not MOCK:
-        st.setdefault("wan", {}).setdefault("dns", _wan_dns())
     st["version"] = _version()  # mock/真实统一由 VERSION 文件决定（复审 R-06）
     if not MOCK:
         st.setdefault("wan", {}).setdefault("dns", _wan_dns())

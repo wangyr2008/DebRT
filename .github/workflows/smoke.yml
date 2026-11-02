@@ -113,6 +113,20 @@ jobs:
           sudo kill $DPID 2>/dev/null
           [ -n "$R" ] && echo "servers-file 转发 OK: $R" || { echo "::error::servers-file 转发失败"; exit 1; }
 
+      - name: mock 冒烟——保存必须成功（十审 P1-1 回归守卫）
+        run: |
+          python3 panel/seedrou_panel.py --mock --port 18131 &
+          sleep 2
+          curl -sf -c /tmp/mc -X POST -H 'X-SeedRou: 1' -d '{"password":"admin"}' \
+            http://127.0.0.1:18131/api/login > /dev/null
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/mc -H 'X-SeedRou: 1' \
+            -X POST -d '{"ip":"192.168.10.1","mask":"255.255.255.0"}' \
+            http://127.0.0.1:18131/api/config/lan)
+          [ "$CODE" = "200" ] && echo "mock 保存 OK" || { echo "::error::mock 保存失败 HTTP $CODE"; exit 1; }
+
+      - name: 租约合并单测（损坏行 / 永久 / 静态徽标）
+        run: python3 .github/scripts/test_leases.py
+
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
         run: |
           VER=$(tr -d '[:space:]' < VERSION)
