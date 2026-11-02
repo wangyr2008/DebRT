@@ -34,7 +34,8 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-body{display:flex;flex:1;min-width:0}
 
 /* ===== sidebar ===== */
-#router-ui .ru-side{width:232px;flex:none;border-right:1px solid var(--ru-line);padding:22px 14px 16px;display:flex;flex-direction:column}
+#router-ui .ru-side{width:232px;flex:none;border-right:1px solid var(--ru-line);padding:22px 14px 16px;display:flex;flex-direction:column;
+  position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;background:var(--ru-bg)}
 #router-ui .ru-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
 #router-ui .ru-brandicon{width:36px;height:36px;border-radius:10px;overflow:hidden;flex:none;box-shadow:0 1px 4px rgba(0,0,0,.22)}
 #router-ui .ru-brandicon svg{width:100%;height:100%;display:block}
@@ -207,7 +208,9 @@ body { background: var(--ru-bg, #f5f5f7); }
 
 /* ===== narrow mode（与设计稿一致：手机端无横向滚动，表格转堆叠卡片） ===== */
 #router-ui .ru-narrow .ru-side{display:none}
-#router-ui .ru-narrow .ru-mhead{display:block;padding:14px 2px 2px}
+#router-ui .ru-narrow .ru-mhead{display:block;padding:14px 2px 2px;
+  position:sticky;top:-10px;z-index:40;background:var(--ru-bg);
+  margin:-10px -16px 0;padding:10px 16px 8px}
 #router-ui .ru-narrow .ru-mtitle{font-size:26px;font-weight:700;letter-spacing:-.02em;padding:0 2px}
 #router-ui .ru-mhead .ru-nav{flex-direction:row;overflow-x:auto;gap:8px;padding:12px 2px 6px;scrollbar-width:none}
 #router-ui .ru-mhead .ru-nav::-webkit-scrollbar{display:none}
