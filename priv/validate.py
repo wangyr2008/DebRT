@@ -350,6 +350,44 @@ def norm_upgrade(section, data):
     return {"source": src}
 
 
+def cross_validate(section, result, cur):
+    """跨段交叉校验（保存层）：WAN 模式 × IPv6 模式组合约束。
+    提取为独立函数以便 test_guards 直测（复审 v0.1.30 观察①）。"""
+    if not (cur and isinstance(cur.get("wan"), dict)):
+        return
+    cur_v6 = cur.get("ipv6", {})
+    # PPPoE 线路没有 DHCPv6-PD 客户端，Native/静态 v6 均不可用（复审 N-08b）
+    if section == "ipv6" and result.get("enabled") and result.get("mode") == "native" \
+            and cur["wan"].get("mode") == "pppoe":
+        fail("V6_NATIVE_PPPPOE_UNSUPPORTED", "PPPoE 线路暂不支持 IPv6 Native（PD）",
+             "PPPoE 下没有 DHCPv6 前缀委派客户端；请改用 NAT6，或把上网方式切换为 DHCP/静态后再用 Native")
+    if section == "ipv6" and result.get("enabled") and result.get("mode") == "static" \
+            and cur["wan"].get("mode") == "pppoe":
+        fail("V6_STATIC_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持静态 IPv6",
+             "静态 IPv6 需要落在以太网口上；PPPoE 请改用 NAT6（自动 ULA）或关闭 IPv6")
+    # P3-2：静态 WAN 同样没有 DHCPv6 客户端，Native 的 PD 永远拿不到（与 pppoe+native 同族）
+    if section == "ipv6" and result.get("enabled") and result.get("mode") == "native" \
+            and cur["wan"].get("mode") == "static":
+        fail("V6_NATIVE_STATIC_WAN", "静态 WAN 不支持 IPv6 Native（PD）",
+             "静态接入没有 DHCPv6 客户端，拿不到前缀委派；请改用 NAT6（自动 ULA），或把上网方式改为 DHCP 后再用 Native")
+    if section == "wan" and result.get("mode") == "pppoe" \
+            and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
+        fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
+             "切换到 PPPoE 需先调整 IPv6 模式",
+             "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+    if section == "wan" and result.get("mode") == "pppoe" \
+            and cur_v6.get("enabled") and cur_v6.get("mode") == "static":
+        fail("V6_STATIC_PPPPOE_UNSUPPORTED",
+             "切换到 PPPoE 需先调整 IPv6 模式",
+             "当前 IPv6 为静态地址，PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+    # P3-2 双向：切到静态 WAN 时，存量 Native IPv6 同样失去 PD
+    if section == "wan" and result.get("mode") == "static" \
+            and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
+        fail("V6_NATIVE_STATIC_WAN",
+             "切换到静态 WAN 需先调整 IPv6 模式",
+             "当前 IPv6 为 Native（PD），静态线路没有 DHCPv6 客户端；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+
+
 def main():
     if len(sys.argv) != 2:
         print(json.dumps({"ok": False, "code": "USAGE", "message": "缺少 SECTION 参数"}), file=sys.stderr)
@@ -382,27 +420,7 @@ def main():
     if fn is None:
         fail("VALIDATE", f"未知的配置段 {section!r}")
     result = fn()
-    # 交叉校验：PPPoE 线路没有 DHCPv6-PD 客户端，Native 模式实际不可用（复审 N-08b）
-    if cur and isinstance(cur.get("wan"), dict):
-        cur_v6 = cur.get("ipv6", {})
-        if section == "ipv6" and result.get("enabled") and result.get("mode") == "native" \
-                and cur["wan"].get("mode") == "pppoe":
-            fail("V6_NATIVE_PPPPOE_UNSUPPORTED", "PPPoE 线路暂不支持 IPv6 Native（PD）",
-                 "PPPoE 下没有 DHCPv6 前缀委派客户端；请改用 NAT6，或把上网方式切换为 DHCP/静态后再用 Native")
-        if section == "ipv6" and result.get("enabled") and result.get("mode") == "static" \
-                and cur["wan"].get("mode") == "pppoe":
-            fail("V6_STATIC_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持静态 IPv6",
-                 "静态 IPv6 需要落在以太网口上；PPPoE 请改用 NAT6（自动 ULA）或关闭 IPv6")
-        if section == "wan" and result.get("mode") == "pppoe" \
-                and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
-            fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
-                 "切换到 PPPoE 需先调整 IPv6 模式",
-                 "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
-        if section == "wan" and result.get("mode") == "pppoe" \
-                and cur_v6.get("enabled") and cur_v6.get("mode") == "static":
-            fail("V6_STATIC_PPPPOE_UNSUPPORTED",
-                 "切换到 PPPoE 需先调整 IPv6 模式",
-                 "当前 IPv6 为静态地址，PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+    cross_validate(section, result, cur)
     print(json.dumps({"ok": True, "section": section, "data": result}, ensure_ascii=False))
 
 

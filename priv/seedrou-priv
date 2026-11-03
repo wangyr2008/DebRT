@@ -41,7 +41,11 @@ do_auth_verify() {
 import json, os, sys, time
 sys.path.insert(0, "/usr/local/lib/seedrou")
 import pwhash
-pw, state = os.environ.get("SEEDROU_SECRET", ""), json.loads(sys.argv[1])
+try:
+    state = json.loads(sys.argv[1])
+except Exception:
+    state = {"fails": 0, "lock_until": 0}  # P3-1：状态损坏兜底——限速计数可丢，登录不能丢
+pw = os.environ.get("SEEDROU_SECRET", "")
 now = int(time.time())
 if state.get("lock_until", 0) > now:
     print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
@@ -76,7 +80,12 @@ else:
     else:
         print(json.dumps({"ok": False, "code": "AUTH_BAD",
                           "message": "管理密码不正确", "hint": "请检查密码后重试"}))
-json.dump(state, open("/var/lib/seedrou/auth-state.json", "w"))
+# P3-1：全项目 /etc 写入都是 tmp+os.replace，唯独这里曾直写——断电写一半会
+# 打碎 auth-state.json，下次 json.loads 抛异常 → 无输出 → 登录不可用（须 root 手删）
+state_path = "/var/lib/seedrou/auth-state.json"
+with open(state_path + ".tmp", "w") as f:
+    json.dump(state, f)
+os.replace(state_path + ".tmp", state_path)
 sys.exit(0 if ok else 1)
 PYEOF
 )"

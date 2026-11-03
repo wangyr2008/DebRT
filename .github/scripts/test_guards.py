@@ -75,4 +75,23 @@ assert "2001:db8:1::2" not in wan_net_pppoe, "pppoe+静态v6 不应落盘到以�
 dns_sa = netgen.gen_dnsmasq(base_cfg("static", "auto"))
 assert "server=223.5.5.5" in dns_sa and "servers-file" not in dns_sa, "static+auto 兜底缺失（N-03 回归）"
 
+# 6) 跨段组合约束（P3-2 + 复审 v0.1.30 观察①）：pppoe×static/native、static×native 双向
+V6S = {"enabled": True, "mode": "static", "addr": "2001:db8:1::2/64", "gw": "2001:db8:1::1",
+       "prefix": "2001:db8:abcd::/64", "dns_mode": "auto", "dns": []}
+V6N = {"enabled": True, "mode": "native", "dns_mode": "auto", "dns": []}
+
+def expect_fail(section, result, cur, code):
+    try:
+        validate.cross_validate(section, result, cur)
+        raise AssertionError(f"{section} 未被拒绝（期望 {code}）")
+    except SystemExit:
+        assert validate.ERR.get("code") == code, f"拒绝码不符: {validate.ERR.get('code')} != {code}"
+
+expect_fail("ipv6", V6S, {"wan": {"mode": "pppoe"}}, "V6_STATIC_PPPPOE_UNSUPPORTED")
+expect_fail("ipv6", V6N, {"wan": {"mode": "pppoe"}}, "V6_NATIVE_PPPPOE_UNSUPPORTED")
+expect_fail("ipv6", V6N, {"wan": {"mode": "static"}}, "V6_NATIVE_STATIC_WAN")
+expect_fail("wan", {"mode": "pppoe"}, {"wan": {}, "ipv6": V6S}, "V6_STATIC_PPPPOE_UNSUPPORTED")
+expect_fail("wan", {"mode": "pppoe"}, {"wan": {}, "ipv6": V6N}, "V6_NATIVE_PPPPOE_UNSUPPORTED")
+expect_fail("wan", {"mode": "static"}, {"wan": {}, "ipv6": V6N}, "V6_NATIVE_STATIC_WAN")
+
 print("审计守卫: 撤销表/546/static+auto 拒绝/静态 v6 落盘 全部通过")
