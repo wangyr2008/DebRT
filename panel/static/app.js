@@ -70,16 +70,21 @@ function request(method, path, body, opts) {
     else { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
   }
   return fetch(path, init).then(function (res) {
-    if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }
-
     var ct = res.headers.get("Content-Type") || "";
     if (ct.indexOf("application/json") < 0) {
+      if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }
       if (!res.ok) throw { code: "HTTP_" + res.status, message: "服务器返回异常状态 " + res.status, hint: "请刷新页面重试；若持续出现请查看面板日志 journalctl -u seedrou-panel" };
       return res.blob();
     }
     return res.json().then(function (data) {
       if (!res.ok || data.ok === false) {
         if (res.status === 423) data.locked = true;
+        if (res.status === 401) {
+          /* 401 先透传后端消息（登录页错密码是"管理密码不正确"而非"登录已过期"，
+             2026-11 自测发现）；仅空消息时兜底。过期登出侧效应照旧（登录页上无副作用） */
+          if (path !== "/api/login") setLogged(false);
+          if (!data.message) { data.message = "登录已过期"; data.hint = "请重新登录"; }
+        }
         throw data;
       }
       return data;

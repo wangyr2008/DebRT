@@ -6,12 +6,14 @@
 - 特权动作全部经 `sudo -n seedrou-priv <白名单子命令>`，面板永不直接写 /etc。
 - 错误统一 {ok:false, code, message, hint}，message=原因、hint=下一步，中文可操作。
 """
+import io
 import json
 import os
 import re
 import secrets as pysecrets
 import subprocess
 import sys
+import tarfile
 import time
 
 import auth
@@ -415,8 +417,16 @@ def get_backup(body, headers):
     name = "seedrou-backup-" + time.strftime("%Y%m%d-%H%M%S") + ".tar.gz"
     out_path = os.path.join(BACKUP_DIR, name)
     if MOCK:
+        # mock 也要产出真 tar.gz：前端按 .tar.gz 落盘，假 gzip 会得到损坏文件（2026-11 自测）
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            payload = b"SeedRou mock backup (preview build)\n"
+            info = tarfile.TarInfo("seedrou-backup.txt")
+            info.size = len(payload)
+            info.mtime = int(time.time())
+            tf.addfile(info, io.BytesIO(payload))
         with open(out_path, "wb") as f:
-            f.write(b"mock-backup")
+            f.write(buf.getvalue())
     else:
         priv("backup-create", out_path, timeout=120)
     # 清理旧备份，仅保留最近 10 份
