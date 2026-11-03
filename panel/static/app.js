@@ -271,7 +271,8 @@ function renderOverview(st) {
   $id("ov-ports").innerHTML = ph || '<div class="ru-empty">未检测到网口</div>';
   srRenderIcons($id("ov-ports"));
   $id("ru-sidefoot-text").textContent = "管理员已登录";
-  $id("ru-lsub").textContent = (st.lan && st.lan.ip ? st.lan.ip : "192.168.10.1") + " · 管理后台";
+  /* 登录页副标题只显示版本号（会话加载时写一次）；这里不再写 LAN IP——
+     状态轮询会覆盖它，登出后登录页就会重新冒出 IP（真机实测） */
   $id("ru-sidever").textContent = "V" + (st.version || "—");
   $id("ver-now").value = "V" + (st.version || "—") + (st.build ? "（Build " + st.build + "）" : "");
 }
