@@ -48,6 +48,8 @@ if state.get("lock_until", 0) > now:
                       "message": f"尝试次数过多，请 {state['lock_until'] - now + 1} 秒后重试",
                       "hint": "密码不会因此失效；稍等即可再次尝试"}))
     sys.exit(0)
+elif state.get("lock_until", 0):
+    state["fails"] = 0  # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
 try:
     rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
     ok = pwhash.verify(pw, rec)
@@ -158,6 +160,7 @@ PYEOF
   #    同时修复审计遗漏的缺陷：norm 此前被当文件路径 open()，真实模式 config-set 必失败）
   local old_mode
   old_mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))' 2>/dev/null || echo "")"
+  old_user="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("username","") or "")' 2>/dev/null || echo "")"
   tag="s$(date +%s%N | tail -c 9)"
   snapshot_lastgood "$tag"
   local new_cfg new_sec norm_file
@@ -241,9 +244,11 @@ PYEOF
   rm -rf "$stage"
   acts="$(plan_for_section "$section")"
   # 仅在模式/账号变化或网口重绑定时才重拨 PPPoE（避免改个 DNS 就断线重连）
-  local new_mode pppoe_needed="no"
+  local new_mode new_user pppoe_needed="no"
   new_mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))')"
+  new_user="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("username","") or "")')"
   [ "$old_mode" != "$new_mode" ] && pppoe_needed="yes"
+  [ "$old_user" != "$new_user" ] && pppoe_needed="yes"  # P2-2：改账号此前不重拨，pppd 仍持旧凭据会话
   [ "$section" = "bind" ] && [ "$new_mode" = "pppoe" ] && pppoe_needed="yes"
   if [ "$section" = "wan" ] && printf '%s' "$norm" | python3 -c 'import json,sys;sys.exit(0 if json.load(sys.stdin).get("data",{}).get("password") else 1)' 2>/dev/null; then
     pppoe_needed="yes"
@@ -740,6 +745,10 @@ do_backup_restore() {
   acquire_lock
   local src="${1:?缺少备份文件路径}"
   [ -f "$src" ] || die "NO_FILE" "备份文件不存在"
+  # secrets.json 不属于备份模型：备份永不含它，构造包携带即拒绝（P2-6）
+  if tar -tzf "$src" 2>/dev/null | grep -q '^etc/seedrou/secrets\.json$'; then
+    die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 seedrou-priv"
+  fi
   # 成员白名单校验
   if ! tar -tzf "$src" 2>/dev/null | python3 -c '
 import sys
@@ -749,7 +758,7 @@ for line in sys.stdin:
     if not p: continue
     if p.startswith("/"): ok = False; break
     if ".." in p.split("/"): ok = False; break
-    if not (p.startswith("etc/seedrou") or p == "var/lib/seedrou/notes.json"): ok = False; break
+    if not (p == "etc/seedrou" or p.startswith("etc/seedrou/") or p == "var/lib/seedrou/notes.json"): ok = False; break
 sys.exit(0 if ok else 1)
 '; then
     die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
@@ -950,6 +959,8 @@ print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/n
     fi
   fi
   [ "$rc" -eq 0 ] && [ -s "$out" ] || die "UPG_NET" "下载升级包失败" "请检查升级源与网络；也可在页面手动上传升级包"
+  # P2-4：此前 .sha256 下载失败会静默跳过校验——升级源支持第三方镜像，代理正是篡改风险点
+  [ -s "${out}.sha256" ] || { rm -f "$out"; die "UPG_SHA" "升级源未提供 sha256 校验文件" "为防篡改，缺少 .sha256 时不安装；请确认发布页包含 seedrou-<版本>.tar.gz.sha256"; }
   if [ -s "${out}.sha256" ]; then
     # .sha256 内容记录的是原始资产名（seedrou-x.y.z.tar.gz），不能直接 -c；
     # 提取期望哈希与实际文件比对
@@ -1018,6 +1029,8 @@ sys.exit(0 if ok else 1)
     [ -f "$stg/$need" ] || { rm -rf "$stg"; die "UPG_BAD" "升级包缺少 $need"; }
   done
   # 4) 备份当前版本 → 原子换目录 → 修正属主
+  # L3：同版本重装时目标已存在，cp -a 会嵌套成 app-<ver>/seedrou/，手工回退路径失效
+  rm -rf "${SEEDROU_VAR}/lastgood/app-$(cur_version)"
   cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cur_version)" 2>/dev/null || true
   local old="/usr/local/lib/seedrou.prev.$$"
   mv "/usr/local/lib/seedrou" "$old" && mv "$stg" "/usr/local/lib/seedrou" || { mv "$old" "/usr/local/lib/seedrou" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
@@ -1190,17 +1203,24 @@ try:
         pass
     if cached is None:
         import shutil as _sh
+        devices = []
+        if _sh.which("smartctl"):  # P3-3：扫描只做一次（此前 elif 与下方 if 各扫一次）
+            devices = json.loads(subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout or "{}").get("devices") or []
         if not _sh.which("smartctl"):
             with open("/run/seedrou/disk-unavailable", "w") as f:
                 f.write("smartmontools 未安装")
-        elif not (json.loads(subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout or "{}").get("devices") or []):
+        elif not devices:
             with open("/run/seedrou/disk-unavailable", "w") as f:
                 f.write("未找到磁盘")
         else:
-            pass  # 正常采集，见下
-        if _sh.which("smartctl"):
-            scan = subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout
-            dev = (json.loads(scan or "{}").get("devices") or [{}])[0].get("name", "")
+            # P3-1：采集正常时清掉历史诊断标记——否则补装 smartmontools 后
+            # tooltip 仍显示"未安装"（/run 只在重启时才清）
+            try:
+                os.remove("/run/seedrou/disk-unavailable")
+            except OSError:
+                pass
+        if devices:
+            dev = (devices or [{}])[0].get("name", "")
             if dev:
                 info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
                 temps = json.loads(info or "{}").get("temperature", {})

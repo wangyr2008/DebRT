@@ -45,14 +45,6 @@ def is_ipv4(s):
         return False
 
 
-def is_mask(s):
-    try:
-        ipaddress.IPv4Network(f"0.0.0.0/{s}", strict=False)
-        return isinstance(ipaddress.ip_address(s), ipaddress.IPv4Address) and s.isdigit() is False
-    except ValueError:
-        return False
-
-
 def mask_prefix(s):
     try:
         return ipaddress.IPv4Network(f"0.0.0.0/{s}", strict=False).prefixlen
@@ -129,6 +121,11 @@ def norm_wan(section, data):
             need(1 <= len(password) <= 128, "VALIDATE", "宽带密码长度需在 1–128 位之间")
     dns_mode = as_str(data.get("dns_mode"), "DNS 配置") or "auto"
     need(dns_mode in ("auto", "manual"), "VALIDATE", "DNS 配置仅支持 自动/手动")
+    # P1-3：static+auto 组合下 servers-file 没有任何生产者（无 lease 文件可读），
+    # dnsmasq 启动期对缺失 servers-file 是 fatal → LAN DHCP/DNS 全挂。在保存层拒绝。
+    need(not (mode == "static" and dns_mode == "auto"), "WAN_DNS_STATIC_AUTO",
+         "静态 WAN 不支持自动 DNS",
+         "静态接入不会下发 DNS 服务器；请把「DNS 配置」改为手动并填写 DNS（如 223.5.5.5），或改用 DHCP/PPPoE 上网方式")
     dns = []
     if dns_mode == "manual":
         d1 = as_str(data.get("dns1"), "DNS1")
@@ -263,7 +260,7 @@ def norm_static(section, data):
         need(NAME_RE.match(name), "STATIC_NAME_BAD", f"设备名 {name!r} 不合法", "支持 1–32 位中英文、数字、点、横线、空格")
         need(is_ipv4(ip), "STATIC_IP_BAD", f"IP {ip!r} 无效")
         need(ipaddress.IPv4Address(ip).is_private, "STATIC_IP_BAD",
-             f"IP {ip} 不在私网段", "静态分配 IP 必须位于 LAN 子网内")
+             f"IP {ip} 不在私网段", "静态分配 IP 需为私网地址，且须位于 LAN 子网内（保存时进一步校验）")
         need(MAC_RE.match(mac), "STATIC_MAC_BAD", f"MAC {mac!r} 格式不正确", "格式示例：AA:BB:CC:DD:EE:FF")
         need(mac not in seen_mac, "STATIC_DUP", f"MAC {mac} 重复绑定")
         need(ip not in seen_ip, "STATIC_DUP", f"IP {ip} 重复绑定")
@@ -344,7 +341,7 @@ def norm_upgrade(section, data):
             host = src.split("/", 3)[2] if len(src.split("/", 3)) > 3 else ""
             need(bool(re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{2,5})?", host)), "UPG_SOURCE_BAD",
                  f"升级源主机名 {host!r} 不合法", "请填正常的 https 地址")
-            need(not re.fullmatch(r"(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?|localhost).*",
+            need(not re.fullmatch(r"(127\.|10\.|0\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[789][0-9]|1[01][0-9]|12[0-7])\.|\[?::1\]?|localhost).*",
                                   host, re.I), "UPG_SOURCE_BAD",
                  "升级源不能指向内网地址", "请使用公网 https 地址")
         else:

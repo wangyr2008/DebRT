@@ -313,7 +313,11 @@ run_actions() { # run_actions "action ..." -> 输出失败动作名；全成功�
   for act in $1; do
     case "$act" in
       networkd) svc_restart_networkd || out="$out networkd" ;;
-      dnsmasq)  systemctl restart dnsmasq.service || out="$out dnsmasq" ;;
+      dnsmasq)  # servers-file 对 dnsmasq 是启动期 fatal：确保文件存在（空文件合法），
+                # 上游由钩子/ip-up 稍后写入并 HUP（P1-3 保险，兼消 PPPoE 首拨竞态）
+                mkdir -p /run/seedrou-dns
+                [ -f /run/seedrou-dns/upstream.conf ] || : > /run/seedrou-dns/upstream.conf
+                systemctl restart dnsmasq.service || out="$out dnsmasq" ;;
       nft)      svc_nft || out="$out nft" ;;
       cake)     svc_cake || true ;;
       pppoe)    svc_pppoe || out="$out pppoe" ;;

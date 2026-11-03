@@ -137,10 +137,10 @@ def cpu_pct():
         if d_total > 0:
             _cpu_last = max(0, min(100, round(100 * (1 - d_idle / d_total))))
         return _cpu_last
-    # 采样间隔 <0.5s（快速切页/连续调用）：保留基准，返回上次计算值
+    # 采样间隔 <0.5s（快速切页/连续调用）：刷新基准并返回上次计算值
+    # （复审 P3-2：原注释"保留基准"与实现不符；尾部 return None 是死代码）
     _cpu_prev = (now, idle, total)
     return _cpu_last
-    return None
 
 
 def mem_pct():

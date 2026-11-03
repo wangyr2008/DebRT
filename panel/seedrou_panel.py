@@ -34,6 +34,10 @@ class Handler(BaseHTTPRequestHandler):
         pass  # 访问日志走 journald 不必要；错误日志保留 stderr
 
     def _read_body(self):
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            # 不解码 chunked：无 Content-Length 的流式 body 会让 keep-alive 连接错位（审计 L12）
+            self.close_connection = True
+            raise api.ApiError(400, "BODY_CHUNKED", "不支持 chunked 请求体", "请使用标准浏览器访问；脚本调用请携带 Content-Length")
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:

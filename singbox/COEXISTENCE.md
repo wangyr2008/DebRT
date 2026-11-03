@@ -14,7 +14,7 @@
 | NAT6 ULA | — | `fda1:9e3a:8b7f::/48`（固定默认，避开 fdfe:dcba） |
 | sysctl 文件 | `/etc/sysctl.d/99-sing-box.conf`（ip_forward=1） | `/etc/sysctl.d/70-seedrou.conf`（ip_forward=1、rp_filter=0） |
 | systemd 单元 | `sing-box.service` | `seedrou-panel / seedrou-apply / seedrou-converge.timer / seedrou-pppoe` |
-| 定时任务 | `/etc/cron.d/sing-box`（每日 04:00 拉订阅） | `seedrou-converge.timer`（systemd timer，30 分钟收敛一次） |
+| 定时任务 | `/etc/cron.d/sing-box`（每日 04:00 拉订阅） | `seedrou-converge.timer`（systemd timer，开机 15 分钟后首跑、之后每 6 小时收敛一次） |
 | 文件 | `/etc/sing-box/`（sing-box:sing-box 0600） | `/etc/seedrou/`（root）、`/var/lib/seedrou/`（seedrou） |
 | 端口 | 7890（mixed）、9090（API/dashboard） | 80（面板）、53/67（dnsmasq，仅 LAN+lo） |
 

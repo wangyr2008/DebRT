@@ -12,7 +12,7 @@ VAR_DIR="/var/lib/seedrou"
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 
 echo "[卸载] 停止服务..."
-systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service 2>/dev/null || true
+systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service seedrou-dns-sync.service 2>/dev/null || true
 systemctl stop dnsmasq.service 2>/dev/null || true
 nft delete table inet seedrou_base 2>/dev/null || true
 tc qdisc del dev ifb0 root 2>/dev/null || true
@@ -45,5 +45,6 @@ fi
 
 [ -f /etc/resolv.conf.seedrou.bak ] && { cp -a /etc/resolv.conf.seedrou.bak /etc/resolv.conf; echo "[卸载] 已还原 /etc/resolv.conf"; }
 
+userdel seedrou 2>/dev/null || true  # L10：卸载后移除专用用户
 systemctl daemon-reload
 echo "[卸载] 完成。网络配置文件已移除，重启后网口将回到未配置状态；如需恢复出厂前的网络，请使用安装包内备份或控制台重新配置。"

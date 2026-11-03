@@ -109,8 +109,8 @@ function setLogged(v, page) {
   if (v) {
     var last = null;
     try { last = localStorage.getItem("sr_page"); } catch (e) {}
-    show(page || last || "overview");   // 刷新/重登后回到离开时的页面
-    loadAll();
+    show(page || last || "overview");   // 刷新/重登后回到离开时的页面；
+    // 当前页数据由页面 loader 拉取——此处不再调 loadAll()（L7：/api/status 曾双发）
   }
 }
 var loginBad = $id("ru-loginbad"), loginBtn = $id("ru-loginbtn");
@@ -841,10 +841,8 @@ function containerAction(action, name, btn) {
   }).catch(function (e) {
     btnBusy(btn, false, labels[action]);
     if (e.code !== "UNAUTH") apiFail(e);
-    if (r_label_need_reload(e)) loadContainers();
   });
 }
-function r_label_need_reload() { return false; }
 
 function loadImages() {
   return API.get("/api/podman/images").then(function (data) {
@@ -1054,7 +1052,6 @@ $id("file-upgrade").addEventListener("change", function () {
   if (!window.confirm("上传并校验 " + f.name + "？校验通过后面板将自动完成升级并重启。")) return;
   showBad("msg-upg", "");
   toast("ok", "升级包上传中…", "升级期间请勿断电或关闭页面");
-  f.slice ? null : null;
   API.post("/api/upgrade", f, { raw: true, filename: f.name }).then(function (r) {
     toast("ok", "升级完成", "面板已重启，稍后自动刷新");
     setTimeout(function () { location.reload(); }, 2500);
@@ -1067,6 +1064,7 @@ $id("btn-backup").addEventListener("click", function () {
   btnBusy(btn, true, "打包中…");
   fetch("/api/backup", { headers: { "X-SeedRou": "1" }, credentials: "same-origin" }).then(function (res) {
     btnBusy(btn, false);
+    if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }  // L8
     if (!res.ok) throw { message: "备份失败（HTTP " + res.status + "）" };
     var cd = res.headers.get("Content-Disposition") || "";
     var m = cd.match(/filename="?([^";]+)"?/);

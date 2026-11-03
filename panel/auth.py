@@ -2,7 +2,7 @@
 """SeedRou 面板认证：会话签名（HMAC）、Cookie、CSRF、登录限速。
 
 - 管理密码的校验在 seedrou-priv（root）内完成，面板只拿 {ok} 结果，不接触哈希。
-- 会话令牌 = base64url(payload) + "." + HMAC-SHA256(会话密钥)；12 小时有效。
+- 会话令牌 = base64url(payload) + "." + HMAC-SHA256(会话密钥)；7 天有效。
 - 会话密钥从 seedrou-priv session-secret 获取（root 属主 secrets.json 内）。
 """
 import base64
@@ -22,10 +22,14 @@ _fails = {}
 FAIL_LIMIT, LOCK_S = 5, 60
 
 # 已登出令牌的撤销表（内存态，进程重启即清；无状态 HMAC 会话的补偿机制，
-# 否则登出后旧 cookie 重放仍然有效直到过期）。条目 12h 自动过期（令牌最长寿命），
-# 并设总量上限，避免长期运行缓慢增长（复审 N-08a）。
+# 否则登出后旧 cookie 重放仍然有效直到过期）。条目存活期必须 ≥ 会话有效期，
+# 否则"登出即失效"只对撤销表存活期内的重放有效（P1-1：曾 12h vs 会话 7d，
+# 登出 12h 后旧 cookie 仍可重放——2026-11 全量审计）。
+# 上限防止长期运行缓慢增长（复审 N-08a）。
 _revoked = {}
-_REVOKE_TTL = 12 * 3600
+_REVOKE_TTL = SESSION_TTL
+if _REVOKE_TTL < SESSION_TTL:  # 守卫：撤销表短于会话期 = 登出承诺失效（启动即炸，审计四.4）
+    raise RuntimeError("_REVOKE_TTL must cover SESSION_TTL")
 _REVOKE_MAX = 4096
 
 

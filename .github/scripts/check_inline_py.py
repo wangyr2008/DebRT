@@ -12,7 +12,8 @@ files = []
 for pat in ("priv/*", "install.sh", "uninstall.sh", "network/ppp/*/*", "network/dispatcher/*"):
     files += [f for f in sorted(glob.glob(pat)) if os.path.isfile(f)]
 
-pat = re.compile(r"python3\s+-[^\n]*?<<'(\w+)'\n(.*?)\n\1\b", re.S)
+# 标记后允许行尾还有管道/重定向等（复审 P2：`<<'PY' | while ...` 形式曾整段漏检）
+pat = re.compile(r"python3\s+-[^\n]*?<<'(\w+)'[^\n]*\n(.*?)\n\1\b", re.S)
 bad, total = [], 0
 for f in files:
     src = open(f, encoding="utf-8").read()

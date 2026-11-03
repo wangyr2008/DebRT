@@ -114,6 +114,9 @@ def gen_wan_network(cfg):
         lines += ["DHCP=no", "IPv6AcceptRA=no",
                   f"Address={cfg['wan']['ip']}/{mask_prefix(cfg['wan']['mask'])}",
                   f"Gateway={cfg['wan']['gw']}"]
+        if v6.get("enabled") and v6.get("mode") == "static":
+            # P2-3：WAN 侧静态 IPv6 此前被 UI 收集、validate 校验，但从不落盘（2026-11 全量审计）
+            lines += [f"Address={v6['addr']}", f"Gateway={v6['gw']}"]
     else:  # pppoe — 底层口只做链路，IP 由 ppp0 承载；不给 IPv4 link-local（避免 WAN 二层暴露面）
         lines += ["DHCP=no", "IPv6AcceptRA=no", "LinkLocalAddressing=no", "ConfigureWithoutCarrier=yes"]
     if mode == "dhcp":
@@ -275,6 +278,7 @@ def gen_nft(cfg):
         "    ip protocol icmp accept",
         "    meta l4proto ipv6-icmp accept",
         "    udp dport 68 accept",
+        "    meta nfproto ipv6 udp dport 546 accept  # DHCPv6 客户端端口：PD 必需——多播 Solicit 不经 conntrack，服务端回应不算 established（P1-2）",
     ]
     if fw.get("wan_input_drop", True):
         lines.append("    drop")

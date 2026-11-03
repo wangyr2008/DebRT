@@ -77,7 +77,7 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 | root/面板属主交接 | 面板无 root；唯一 sudo 入口 `seedrou-priv`（内部再校验子命令与参数）；secrets 面板读不到，验密/改密经 stdin |
 | 错误可操作 | 全链路 `{code, message, hint}` 中文错误（原因 + 下一步），如 PPPoE 区分认证失败/无响应/占用 |
 | 敏感信息不回显 | GET 永不返回密码/哈希/密钥；UI 显示"已保存，留空保持不变"；Cookie HttpOnly+SameSite=Strict，登录 5 次失败锁 60 秒；变更请求校验 X-SeedRou 头 + Origin |
-| 重启后状态收敛 | `seedrou-apply.service` 开机幂等重放 + `seedrou-converge.timer` 每 30 分钟防漂移；一切原生配置都是 config.json 的生成物 |
+| 重启后状态收敛 | `seedrou-apply.service` 开机幂等重放 + `seedrou-converge.timer` 开机 15 分钟后首跑、之后每 6 小时防漂移；一切原生配置都是 config.json 的生成物 |
 
 ## 4. 功能页 ↔ 实现映射
 
@@ -134,7 +134,7 @@ systemctl stop sing-box && ping 223.5.5.5   # 直连自动恢复
 ```
 seedrou/
 ├── install.sh / uninstall.sh     # 目标机部署
-├── VERSION                       # 0.1.1（beta 从 0.1 起版）
+├── VERSION                       # 当前版本号（beta 从 0.1 起版）
 ├── panel/                        # 管理面板（Python3 标准库 + 静态前端）
 │   ├── seedrou_panel.py api.py auth.py sysinfo.py
 │   └── static/ index.html app.css app.js icons.js

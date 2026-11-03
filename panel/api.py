@@ -328,9 +328,17 @@ def post_portfw(body, headers):
 
 def post_password(body, headers):
     data = _json_body(body)
-    out = priv("passwd-set",
-               input_text=json.dumps({"old": str(data.get("old", "")), "new": str(data.get("new", ""))}),
-               timeout=60)
+    try:
+        out = priv("passwd-set",
+                   input_text=json.dumps({"old": str(data.get("old", "")), "new": str(data.get("new", ""))}),
+                   timeout=60)
+    except ApiError as e:
+        if e.code == "AUTH_BAD":
+            # P2-1：AUTH_BAD 全局映射 401 会把改密页用户踢出会话（401 触发前端登出）。
+            # 原密码错误是表单校验级错误，用 400 表达
+            raise ApiError(400, "PW_OLD_BAD", "原密码不正确",
+                           "请输入当前使用的管理密码；忘记密码请在控制台执行 seedrou-priv factory-reset")
+        raise
     return 200, {"ok": True, "message": out.get("message", "密码已修改")}, None
 
 

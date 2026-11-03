@@ -126,6 +126,8 @@ jobs:
 
       - name: 租约合并单测（损坏行 / 永久 / 静态徽标）
         run: python3 .github/scripts/test_leases.py
+      - name: 审计守卫（撤销表≥会话期 + netgen 引用完整性/546/静态v6 落盘）
+        run: python3 .github/scripts/test_guards.py
 
       - name: 内嵌 Python 编译检查（十一审 P1 回归守卫）
         run: python3 .github/scripts/check_inline_py.py
