@@ -64,4 +64,15 @@ wan_net = netgen.gen_wan_network(base_cfg("static", "manual", v6=v6))
 assert "Address=2001:db8:1::2/64" in wan_net, "IPv6 静态 addr 未落盘（P2-3 回归）"
 assert "Gateway=2001:db8:1::1" in wan_net, "IPv6 静态 gw 未落盘（P2-3 回归）"
 
+# 4) N-02：dhcp + 静态 IPv6 也必须落盘；pppoe 组合不得落盘（由 validate 拒绝）
+wan_net_dhcp = netgen.gen_wan_network(base_cfg("dhcp", "manual", v6=v6))
+assert "Address=2001:db8:1::2/64" in wan_net_dhcp, "dhcp+静态v6 addr 未落盘（N-02 回归）"
+assert "Gateway=2001:db8:1::1" in wan_net_dhcp, "dhcp+静态v6 gw 未落盘（N-02 回归）"
+wan_net_pppoe = netgen.gen_wan_network(base_cfg("pppoe", "manual", v6=v6))
+assert "2001:db8:1::2" not in wan_net_pppoe, "pppoe+静态v6 不应落盘到以太网口（N-02）"
+
+# 5) N-03：存量 static+auto 生成公共 DNS 兜底而非空上游
+dns_sa = netgen.gen_dnsmasq(base_cfg("static", "auto"))
+assert "server=223.5.5.5" in dns_sa and "servers-file" not in dns_sa, "static+auto 兜底缺失（N-03 回归）"
+
 print("审计守卫: 撤销表/546/static+auto 拒绝/静态 v6 落盘 全部通过")

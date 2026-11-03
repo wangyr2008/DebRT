@@ -49,7 +49,8 @@ if state.get("lock_until", 0) > now:
                       "hint": "密码不会因此失效；稍等即可再次尝试"}))
     sys.exit(0)
 elif state.get("lock_until", 0):
-    state["fails"] = 0  # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
+    state["fails"] = 0        # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
+    state["lock_until"] = 0   # 过期时间戳一并清零（复审顺手项）
 try:
     rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
     ok = pwhash.verify(pw, rec)
@@ -160,6 +161,7 @@ PYEOF
   #    同时修复审计遗漏的缺陷：norm 此前被当文件路径 open()，真实模式 config-set 必失败）
   local old_mode
   old_mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))' 2>/dev/null || echo "")"
+  local old_user
   old_user="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("username","") or "")' 2>/dev/null || echo "")"
   tag="s$(date +%s%N | tail -c 9)"
   snapshot_lastgood "$tag"
@@ -745,24 +747,29 @@ do_backup_restore() {
   acquire_lock
   local src="${1:?缺少备份文件路径}"
   [ -f "$src" ] || die "NO_FILE" "备份文件不存在"
-  # secrets.json 不属于备份模型：备份永不含它，构造包携带即拒绝（P2-6）
-  if tar -tzf "$src" 2>/dev/null | grep -q '^etc/seedrou/secrets\.json$'; then
-    die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 seedrou-priv"
-  fi
-  # 成员白名单校验
-  if ! tar -tzf "$src" 2>/dev/null | python3 -c '
-import sys
-ok = True
+  # 成员白名单校验——先 posixpath.normpath 归一再判断（复审 N-01：
+  # `etc/seedrou/./secrets.json`、`etc/seedrou//secrets.json` 曾同时绕过
+  # secrets 精确匹配与前缀白名单，而 tar 解压会自动规范化，端到端可写穿）
+  verdict="$(tar -tzf "$src" 2>/dev/null | python3 -c '
+import sys, posixpath
+reason = "OK"
 for line in sys.stdin:
     p = line.rstrip("\n")
     if not p: continue
-    if p.startswith("/"): ok = False; break
-    if ".." in p.split("/"): ok = False; break
-    if not (p == "etc/seedrou" or p.startswith("etc/seedrou/") or p == "var/lib/seedrou/notes.json"): ok = False; break
-sys.exit(0 if ok else 1)
-'; then
-    die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
-  fi
+    np = posixpath.normpath(p)
+    if p.startswith("/") or ".." in p.split("/"):
+        reason = "BAD"; break
+    if np == "etc/seedrou/secrets.json":
+        reason = "SECRETS"; break
+    if not (np == "etc/seedrou" or np.startswith("etc/seedrou/") or np == "var/lib/seedrou/notes.json"):
+        reason = "BAD"; break
+print(reason)
+')"
+  case "$verdict" in
+    OK) ;;
+    SECRETS) die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 seedrou-priv" ;;
+    *) die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）" ;;
+  esac
   # 拒绝符号/硬链接条目：防止"备份内软链指向 /etc"穿越写盘（审计 5.3）
   if tar -tvzf "$src" 2>/dev/null | awk '{print substr($1,1,1)}' | grep -qE '^[lh]'; then
     die "BACKUP_BAD" "备份包内含链接条目，已拒绝" "为防路径穿越，备份包只允许普通文件与目录"
@@ -961,16 +968,13 @@ print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/n
   [ "$rc" -eq 0 ] && [ -s "$out" ] || die "UPG_NET" "下载升级包失败" "请检查升级源与网络；也可在页面手动上传升级包"
   # P2-4：此前 .sha256 下载失败会静默跳过校验——升级源支持第三方镜像，代理正是篡改风险点
   [ -s "${out}.sha256" ] || { rm -f "$out"; die "UPG_SHA" "升级源未提供 sha256 校验文件" "为防篡改，缺少 .sha256 时不安装；请确认发布页包含 seedrou-<版本>.tar.gz.sha256"; }
-  if [ -s "${out}.sha256" ]; then
-    # .sha256 内容记录的是原始资产名（seedrou-x.y.z.tar.gz），不能直接 -c；
-    # 提取期望哈希与实际文件比对
-    local want got
-    want="$(awk 'NR==1{print $1}' "${out}.sha256" 2>/dev/null)"
-    got="$(sha256sum "$out" 2>/dev/null | awk '{print $1}')"
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      die "UPG_SHA" "升级包校验失败（sha256 不匹配）" "下载可能被篡改或损坏，请重试；连续失败请检查升级源"
-    fi
-  fi
+  # .sha256 内容记录的是原始资产名（seedrou-x.y.z.tar.gz），不能直接 -c；
+  # 提取期望哈希与实际文件比对（存在性已由上方强制，无需再包一层 if）
+  local want got
+  want="$(awk 'NR==1{print $1}' "${out}.sha256" 2>/dev/null)"
+  got="$(sha256sum "$out" 2>/dev/null | awk '{print $1}')"
+  [ -n "$want" ] && [ "$want" = "$got" ] || \
+    die "UPG_SHA" "升级包校验失败（sha256 不匹配）" "下载可能被篡改或损坏，请重试；连续失败请检查升级源"
   ok_out "path" "$out"
 }
 

@@ -389,11 +389,20 @@ def main():
                 and cur["wan"].get("mode") == "pppoe":
             fail("V6_NATIVE_PPPPOE_UNSUPPORTED", "PPPoE 线路暂不支持 IPv6 Native（PD）",
                  "PPPoE 下没有 DHCPv6 前缀委派客户端；请改用 NAT6，或把上网方式切换为 DHCP/静态后再用 Native")
+        if section == "ipv6" and result.get("enabled") and result.get("mode") == "static" \
+                and cur["wan"].get("mode") == "pppoe":
+            fail("V6_STATIC_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持静态 IPv6",
+                 "静态 IPv6 需要落在以太网口上；PPPoE 请改用 NAT6（自动 ULA）或关闭 IPv6")
         if section == "wan" and result.get("mode") == "pppoe" \
                 and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
             fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
                  "切换到 PPPoE 需先调整 IPv6 模式",
                  "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+        if section == "wan" and result.get("mode") == "pppoe" \
+                and cur_v6.get("enabled") and cur_v6.get("mode") == "static":
+            fail("V6_STATIC_PPPPOE_UNSUPPORTED",
+                 "切换到 PPPoE 需先调整 IPv6 模式",
+                 "当前 IPv6 为静态地址，PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
     print(json.dumps({"ok": True, "section": section, "data": result}, ensure_ascii=False))
 
 

@@ -114,11 +114,13 @@ def gen_wan_network(cfg):
         lines += ["DHCP=no", "IPv6AcceptRA=no",
                   f"Address={cfg['wan']['ip']}/{mask_prefix(cfg['wan']['mask'])}",
                   f"Gateway={cfg['wan']['gw']}"]
-        if v6.get("enabled") and v6.get("mode") == "static":
-            # P2-3：WAN 侧静态 IPv6 此前被 UI 收集、validate 校验，但从不落盘（2026-11 全量审计）
-            lines += [f"Address={v6['addr']}", f"Gateway={v6['gw']}"]
     else:  # pppoe — 底层口只做链路，IP 由 ppp0 承载；不给 IPv4 link-local（避免 WAN 二层暴露面）
         lines += ["DHCP=no", "IPv6AcceptRA=no", "LinkLocalAddressing=no", "ConfigureWithoutCarrier=yes"]
+    # 静态 IPv6 WAN 地址（P2-3+N-02）：此前整个块挂在 IPv4 static 分支里，
+    # dhcp+静态v6 是合法可保存的配置却永不落盘。dhcp 保留 IPv6AcceptRA=yes
+    # （RA 与静态地址并存）；pppoe 由 validate 拒绝——v6 应落 ppp0，以太网口无承载点
+    if mode in ("dhcp", "static") and v6.get("enabled") and v6.get("mode") == "static":
+        lines += [f"Address={v6['addr']}", f"Gateway={v6['gw']}"]
     if mode == "dhcp":
         lines += ["", "[DHCPv4]", "UseDNS=yes", "UseGateway=yes", "UseNTP=no", "UseHostname=no"]
         if v6.get("enabled") and v6.get("mode") == "native":
@@ -218,6 +220,15 @@ def gen_dnsmasq(cfg):
     if wan.get("dns_mode") == "manual" and wan.get("dns"):
         for d in wan["dns"]:
             lines.append(f"server={d}")
+        v6d = v6.get("dns") if v6.get("enabled") else []
+        for d in (v6d or []):
+            lines.append(f"server={d}")
+    elif wan.get("mode") == "static":
+        # N-03：存量 static+auto 配置（v0.1.29 前可保存）没有上游生产者，
+        # no-resolv+空 servers-file = DNS 全挂。写公共 DNS 兜底保证可用；
+        # 新配置已在 validate 层拒绝该组合（WAN_DNS_STATIC_AUTO）
+        lines.append("server=223.5.5.5")
+        lines.append("server=119.29.29.29")
         v6d = v6.get("dns") if v6.get("enabled") else []
         for d in (v6d or []):
             lines.append(f"server={d}")
