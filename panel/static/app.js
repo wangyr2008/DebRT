@@ -979,7 +979,11 @@ function loadSingbox() {
     $id("sb-uninstalled").hidden = !!sb.installed;
     $id("sb-service").hidden = !sb.installed;
     $id("sb-subs").hidden = !sb.installed;
-    $id("sb-tailscale").hidden = !(sb.endpoint && sb.endpoint.present);
+    var tsPresent = !!(sb.endpoint && sb.endpoint.present);
+    $id("sb-tailscale").hidden = !tsPresent;
+    var tsb = $id("sb-ts-badge");
+    tsb.textContent = tsPresent ? (sb.active ? "已托管" : "已停止") : "—";
+    tsb.className = "ru-badge" + (tsPresent && sb.active ? " green" : "");
     if (!sb.installed) return;
     var badge = $id("sb-badge");
     badge.textContent = sb.active ? "运行中" : "已停止";
@@ -988,13 +992,18 @@ function loadSingbox() {
     $id("sb-autostart").checked = !!sb.enabled;
     $id("btn-sb-stop").textContent = sb.active ? "停止服务" : "启动服务";
     var dash = $id("sb-dash");
+    var custom = (sb.dashboard && sb.dashboard.custom) || "";
     var ctl = sb.dashboard && sb.dashboard.controller;
-    if (ctl) {
+    var target = "";
+    if (custom) {
+      target = custom;
+    } else if (ctl) {
       var parts = ctl.split(":"), port = parts.pop(), hostonly = parts.join(":");
       var shown = (hostonly === "0.0.0.0" || hostonly === "::" || hostonly === "") ? location.hostname : hostonly;
-      dash.href = (location.protocol === "https:" ? "https" : "http") + "://" + shown + ":" + port + (sb.dashboard.ui ? "/ui" : "/");
-      dash.hidden = false;
-    } else dash.hidden = true;
+      target = (location.protocol === "https:" ? "https" : "http") + "://" + shown + ":" + port + (sb.dashboard.ui ? "/ui" : "/");
+    }
+    if (target) { dash.href = target; dash.hidden = false; } else dash.hidden = true;
+    $id("sb-dash-url").placeholder = custom || (ctl ? "配置中 clash_api：" + ctl : "https://metacubexd.pages.dev");
     $id("sb-ts-host").textContent = (sb.endpoint && sb.endpoint.hostname) || "—";
     $id("sb-ts-ver").textContent = sb.version || "—";
     $id("sb-uptime").textContent = fmtDur(sb.uptime_s);
@@ -1030,6 +1039,17 @@ function renderSbVerLine(r) {
     }).catch(function (e) { btnBusy(ob, false); apiFail(e); });
   });
 }
+$id("btn-sb-dash-save").addEventListener("click", function () {
+  var btn = this;
+  var url = $id("sb-dash-url").value.trim();
+  btnBusy(btn, true);
+  API.post("/api/singbox/dash", { url: url }).then(function (r) {
+    btnBusy(btn, false);
+    toast("ok", r.message || "Dashboard 地址已更新");
+    $id("sb-dash-url").value = "";
+    loadSingbox();
+  }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
+});
 $id("btn-sb-check").addEventListener("click", function () {
   var btn = this;
   var line = $id("sb-ver-line");

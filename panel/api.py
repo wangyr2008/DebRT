@@ -177,6 +177,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/podman/image-rm": lambda b, h: (200, priv("podman-ops", "image-rm", _json_body(b).get("image", ""), timeout=120), None),
             "/podman/compose": post_compose,
             "/singbox/check": lambda b, h: (200, priv("singbox-ops", "check", timeout=90), None),
+            "/singbox/dash": post_singbox_dash,
             "/singbox/ctl": post_singbox_ctl,
             "/singbox/autostart": post_singbox_autostart,
             "/singbox/install": post_singbox_install,
@@ -400,6 +401,12 @@ def post_singbox_install(body, headers):
     return 200, {"ok": True, "message": "sing-box 内核已安装；下一步请填写配置地址并更新配置"}, None
 
 
+def post_singbox_dash(body, headers):
+    data = _json_body(body)
+    out = priv("singbox-ops", "dash-set", input_text=json.dumps({"url": str(data.get("url", ""))}), timeout=60)
+    return 200, {"ok": True, "message": out.get("message", "Dashboard 地址已更新")}, None
+
+
 def post_singbox_upgrade(body, headers):
     priv("singbox-ops", "install", timeout=960)
     return 200, {"ok": True, "message": "内核已升级（配置与节点数据保留）"}, None
@@ -522,6 +529,7 @@ _SBOX = {
     "update": {"ok": True, "ts": int(time.time()) - 180, "error": "", "trigger": "auto"},
     "endpoint": {"present": True, "hostname": "seedrou"},
     "dashboard": {"controller": "0.0.0.0:9090", "ui": True},
+    "dash_url": "",
 }
 
 
@@ -620,7 +628,7 @@ def mock_priv(args, input_text):
                     "autoupdate": {"on": sb["auto_on"], "time": sb["auto_time"]},
                     "update": dict(sb["update"]),
                     "endpoint": dict(sb["endpoint"]),
-                    "dashboard": dict(sb["dashboard"])}
+                    "dashboard": dict(sb["dashboard"], custom=sb.get("dash_url", ""))}
         if sub == "ctl":
             act = rest[1] if len(rest) > 1 else ""
             if act == "stop":
@@ -643,6 +651,9 @@ def mock_priv(args, input_text):
         if sub == "sub-update":
             sb["update"] = {"ok": True, "ts": int(time.time()) - 3, "error": "", "trigger": "manual"}
             return {"ok": True, "message": "（mock）配置已更新，sing-box 已重启加载新配置"}
+        if sub == "dash-set":
+            sb["dash_url"] = str((json.loads(input_text or "{}")).get("url") or "").strip()
+            return {"ok": True, "message": "（mock）Dashboard 地址已更新"}
         if sub == "schedule":
             t = str((json.loads(input_text or "{}")).get("time") or "").strip()
             if t == "off" or not t:

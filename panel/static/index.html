@@ -381,8 +381,12 @@
                 <button class="ru-btn" id="btn-sb-check">检查更新</button>
               </div>
               <div id="sb-ver-line" hidden></div>
+              <div class="ru-frow">
+                <div class="ru-field"><div class="ru-flabel">Dashboard 地址（用官方/第三方面板时填它的网址；留空=按配置中的 clash_api 自动推导）</div><input class="ru-in" id="sb-dash-url" placeholder="https://metacubexd.pages.dev"></div>
+                <button class="ru-btn sm" id="btn-sb-dash-save">保存地址</button>
+              </div>
               <div class="ru-kv" style="margin-top:10px"><span class="k">已运行</span><span class="v" id="sb-uptime">—</span></div>
-              <div class="ru-hint">Dashboard 为 Clash API 面板，可查看实时连接、流量与节点启停；停止服务后全部代理节点不可用，LAN 直连与路由功能不受影响。检查更新只对比版本；升级内核保留配置与节点数据。</div>
+              <div class="ru-hint">Dashboard 可查看实时连接、流量与节点启停。配置里含 clash_api 时自动按其地址跳转；使用官方/第三方在线面板（如 metacubexd）请在上面的地址栏填写。停止服务后全部代理节点不可用，LAN 直连与路由功能不受影响。检查更新只对比版本；升级内核保留配置与节点数据。</div>
               <div class="ru-hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--ru-line)"><span style="color:var(--ru-red);font-weight:500">危险操作：</span><button class="ru-linkbtn" id="btn-sb-uninstall">卸载 sing-box</button>——将删除内核、配置与全部节点数据（卸载前自动在 /var/lib/seedrou 留一份配置备份），不可恢复；确认不再使用时才执行。</div>
             </div>
 

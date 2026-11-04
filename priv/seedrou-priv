@@ -700,6 +700,11 @@ ui_dir = str(clash.get("external_ui") or "")
 if ui_dir:
     full = ui_dir if ui_dir.startswith("/") else os.path.join("/etc/sing-box", ui_dir)
     ui = os.path.isdir(full)
+custom = ""
+try:
+    custom = open("/var/lib/seedrou/singbox-dash-url").read().strip()
+except Exception:
+    custom = ""
 up_s = None
 if active:
     pid = (_run(["systemctl", "show", "sing-box.service", "--property=MainPID", "--value"]).stdout or "").strip()
@@ -715,7 +720,7 @@ print(json.dumps({"ok": True, "installed": installed, "sb": sb_present,
                   "url_set": url_set, "url_masked": url_masked,
                   "autoupdate": {"on": auto_on, "time": auto_time},
                   "update": upd, "endpoint": {"present": ep_present, "hostname": ep_host},
-                  "dashboard": {"controller": controller, "ui": ui}}, ensure_ascii=False))
+                  "dashboard": {"controller": controller, "ui": ui, "custom": custom}}, ensure_ascii=False))
 SBJ
       ;;
     ctl)
@@ -814,6 +819,23 @@ SBURLF
       out="$(/usr/local/bin/sb uninstall --yes 2>&1)" && rc=0 || rc=$?
       [ "$rc" -eq 0 ] || { printf '%s\n' "$out" | tail -n 5 >&2; die "SB_UNINSTALL_FAIL" "卸载失败" "以上为 sb 输出尾部；可稍后重试或在控制台执行 sb uninstall"; }
       ok_out "message" "sing-box 已卸载（原配置备份在 /var/lib/seedrou/）" ;;
+    dash-set)
+      local url
+      url="$(python3 -c 'import json,sys;print(str(json.load(sys.stdin).get("url","")).strip())' 2>/dev/null)" || die "SB_DASH_BAD" "请求格式错误"
+      mkdir -p /var/lib/seedrou
+      if [ -z "$url" ]; then
+        rm -f /var/lib/seedrou/singbox-dash-url
+        ok_out "message" "Dashboard 地址已清除（回到按配置自动推导）"
+        exit 0
+      fi
+      case "$url" in
+        https://*|http://*) ;;
+        *) die "SB_DASH_BAD" "Dashboard 地址需以 http(s):// 开头" "示例：https://metacubexd.pages.dev" ;;
+      esac
+      write_atomic "/var/lib/seedrou/singbox-dash-url" 644 <<SBDASH
+$url
+SBDASH
+      ok_out "message" "Dashboard 地址已保存" ;;
     check)
       local cur latest
       cur="$(sing-box version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
@@ -824,7 +846,7 @@ SBURLF
       else
         ok_out "up_to_date" "false" "current" "$cur" "latest" "$latest" "message" "发现新版本 v$latest（当前 v$cur）"
       fi ;;
-    *) die "USAGE" "singbox-ops 需要 status|ctl|autostart|install|check|sub-set|sub-update|schedule|uninstall" ;;
+    *) die "USAGE" "singbox-ops 需要 status|ctl|autostart|install|check|dash-set|sub-set|sub-update|schedule|uninstall" ;;
   esac
 }
 
