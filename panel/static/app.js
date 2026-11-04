@@ -939,10 +939,25 @@ $id("file-compose").addEventListener("change", function () {
 
 /* ===================== 6 其他工具（sing-box / 配置 / Tailscale 托管） ===================== */
 loaders.tools = loadSingbox;
+function fmtDur(sec) {
+  if (sec == null || isNaN(sec) || sec <= 0) return "—";
+  var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return d + " 天 " + h + " 小时";
+  if (h > 0) return h + " 小时 " + m + " 分钟";
+  if (m > 0) return m + " 分钟";
+  return "刚刚";
+}
 function renderSubState(state) {
   /* 用户要求：成功只显示"多久前更新成功"；自动/手动失败都持久显示原因直到下次成功 */
   var line = $id("sb-sub-state");
-  if (!state || state.ts == null || state.ts === 0) { line.hidden = true; return; }
+  if (!state || state.ts == null || state.ts === 0) {
+    line.hidden = false;
+    line.className = "ru-okline";
+    line.style.color = "var(--ru-text2)";
+    line.innerHTML = '<i data-lucide="info"></i>暂无更新记录：新 sb.sh 生效后首次「更新配置」或到点自动更新后开始记录';
+    srRenderIcons(line);
+    return;
+  }
   line.hidden = false;
   if (state.ok) {
     var mins = Math.max(0, Math.round((Date.now() / 1000 - state.ts) / 60));
@@ -982,7 +997,10 @@ function loadSingbox() {
     } else dash.hidden = true;
     $id("sb-ts-host").textContent = (sb.endpoint && sb.endpoint.hostname) || "—";
     $id("sb-ts-ver").textContent = sb.version || "—";
-    $id("sb-sched-state").textContent = sb.autoupdate && sb.autoupdate.on ? "已开启（每天 " + (sb.autoupdate.time || "04:00") + "）" : "已关闭";
+    $id("sb-uptime").textContent = fmtDur(sb.uptime_s);
+    var schedBadge = $id("sb-sched-badge");
+    schedBadge.textContent = sb.autoupdate && sb.autoupdate.on ? "每天 " + (sb.autoupdate.time || "04:00") : "已关闭";
+    schedBadge.className = "ru-badge" + (sb.autoupdate && sb.autoupdate.on ? " green" : "");
     $id("sb-auto-switch").checked = !!(sb.autoupdate && sb.autoupdate.on);
     $id("sb-sub-url").placeholder = sb.url_set ? sb.url_masked : "https://sub.example.com/link/…";
     renderSubState(sb.update);

@@ -516,6 +516,7 @@ def get_backup(body, headers):
 # mock：sing-box / 配置 / Tailscale endpoint 的固定场景（数值与设计稿一致）
 _SBOX = {
     "installed": True, "active": True, "enabled": True, "version": "1.14.4",
+    "uptime_s": 3 * 86400 + 14 * 3600,
     "url": "https://sub.example.com/link/9f3c8d2e", "url_set": True,
     "auto_on": True, "auto_time": "04:00",
     "update": {"ok": True, "ts": int(time.time()) - 180, "error": "", "trigger": "auto"},
@@ -614,6 +615,7 @@ def mock_priv(args, input_text):
                 upd["ts"] = int(time.time()) if not upd["ok"] else upd["ts"]
             return {"ok": True, "installed": sb["installed"], "sb": True,
                     "active": sb["active"], "enabled": sb["enabled"], "version": sb["version"],
+                    "uptime_s": sb.get("uptime_s"),
                     "url_set": sb["url_set"], "url_masked": masked,
                     "autoupdate": {"on": sb["auto_on"], "time": sb["auto_time"]},
                     "update": dict(sb["update"]),

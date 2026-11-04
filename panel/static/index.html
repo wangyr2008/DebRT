@@ -381,6 +381,7 @@
                 <button class="ru-btn" id="btn-sb-check">检查更新</button>
               </div>
               <div id="sb-ver-line" hidden></div>
+              <div class="ru-kv" style="margin-top:10px"><span class="k">已运行</span><span class="v" id="sb-uptime">—</span></div>
               <div class="ru-hint">Dashboard 为 Clash API 面板，可查看实时连接、流量与节点启停；停止服务后全部代理节点不可用，LAN 直连与路由功能不受影响。检查更新只对比版本；升级内核保留配置与节点数据。</div>
               <div class="ru-hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--ru-line)"><span style="color:var(--ru-red);font-weight:500">危险操作：</span><button class="ru-linkbtn" id="btn-sb-uninstall">卸载 sing-box</button>——将删除内核、配置与全部节点数据（卸载前自动在 /var/lib/seedrou 留一份配置备份），不可恢复；确认不再使用时才执行。</div>
             </div>
@@ -389,8 +390,9 @@
             <div class="ru-card" id="sb-subs" hidden>
               <div class="ru-chead">
                 <div><h3>配置</h3><div class="ru-sub">与 sb.sh 一致：拉取远端配置，校验通过后自动生效</div></div>
-                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                   <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">自动更新<label class="ru-switch"><input type="checkbox" id="sb-auto-switch" aria-label="配置自动更新开关"><span></span></label></div>
+                  <span class="ru-badge" id="sb-sched-badge">已关闭</span>
                   <button class="ru-btn primary sm" id="btn-sb-update"><i data-lucide="refresh-cw"></i>更新配置</button>
                 </div>
               </div>
@@ -402,7 +404,6 @@
                 <div class="ru-field"><div class="ru-flabel">更新时间（每天，24 小时制；开关关闭时忽略）</div><input class="ru-in" id="sb-sched-time" placeholder="04:00"></div>
                 <button class="ru-btn sm" id="btn-sb-sched">保存时间</button>
               </div>
-              <div class="ru-kv" style="margin-top:8px"><span class="k">当前计划</span><span class="v" id="sb-sched-state">—</span></div>
               <div id="sb-sub-state" hidden></div>
               <div class="ru-hint">更新配置会重新拉取、通过 sing-box check 校验后重建配置并重启服务；无论自动还是手动更新，失败原因都会持续显示在本页直到下次成功。节点启停与详情请在 Dashboard 中查看。</div>
             </div>
