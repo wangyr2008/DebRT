@@ -65,6 +65,11 @@ install -m 644 "$SRC_DIR/panel/"*.py          "$LIB_DIR/panel/"
 mkdir -p "$LIB_DIR/panel/static"
 install -m 644 "$SRC_DIR/panel/static/"*      "$LIB_DIR/panel/static/"
 install -m 644 "$SRC_DIR/VERSION"             "$SHARE_DIR/VERSION"
+# sb.sh 管理器随 SeedRou 下发（sing-box 本体默认不安装，由面板一键安装或控制台 sb install）
+if [ -f "$SRC_DIR/singbox/sb.sh" ]; then
+    install -m 755 "$SRC_DIR/singbox/sb.sh" /usr/local/bin/sb
+    echo "[安装] 已下发 sing-box 管理器：/usr/local/bin/sb（sing-box 本体未安装，需要时在面板一键安装）"
+fi
 # networkd-dispatcher 钩子
 mkdir -p /etc/networkd-dispatcher/routable.d /etc/networkd-dispatcher/no-carrier.d
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/routable.d/

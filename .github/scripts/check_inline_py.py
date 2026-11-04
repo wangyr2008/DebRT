@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 files = []
-for pat in ("priv/*", "install.sh", "uninstall.sh", "network/ppp/*/*", "network/dispatcher/*"):
+for pat in ("priv/*", "singbox/*", "install.sh", "uninstall.sh", "network/ppp/*/*", "network/dispatcher/*"):
     files += [f for f in sorted(glob.glob(pat)) if os.path.isfile(f)]
 
 # 标记后允许行尾还有管道/重定向等（复审 P2：`<<'PY' | while ...` 形式曾整段漏检）

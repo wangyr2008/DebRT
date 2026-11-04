@@ -14,20 +14,22 @@
 | NAT6 ULA | — | `fda1:9e3a:8b7f::/48`（固定默认，避开 fdfe:dcba） |
 | sysctl 文件 | `/etc/sysctl.d/99-sing-box.conf`（ip_forward=1） | `/etc/sysctl.d/70-seedrou.conf`（ip_forward=1、rp_filter=0） |
 | systemd 单元 | `sing-box.service` | `seedrou-panel / seedrou-apply / seedrou-converge.timer / seedrou-pppoe` |
-| 定时任务 | `/etc/cron.d/sing-box`（每日 04:00 拉订阅） | `seedrou-converge.timer`（systemd timer，开机 15 分钟后首跑、之后每 6 小时收敛一次） |
+| 定时任务 | `/etc/cron.d/sing-box`（`sb update` 拉订阅；时间可在面板设定） | `seedrou-converge.timer`（systemd timer，开机 15 分钟后首跑、之后每 6 小时收敛一次） |
+| sb.sh | 管理器本身 | 随 SeedRou 安装包下发到 `/usr/local/bin/sb`（增强版：更新结果落盘 `update-state.json`、支持 `seturl URL`/`uninstall`/`auto on HH:MM`）；sing-box 本体默认不安装，面板一键安装 |
+| 面板重启 sing-box | 旧版面板永不重启 sing-box | v0.1.32 起面板提供显式「重启/停止」按钮（用户主动点击才执行，收敛仍不碰 sing-box） |
 | 文件 | `/etc/sing-box/`（sing-box:sing-box 0600） | `/etc/seedrou/`（root）、`/var/lib/seedrou/`（seedrou） |
 | 端口 | 7890（mixed）、9090（API/dashboard） | 80（面板）、53/67（dnsmasq，仅 LAN+lo） |
 
 ## 2. 底座的行为承诺
 
 1. **永不 `nft flush ruleset`**。应用配置时只 `delete table inet seedrou_base` 后重建自己的表；
-   `sing-box`、podman（netavark）、tailscale 的表原样保留。
+   `sing-box`、podman（netavark）的表原样保留（tailscale 自 0.1.32 起以 sing-box endpoint 托管，不再有独立表）。
 2. **永不 restart / disable `sing-box.service`**，也不读写 `/etc/sing-box/`。
    面板与收敛定时器（`apply-all --convergent`）都不触碰它。
 3. **不加 ip rule、不占 fwmark**。你的 `auto_route` 规则（priority 9000 表 2022）不受干扰；
    到 LAN 子网、fakeip 段的路由决策与底座 NAT 各行其道。
 4. **转发策略**：`established` 放行；LAN→WAN 放行；WAN→LAN 仅端口转发（DNAT）命中放行；
-   LAN↔tun/tailscale0/podman0 默认放行。唯一收紧点是 WAN 入站默认丢弃——
+   LAN↔tun/podman0 默认放行。唯一收紧点是 WAN 入站默认丢弃——
    这同时保护了 7890/9090 不暴露到公网。
 5. **rp_filter=0**（`70-seedrou.conf`）：tproxy/tun 场景标准要求；与 `99-sing-box.conf` 数值一致。
 6. **健康检查直连**：底座的 WAN 探测基于主表默认路由 + WAN 接口地址，

@@ -88,7 +88,7 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 | 设备列表 | dnsmasq 租约 + 静态绑定合并，在线状态来自 ARP 表；备注按 MAC 存储并与静态分配同步 |
 | 安全中心 | demo 的"防火墙放行规则"实为**端口转发（DNAT）**，已正名并补齐增删改/启停/冲突校验；"防火墙总开关"= WAN 入站默认拦截（关闭时红色警示） |
 | 容器管理 | rootful Podman：容器启停/重启/删除/更新（拉最新镜像后按原端口、卷、环境变量重建）；镜像引用检查后删除；Compose 保存到 /etc/seedrou/compose.yaml，`podman-compose` 部署，失败日志可见 |
-| 其他工具 | Tailscale 一键安装（官方 apt 源）/ 登录（返回授权 URL）/ 登出 / 运行开关；强制 `--accept-dns=false`，不改 resolv.conf |
+| 其他工具 | sing-box 服务卡（状态/开机自启/重启/停止/打开 Dashboard/检查更新/一键安装/卸载）；订阅卡（地址保存、更新订阅、每日自动更新时间可设定、成功显示时长、失败原因持久显示）；Tailscale 只读卡（sing-box endpoint 托管，未配置自动隐藏） |
 | 备份与升级 | 在线检查更新走 GitHub **releases/latest 302 解析**（不碰 api.github.com，规避限流，与 sb.sh 同思路，带 gh-proxy 镜像回退）；升级包 `.tar.gz`（sha256 校验 → 暂存自检 → 原子换目录 → 延迟重启面板 → 失败回滚）；备份/恢复 /etc/seedrou；恢复出厂只重置路由配置（LAN 恢复 192.168.10.1，管理密码与升级源保留） |
 
 ## 5. 发布与自动升级（GitHub）

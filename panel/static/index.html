@@ -357,33 +357,66 @@
 
           <!-- ============ 6 其他工具 ============ -->
           <section class="ru-page" id="pg-tools">
-            <div class="ru-card" id="ts-uninstalled" hidden>
-              <div class="ru-chead"><div><h3>Tailscale</h3><div class="ru-sub">基于 WireGuard 的零配置虚拟组网，随时随地安全访问家中设备</div></div></div>
-              <div class="ru-callout"><i data-lucide="info"></i><span>Tailscale 尚未安装。安装将从官方软件源下载约 20 MB 组件，过程约 10–30 秒，完成后自动进入登录流程；不影响现有路由与 DHCP 配置。</span></div>
-              <div class="ru-save"><button class="ru-btn primary" id="btn-ts-install">一键安装</button></div>
-              <div class="ru-badmsg" id="msg-ts-install"></div>
+            <!-- 未安装：一键安装（sb.sh 已随 SeedRou 下发，默认不装 sing-box） -->
+            <div class="ru-card" id="sb-uninstalled" hidden>
+              <div class="ru-chead"><div><h3>sing-box 服务</h3><div class="ru-sub">未安装 · sb.sh 管理器已随 SeedRou 下发</div></div></div>
+              <div class="ru-callout"><i data-lucide="info"></i><span>一键安装将从官方源部署 sing-box 内核（GitHub 被墙时自动走 gh-proxy 回退），不改动 SeedRou 的路由与防火墙配置；安装完成后请填写配置地址并更新配置。默认不自动安装，需要时才点。</span></div>
+              <div class="ru-save"><button class="ru-btn primary" id="btn-sb-install">一键安装 sing-box</button></div>
+              <div class="ru-badmsg" id="msg-sb-install"></div>
             </div>
 
-            <div class="ru-card" id="ts-installed" hidden>
+            <!-- 已安装：服务卡 -->
+            <div class="ru-card" id="sb-service" hidden>
               <div class="ru-chead">
-                <div><h3>Tailscale</h3><div class="ru-sub">基于 WireGuard 的零配置虚拟组网，随时随地安全访问家中设备</div></div>
+                <div><h3>sing-box 服务</h3><div class="ru-sub" id="sb-subtitle">sing-box · 由 sb.sh 一键安装部署</div></div>
                 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-                  <span class="ru-badge" id="ts-badge">—</span>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">运行<label class="ru-switch"><input type="checkbox" id="ts-run" aria-label="Tailscale 运行开关"><span></span></label></div>
+                  <span class="ru-badge" id="sb-badge">—</span>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">开机自启<label class="ru-switch"><input type="checkbox" id="sb-autostart" aria-label="sing-box 开机自启"><span></span></label></div>
+                  <button class="ru-btn sm" id="btn-sb-restart">重启</button>
+                  <button class="ru-btn sm" id="btn-sb-stop">停止服务</button>
                 </div>
               </div>
-              <div id="ts-info">
-                <div class="ru-kv"><span class="k">登录账号</span><span class="v" id="ts-account">—</span></div>
-                <div class="ru-kv"><span class="k">Tailscale IPv4</span><span class="v" id="ts-ip">—</span></div>
-                <div class="ru-kv"><span class="k">主机名</span><span class="v" id="ts-host">—</span></div>
-                <div class="ru-kv"><span class="k">版本</span><span class="v" id="ts-ver">—</span></div>
+              <div class="ru-save" style="margin-top:14px">
+                <a class="ru-btn primary" id="sb-dash" href="#" target="_blank" rel="noopener" style="text-decoration:none"><i data-lucide="external-link"></i>打开 Dashboard</a>
+                <button class="ru-btn" id="btn-sb-check">检查更新</button>
               </div>
-              <div class="ru-callout warn" id="ts-authurl" hidden style="margin-top:14px"><i data-lucide="info"></i><span id="ts-authurl-text">—</span></div>
-              <div class="ru-save">
-                <button class="ru-btn primary sm" id="btn-ts-login">登录 Tailscale</button>
-                <button class="ru-linkbtn" id="btn-ts-logout" style="font-size:13px">登出</button>
+              <div id="sb-ver-line" hidden></div>
+              <div class="ru-hint">Dashboard 为 Clash API 面板，可查看实时连接、流量与节点启停；停止服务后全部代理节点不可用，LAN 直连与路由功能不受影响。检查更新只对比版本；升级内核保留配置与节点数据。</div>
+              <div class="ru-hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--ru-line)"><span style="color:var(--ru-red);font-weight:500">危险操作：</span><button class="ru-linkbtn" id="btn-sb-uninstall">卸载 sing-box</button>——将删除内核、配置与全部节点数据（卸载前自动在 /var/lib/seedrou 留一份配置备份），不可恢复；确认不再使用时才执行。</div>
+            </div>
+
+            <!-- 配置卡：配置来源地址 / 自动更新开关与时间 / 更新状态 -->
+            <div class="ru-card" id="sb-subs" hidden>
+              <div class="ru-chead">
+                <div><h3>配置</h3><div class="ru-sub">与 sb.sh 一致：拉取远端配置，校验通过后自动生效</div></div>
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">自动更新<label class="ru-switch"><input type="checkbox" id="sb-auto-switch" aria-label="配置自动更新开关"><span></span></label></div>
+                  <button class="ru-btn primary sm" id="btn-sb-update"><i data-lucide="refresh-cw"></i>更新配置</button>
+                </div>
               </div>
-              <div class="ru-hint">登录将跳转 Tailscale 官方授权页，确认后自动加入您的私有网络（tailnet）；可通过 Tailscale 控制台管理设备与访问策略。已默认关闭「接受 Tailscale DNS」，不会改动本机 DNS 配置。</div>
+              <div class="ru-frow" style="margin-top:6px">
+                <div class="ru-field"><div class="ru-flabel">配置来源地址（脱敏显示；留空保持不变）</div><input class="ru-in" id="sb-sub-url" placeholder="https://sub.example.com/link/…"></div>
+                <button class="ru-btn sm" id="btn-sb-save">保存地址</button>
+              </div>
+              <div class="ru-frow">
+                <div class="ru-field"><div class="ru-flabel">更新时间（每天，24 小时制；开关关闭时忽略）</div><input class="ru-in" id="sb-sched-time" placeholder="04:00"></div>
+                <button class="ru-btn sm" id="btn-sb-sched">保存时间</button>
+              </div>
+              <div class="ru-kv" style="margin-top:8px"><span class="k">当前计划</span><span class="v" id="sb-sched-state">—</span></div>
+              <div id="sb-sub-state" hidden></div>
+              <div class="ru-hint">更新配置会重新拉取、通过 sing-box check 校验后重建配置并重启服务；无论自动还是手动更新，失败原因都会持续显示在本页直到下次成功。节点启停与详情请在 Dashboard 中查看。</div>
+            </div>
+
+            <!-- Tailscale：sing-box endpoint 托管（只读；未配置自动隐藏） -->
+            <div class="ru-card" id="sb-tailscale" hidden>
+              <div class="ru-chead">
+                <div><h3>Tailscale</h3><div class="ru-sub">由 sing-box 配置文件中的 tailscale endpoint 托管运行</div></div>
+                <span class="ru-badge green" id="sb-ts-badge">已托管</span>
+              </div>
+              <div class="ru-kv"><span class="k">运行方式</span><span class="v">sing-box endpoint 托管</span></div>
+              <div class="ru-kv"><span class="k">主机名</span><span class="v" id="sb-ts-host">—</span></div>
+              <div class="ru-kv"><span class="k">sing-box 版本</span><span class="v" id="sb-ts-ver">—</span></div>
+              <div class="ru-hint">检测到配置中已启用 tailscale endpoint；参数调整请通过 Dashboard 或包含该配置的备份完成。登录账号与分配 IP 由 sing-box 内部（tsnet）管理，可在 Tailscale 管理台查看本机；未配置 tailscale 时此卡片自动隐藏。</div>
             </div>
           </section>
 

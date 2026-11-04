@@ -156,7 +156,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/podman/containers": lambda b, h: (200, priv("podman-ops", "list-containers", timeout=60), None),
             "/podman/images": lambda b, h: (200, priv("podman-ops", "list-images", timeout=60), None),
             "/podman/compose": lambda b, h: (200, priv("podman-ops", "compose-get"), None),
-            "/tailscale": lambda b, h: (200, priv("tailscale-ops", "status"), None),
+            "/singbox": lambda b, h: (200, priv("singbox-ops", "status"), None),
             "/backup": get_backup,
         }
         fn = table.get(q)
@@ -176,8 +176,14 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/podman/pull": lambda b, h: (200, priv("podman-ops", "pull", _json_body(b).get("image", ""), timeout=660), None),
             "/podman/image-rm": lambda b, h: (200, priv("podman-ops", "image-rm", _json_body(b).get("image", ""), timeout=120), None),
             "/podman/compose": post_compose,
-            "/tailscale/install": lambda b, h: (200, priv("tailscale-ops", "install", timeout=300), None),
-            "/tailscale/ctl": post_ts_ctl,
+            "/singbox/check": lambda b, h: (200, priv("singbox-ops", "check", timeout=90), None),
+            "/singbox/ctl": post_singbox_ctl,
+            "/singbox/autostart": post_singbox_autostart,
+            "/singbox/install": post_singbox_install,
+            "/singbox/upgrade": post_singbox_upgrade,
+            "/singbox/sub": post_singbox_sub,
+            "/singbox/schedule": post_singbox_schedule,
+            "/singbox/uninstall": post_singbox_uninstall,
             "/version/check": lambda b, h: (200, priv("upgrade-check", timeout=90), None),
             "/upgrade/online": post_upgrade_online,
             "/upgrade": post_upgrade_upload,
@@ -369,13 +375,63 @@ def post_compose(body, headers):
     raise ApiError(400, "BAD_ACTION", "不支持的 Compose 操作")
 
 
-# ---------------- Tailscale ----------------
-def post_ts_ctl(body, headers):
+# ---------------- sing-box / 配置（Tailscale 自 0.1.32 起由 sing-box endpoint 托管） ----------------
+def post_singbox_ctl(body, headers):
     data = _json_body(body)
     action = data.get("action", "")
-    if action not in ("start", "stop", "login", "logout"):
-        raise ApiError(400, "BAD_ACTION", "不支持的 Tailscale 操作")
-    return 200, priv("tailscale-ops", action, timeout=120 if action != "install" else 300), None
+    if action not in ("start", "stop", "restart"):
+        raise ApiError(400, "BAD_ACTION", "不支持的 sing-box 操作")
+    return 200, priv("singbox-ops", "ctl", action, timeout=120), None
+
+
+def post_singbox_autostart(body, headers):
+    data = _json_body(body)
+    return 200, priv("singbox-ops", "autostart", "on" if data.get("on") else "off", timeout=60), None
+
+
+def post_singbox_install(body, headers):
+    data = _json_body(body)
+    url = str(data.get("url", "")).strip()
+    priv("singbox-ops", "install", timeout=960)
+    if url:
+        priv("singbox-ops", "sub-set", input_text=json.dumps({"url": url}), timeout=60)
+        priv("singbox-ops", "sub-update", timeout=700)
+        return 200, {"ok": True, "message": "sing-box 已安装，配置已更新并启动服务"}, None
+    return 200, {"ok": True, "message": "sing-box 内核已安装；下一步请填写配置地址并更新配置"}, None
+
+
+def post_singbox_upgrade(body, headers):
+    priv("singbox-ops", "install", timeout=960)
+    return 200, {"ok": True, "message": "内核已升级（配置与节点数据保留）"}, None
+
+
+def post_singbox_sub(body, headers):
+    data = _json_body(body)
+    op = data.get("op", "")
+    if op == "set":
+        out = priv("singbox-ops", "sub-set", input_text=json.dumps({"url": str(data.get("url", ""))}), timeout=60)
+        return 200, {"ok": True, "message": out.get("message", "配置地址已保存")}, None
+    if op == "update":
+        out = priv("singbox-ops", "sub-update", timeout=700)
+        return 200, {"ok": True, "message": out.get("message", "配置已更新")}, None
+    raise ApiError(400, "BAD_ACTION", "不支持的配置操作")
+
+
+def post_singbox_schedule(body, headers):
+    data = _json_body(body)
+    t = str(data.get("time", "")).strip() or ("off" if data.get("off") else "")
+    if t != "off" and not re.fullmatch(r"([0-9]|0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]", t):
+        raise ApiError(400, "SB_SCHED_BAD", "时间格式应为 HH:MM（24 小时制）",
+                       "示例：04:00、06:30；关闭自动更新请把时间清空后保存")
+    out = priv("singbox-ops", "schedule", input_text=json.dumps({"time": t}), timeout=60)
+    return 200, {"ok": True, "message": out.get("message", "自动更新时间已更新"), "time": out.get("time", "")}, None
+
+
+def post_singbox_uninstall(body, headers):
+    data = _json_body(body)
+    if not data.get("confirm"):
+        raise ApiError(400, "CONFIRM", "缺少二次确认", "卸载不可恢复，请先勾选确认")
+    return 200, priv("singbox-ops", "uninstall", timeout=300), None
 
 
 # ---------------- 升级 / 备份 ----------------
@@ -457,6 +513,17 @@ def get_backup(body, headers):
 
 
 # ---------------- mock 特权实现 ----------------
+# mock：sing-box / 配置 / Tailscale endpoint 的固定场景（数值与设计稿一致）
+_SBOX = {
+    "installed": True, "active": True, "enabled": True, "version": "1.14.4",
+    "url": "https://sub.example.com/link/9f3c8d2e", "url_set": True,
+    "auto_on": True, "auto_time": "04:00",
+    "update": {"ok": True, "ts": int(time.time()) - 180, "error": "", "trigger": "auto"},
+    "endpoint": {"present": True, "hostname": "seedrou"},
+    "dashboard": {"controller": "0.0.0.0:9090", "ui": True},
+}
+
+
 def mock_priv(args, input_text):
     cmd, rest = args[0], args[1:]
     if cmd == "auth-verify":
@@ -528,15 +595,66 @@ def mock_priv(args, input_text):
         if sub in ("container", "pull", "image-rm", "compose-set", "compose-deploy", "compose-stop"):
             return {"ok": True, "message": f"（mock）{sub} 完成", "log_tail": "（mock）deploy log tail"}
         return {"ok": True}
-    if cmd == "tailscale-ops":
+    if cmd == "singbox-ops":
         sub = rest[0] if rest else "status"
+        sb = _SBOX
+        if sub == "check":
+            return {"ok": True, "up_to_date": False, "current": "1.14.4", "latest": "1.14.6",
+                    "message": "（mock）发现新版本 v1.14.6（当前 v1.14.4）"}
         if sub == "status":
-            return {"ok": True, "installed": True, "running": True, "logged_in": True,
-                    "account": "user@gmail.com", "ip": "100.64.12.34",
-                    "hostname": "seedrou", "version": "1.84.3", "auth_url": ""}
-        if sub == "login":
-            return {"ok": True, "auth_url": "https://login.tailscale.com/a/0123456789abcdef",
-                    "message": "（mock）请在浏览器打开授权链接"}
+            from urllib.parse import urlparse as _up
+            u = sb["url"]
+            pm = _up(u)
+            path = pm.path or ""
+            if len(path) > 14:
+                path = path[:8] + "…" + path[-4:]
+            masked = (pm.scheme + "://" + pm.netloc + path) if u else ""
+            upd = dict(sb["update"])
+            if upd.get("ts"):
+                upd["ts"] = int(time.time()) if not upd["ok"] else upd["ts"]
+            return {"ok": True, "installed": sb["installed"], "sb": True,
+                    "active": sb["active"], "enabled": sb["enabled"], "version": sb["version"],
+                    "url_set": sb["url_set"], "url_masked": masked,
+                    "autoupdate": {"on": sb["auto_on"], "time": sb["auto_time"]},
+                    "update": dict(sb["update"]),
+                    "endpoint": dict(sb["endpoint"]),
+                    "dashboard": dict(sb["dashboard"])}
+        if sub == "ctl":
+            act = rest[1] if len(rest) > 1 else ""
+            if act == "stop":
+                sb["active"] = False
+            elif act in ("start", "restart"):
+                sb["active"] = True
+            return {"ok": True, "message": f"（mock）sing-box {act} 完成"}
+        if sub == "autostart":
+            sb["enabled"] = (rest[1] if len(rest) > 1 else "off") == "on"
+            return {"ok": True, "message": "（mock）开机自启已切换"}
+        if sub == "install":
+            sb["installed"] = True
+            sb["active"] = True
+            sb["enabled"] = True
+            return {"ok": True, "message": "（mock）sing-box 内核已就绪", "tail": "mock install tail"}
+        if sub == "sub-set":
+            sb["url"] = str((json.loads(input_text or "{}")).get("url") or sb["url"]).strip() or sb["url"]
+            sb["url_set"] = True
+            return {"ok": True, "message": "（mock）配置地址已保存"}
+        if sub == "sub-update":
+            sb["update"] = {"ok": True, "ts": int(time.time()) - 3, "error": "", "trigger": "manual"}
+            return {"ok": True, "message": "（mock）配置已更新，sing-box 已重启加载新配置"}
+        if sub == "schedule":
+            t = str((json.loads(input_text or "{}")).get("time") or "").strip()
+            if t == "off" or not t:
+                sb["auto_on"] = False
+                return {"ok": True, "message": "（mock）自动更新已关闭"}
+            sb["auto_on"] = True
+            sb["auto_time"] = t
+            return {"ok": True, "message": f"（mock）配置自动更新已设为每天 {t}", "time": t}
+        if sub == "uninstall":
+            sb.update({"installed": False, "active": False, "enabled": False,
+                       "url_set": False, "url": "",
+                       "endpoint": {"present": False, "hostname": ""},
+                       "update": {"ok": None, "ts": None, "error": "", "trigger": ""}})
+            return {"ok": True, "message": "（mock）sing-box 已卸载"}
         return {"ok": True, "message": f"（mock）{sub} 完成"}
     if cmd == "upgrade-check":
         return {"ok": True, "up_to_date": False, "current": "0.1.0", "latest": "0.2.0", "message": "（mock）发现新版本"}

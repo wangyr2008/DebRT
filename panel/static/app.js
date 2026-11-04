@@ -158,6 +158,9 @@ function applyNarrow() {
   if (shell) shell.classList.toggle("ru-narrow", matchMedia("(max-width: 820px)").matches);
 }
 matchMedia("(max-width: 820px)").addEventListener ? matchMedia("(max-width: 820px)").addEventListener("change", applyNarrow) : matchMedia("(max-width: 820px)").addListener(applyNarrow);
+/* resize 兜底：部分环境（如内嵌浏览器快速切视口）matchMedia change 事件不触发，
+   窄屏类名丢失会让移动端整页横向溢出（真机截图实测 2026-11） */
+window.addEventListener("resize", applyNarrow);
 applyNarrow();
 
 /* ===================== 分段控件（DNS 自动/手动等） ===================== */
@@ -934,67 +937,189 @@ $id("file-compose").addEventListener("change", function () {
   this.value = "";
 });
 
-/* ===================== 6 其他工具（Tailscale） ===================== */
-var tsLoaded = false;
-loaders.tools = loadTailscale;
-function loadTailscale() {
-  return API.get("/api/tailscale").then(function (ts) {
-    $id("ts-uninstalled").hidden = ts.installed;
-    $id("ts-installed").hidden = !ts.installed;
-    if (!ts.installed) return;
-    var badge = $id("ts-badge");
-    badge.textContent = !ts.running ? "已停止" : (ts.logged_in ? "已连接" : "未登录");
-    badge.className = "ru-badge" + (ts.running && ts.logged_in ? " green" : "");
-    $id("ts-run").checked = !!ts.running;
-    $id("ts-account").textContent = ts.logged_in ? ts.account : "未登录";
-    $id("ts-ip").textContent = ts.logged_in ? ts.ip : "—";
-    $id("ts-host").textContent = ts.hostname || "—";
-    $id("ts-ver").textContent = ts.version || "—";
-    $id("btn-ts-login").hidden = ts.logged_in;
-    $id("btn-ts-logout").hidden = !ts.logged_in;
-    var au = $id("ts-authurl");
-    if (ts.auth_url) {
-      au.hidden = false;
-      $id("ts-authurl-text").innerHTML = "请在浏览器打开授权链接完成登录：<br><a href=\"" + esc(ts.auth_url) + '" target="_blank" rel="noopener" style="color:var(--ru-blue);overflow-wrap:anywhere">' + esc(ts.auth_url) + "</a>";
-    } else au.hidden = true;
+/* ===================== 6 其他工具（sing-box / 配置 / Tailscale 托管） ===================== */
+loaders.tools = loadSingbox;
+function renderSubState(state) {
+  /* 用户要求：成功只显示"多久前更新成功"；自动/手动失败都持久显示原因直到下次成功 */
+  var line = $id("sb-sub-state");
+  if (!state || state.ts == null || state.ts === 0) { line.hidden = true; return; }
+  line.hidden = false;
+  if (state.ok) {
+    var mins = Math.max(0, Math.round((Date.now() / 1000 - state.ts) / 60));
+    var dur = mins < 1 ? "刚刚" : mins < 60 ? mins + " 分钟前" : mins < 1440 ? Math.round(mins / 60) + " 小时前" : Math.round(mins / 1440) + " 天前";
+    line.className = "ru-okline";
+    line.style.color = "";
+    line.innerHTML = '<i data-lucide="check"></i>上次成功更新：' + esc(dur);
+  } else {
+    var d = new Date((state.ts || 0) * 1000);
+    var when = isNaN(d.getTime()) ? "" : "（" + d.toLocaleDateString() + " " + d.toLocaleTimeString() + "）";
+    line.className = "ru-okline";
+    line.style.color = "var(--ru-red)";
+    line.innerHTML = '<i data-lucide="info"></i>上次' + (state.trigger === "manual" ? "手动" : "自动") + "更新失败" + esc(when) + "：" + esc(state.error || "原因未记录");
+  }
+  srRenderIcons(line);
+}
+function loadSingbox() {
+  return API.get("/api/singbox").then(function (sb) {
+    $id("sb-uninstalled").hidden = !!sb.installed;
+    $id("sb-service").hidden = !sb.installed;
+    $id("sb-subs").hidden = !sb.installed;
+    $id("sb-tailscale").hidden = !(sb.endpoint && sb.endpoint.present);
+    if (!sb.installed) return;
+    var badge = $id("sb-badge");
+    badge.textContent = sb.active ? "运行中" : "已停止";
+    badge.className = "ru-badge" + (sb.active ? " green" : "");
+    $id("sb-subtitle").textContent = (sb.version ? "sing-box " + sb.version + " · " : "") + "由 sb.sh 一键安装部署";
+    $id("sb-autostart").checked = !!sb.enabled;
+    $id("btn-sb-stop").textContent = sb.active ? "停止服务" : "启动服务";
+    var dash = $id("sb-dash");
+    var ctl = sb.dashboard && sb.dashboard.controller;
+    if (ctl) {
+      var parts = ctl.split(":"), port = parts.pop(), hostonly = parts.join(":");
+      var shown = (hostonly === "0.0.0.0" || hostonly === "::" || hostonly === "") ? location.hostname : hostonly;
+      dash.href = (location.protocol === "https:" ? "https" : "http") + "://" + shown + ":" + port + (sb.dashboard.ui ? "/ui" : "/");
+      dash.hidden = false;
+    } else dash.hidden = true;
+    $id("sb-ts-host").textContent = (sb.endpoint && sb.endpoint.hostname) || "—";
+    $id("sb-ts-ver").textContent = sb.version || "—";
+    $id("sb-sched-state").textContent = sb.autoupdate && sb.autoupdate.on ? "已开启（每天 " + (sb.autoupdate.time || "04:00") + "）" : "已关闭";
+    $id("sb-auto-switch").checked = !!(sb.autoupdate && sb.autoupdate.on);
+    $id("sb-sub-url").placeholder = sb.url_set ? sb.url_masked : "https://sub.example.com/link/…";
+    renderSubState(sb.update);
   }).catch(function (e) { if (e.code !== "UNAUTH") apiFail(e); });
 }
-$id("btn-ts-install").addEventListener("click", function () {
+function renderSbVerLine(r) {
+  var line = $id("sb-ver-line");
+  line.hidden = false;
+  if (r.up_to_date) {
+    line.className = "ru-okline";
+    line.style.color = "";
+    line.innerHTML = '<i data-lucide="check"></i>' + esc(r.message || "已是最新版本");
+  } else {
+    line.className = "ru-okline";
+    line.style.color = "var(--ru-blue)";
+    line.innerHTML = '<i data-lucide="info"></i>' + esc(r.message || "发现新版本") + '　<button class="ru-btn primary sm" id="btn-sb-upgrade">升级内核</button>';
+  }
+  srRenderIcons(line);
+  var ob = $id("btn-sb-upgrade");
+  if (ob) ob.addEventListener("click", function () {
+    if (!window.confirm("升级 sing-box 内核到 v" + r.latest + "？配置与节点数据保留；升级期间节点短暂不可用。")) return;
+    btnBusy(ob, true, "升级中…");
+    API.post("/api/singbox/upgrade", {}).then(function () {
+      btnBusy(ob, false);
+      toast("ok", "内核已升级");
+      loadSingbox();
+    }).catch(function (e) { btnBusy(ob, false); apiFail(e); });
+  });
+}
+$id("btn-sb-check").addEventListener("click", function () {
   var btn = this;
-  showBad("msg-ts-install", "");
-  btnBusy(btn, true, "安装中…");
-  API.post("/api/tailscale/install").then(function () {
+  var line = $id("sb-ver-line");
+  line.hidden = true;
+  btnBusy(btn, true, "检查中…");
+  API.post("/api/singbox/check", {}).then(function (r) {
     btnBusy(btn, false);
-    toast("ok", "Tailscale 安装完成", "正在进入登录流程…");
-    loadTailscale();
+    renderSbVerLine(r);
+  }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
+});
+$id("btn-sb-install").addEventListener("click", function () {
+  var btn = this;
+  if (!window.confirm("将从官方源安装 sing-box 内核（gh-proxy 加速回退），不改动 SeedRou 的路由与防火墙配置。安装完成后请填写配置地址并更新配置。继续吗？")) return;
+  showBad("msg-sb-install", "");
+  btnBusy(btn, true, "安装中…");
+  API.post("/api/singbox/install", {}).then(function (r) {
+    btnBusy(btn, false);
+    toast("ok", "安装完成", r.message || "");
+    loadSingbox();
   }).catch(function (e) {
     btnBusy(btn, false);
-    showBad("msg-ts-install", (e.message || "安装失败") + (e.hint ? "。建议：" + e.hint : ""));
+    showBad("msg-sb-install", (e.message || "安装失败") + (e.hint ? "。建议：" + e.hint : ""));
   });
 });
-$id("ts-run").addEventListener("change", function () {
-  var on = $id("ts-run").checked;
-  API.post("/api/tailscale/ctl", { action: on ? "start" : "stop" }).then(function () {
-    toast("ok", on ? "Tailscale 已启动" : "Tailscale 已停止");
-    loadTailscale();
-  }).catch(function (e) { $id("ts-run").checked = !on; apiFail(e); });
+$id("sb-autostart").addEventListener("change", function () {
+  var on = $id("sb-autostart").checked;
+  API.post("/api/singbox/autostart", { on: on }).then(function () {
+    toast("ok", on ? "已开启开机自启" : "已关闭开机自启");
+    loadSingbox();
+  }).catch(function (e) { $id("sb-autostart").checked = !on; apiFail(e); });
 });
-$id("btn-ts-login").addEventListener("click", function () {
+$id("btn-sb-restart").addEventListener("click", function () {
   var btn = this;
-  btnBusy(btn, true, "获取授权链接…");
-  API.post("/api/tailscale/ctl", { action: "login" }).then(function (r) {
+  if (!window.confirm("重启 sing-box？重启期间全部代理节点短暂不可用。")) return;
+  btnBusy(btn, true);
+  API.post("/api/singbox/ctl", { action: "restart" }).then(function () {
+    btnBusy(btn, false); toast("ok", "sing-box 已重启"); loadSingbox();
+  }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
+});
+$id("btn-sb-stop").addEventListener("click", function () {
+  var btn = this;
+  var stopping = $id("btn-sb-stop").textContent.indexOf("停止") === 0;
+  if (stopping && !window.confirm("停止服务后全部代理节点不可用（LAN 直连与路由功能不受影响）。确定停止吗？")) return;
+  btnBusy(btn, true);
+  API.post("/api/singbox/ctl", { action: stopping ? "stop" : "start" }).then(function () {
+    btnBusy(btn, false); toast("ok", stopping ? "sing-box 已停止" : "sing-box 已启动"); loadSingbox();
+  }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
+});
+$id("btn-sb-save").addEventListener("click", function () {
+  var btn = this;
+  var url = $id("sb-sub-url").value.trim();
+  if (!url) { showBad("msg-sb-install", ""); toast("err", "配置地址为空", "如需保持不变请留空；首次使用请填写完整链接"); return; }
+  btnBusy(btn, true);
+  API.post("/api/singbox/sub", { op: "set", url: url }).then(function (r) {
     btnBusy(btn, false);
-    toast("ok", "已生成授权链接", "请在下方提示中打开链接完成登录");
-    loadTailscale();
+    $id("sb-sub-url").value = "";
+    toast("ok", r.message || "配置地址已保存", "点「更新配置」立即拉取；自动更新按计划进行");
+    loadSingbox();
   }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
 });
-$id("btn-ts-logout").addEventListener("click", function () {
-  if (!window.confirm("登出后本机将从您的 tailnet 中移除，远程访问将中断。确定登出吗？")) return;
+$id("btn-sb-update").addEventListener("click", function () {
   var btn = this;
-  btnBusy(btn, true, "登出中…");
-  API.post("/api/tailscale/ctl", { action: "logout" }).then(function () {
-    btnBusy(btn, false); toast("ok", "已登出 Tailscale"); loadTailscale();
+  btnBusy(btn, true, "更新中…");
+  API.post("/api/singbox/sub", { op: "update" }).then(function (r) {
+    btnBusy(btn, false);
+    toast("ok", r.message || "配置已更新");
+    loadSingbox();
+  }).catch(function (e) {
+    btnBusy(btn, false);
+    apiFail(e);
+    loadSingbox();  // 失败也刷新：持久失败行立即显示原因
+  });
+});
+$id("sb-auto-switch").addEventListener("change", function () {
+  var on = $id("sb-auto-switch").checked;
+  if (!on) {
+    API.post("/api/singbox/schedule", { time: "off" }).then(function () {
+      toast("ok", "配置自动更新已关闭", "手动「更新配置」不受影响");
+      loadSingbox();
+    }).catch(function (e) { $id("sb-auto-switch").checked = true; apiFail(e); });
+    return;
+  }
+  var t = $id("sb-sched-time").value.trim();
+  API.post("/api/singbox/schedule", { time: t || "04:00" }).then(function (r) {
+    toast("ok", r.message || "配置自动更新已开启", t ? "" : "未填时间，默认每天 04:00，可在下方修改");
+    loadSingbox();
+  }).catch(function (e) { $id("sb-auto-switch").checked = false; apiFail(e); });
+});
+$id("btn-sb-sched").addEventListener("click", function () {
+  var btn = this;
+  var t = $id("sb-sched-time").value.trim();
+  if (!t) { toast("err", "请填写更新时间", "格式 HH:MM；要关闭自动更新请用上方开关"); return; }
+  btnBusy(btn, true);
+  API.post("/api/singbox/schedule", { time: t }).then(function (r) {
+    btnBusy(btn, false);
+    toast("ok", r.message || "自动更新时间已更新");
+    $id("sb-sched-time").value = "";
+    if (!$id("sb-auto-switch").checked) { $id("sb-auto-switch").checked = true; }
+    loadSingbox();
   }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
+});
+$id("btn-sb-uninstall").addEventListener("click", function () {
+  if (!window.confirm("卸载 sing-box 将删除内核、配置与全部节点数据，不可恢复（卸载前自动在 /var/lib/seedrou 留一份配置备份）。确认不再使用时才继续。继续卸载吗？")) return;
+  if (!window.confirm("最后确认：真的要卸载 sing-box 吗？全部代理节点将立即不可用。")) return;
+  API.post("/api/singbox/uninstall", { confirm: true }).then(function (r) {
+    toast("ok", r.message || "sing-box 已卸载");
+    loadSingbox();
+  }).catch(apiFail);
 });
 
 /* ===================== 7 备份与升级 ===================== */

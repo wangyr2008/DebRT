@@ -35,6 +35,12 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
       /etc/ppp/peers/seedrou
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
+# sb.sh 与其 cron 由 SeedRou 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
+if [ -f /usr/local/bin/sb ]; then rm -f /usr/local/bin/sb; echo "[卸载] 已移除 /usr/local/bin/sb"; fi
+if [ -f /etc/cron.d/sing-box ]; then rm -f /etc/cron.d/sing-box; echo "[卸载] 已移除 sing-box 每日更新 cron"; fi
+if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
+    echo "[卸载] sing-box 服务本体保留运行；如需一并卸载请执行：systemctl disable --now sing-box && rm -rf /etc/sing-box"
+fi
 
 if [ "$PURGE" = "1" ]; then
   echo "[卸载] 删除配置与数据（--purge）..."

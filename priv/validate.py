@@ -18,6 +18,14 @@ def deterministic_id(seed: str) -> str:
     return "r" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
 
 
+def url_host_blacklisted(host):
+    """URL 主机名内网黑名单（升级源与订阅地址共用同一策略）。"""
+    return bool(re.fullmatch(
+        r"(127\.|10\.|0\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|"
+        r"100\.(6[4-9]|[789][0-9]|1[01][0-9]|12[0-7])\.|\[?::1\]?|localhost).*",
+        host, re.I))
+
+
 def fail(code, msg, hint=""):
     ERR.update(code=code, message=msg, hint=hint)
     print(json.dumps(ERR, ensure_ascii=False))
@@ -341,8 +349,7 @@ def norm_upgrade(section, data):
             host = src.split("/", 3)[2] if len(src.split("/", 3)) > 3 else ""
             need(bool(re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{2,5})?", host)), "UPG_SOURCE_BAD",
                  f"升级源主机名 {host!r} 不合法", "请填正常的 https 地址")
-            need(not re.fullmatch(r"(127\.|10\.|0\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[789][0-9]|1[01][0-9]|12[0-7])\.|\[?::1\]?|localhost).*",
-                                  host, re.I), "UPG_SOURCE_BAD",
+            need(not url_host_blacklisted(host), "UPG_SOURCE_BAD",
                  "升级源不能指向内网地址", "请使用公网 https 地址")
         else:
             need(re.fullmatch(r"[\w.\-]+/[\w.\-]{1,100}", src), "UPG_SOURCE_BAD",
