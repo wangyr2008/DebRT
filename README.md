@@ -164,7 +164,7 @@ python3 panel/seedrou_panel.py --mock --port 8080
 ## 10. 已知边界
 
 - 仅单 WAN；多宽带负载均衡未实现（勾选多个 WAN 口会明确报错）。
-- IPv6 Native 模式要求运营商下发 DHCPv6-PD（或 PPPoE + IPv6）；NAT6 模式无此要求。
+- IPv6 Native 模式要求**上级路由支持并开启 DHCPv6 前缀委派（PD）**——上级自身为 Stateless RA / 未开 PD 时拿不到前缀，此场景请用 NAT6（要求 WAN 侧有全局 IPv6 地址）。NAT6 在 PPPoE/静态线路下不可用（无出口地址），面板会明确拒绝。
 - 「更新」容器按端口/卷/环境变量重建，特殊参数容器建议用 Compose 管理。
 - 硬盘温度需要 `smartmontools`（未安装时显示 —，不影响其他功能）。
 - 面板为 HTTP 明文（局域网惯例）；如需 HTTPS 可自行在前置反代加 TLS。

@@ -703,7 +703,10 @@ if not controller:
     # 此前只认 clash_api，services 用户按钮永远隐藏
     for _svc in (cfg.get("services") or []):
         if _svc.get("type") == "api":
-            controller = str(_svc.get("listen") or _svc.get("external_controller") or "")
+            # N-01：listen 与 listen_port 是两个字段，只取 listen 曾拼出 host:0.0.0.0 死链
+            _host = str(_svc.get("listen") or "127.0.0.1")
+            _port = _svc.get("listen_port")
+            controller = f"{_host}:{_port}" if _port else _host
             break
 ui = False
 ui_dir = str(clash.get("external_ui") or "")

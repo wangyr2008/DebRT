@@ -160,8 +160,11 @@ def gen_lan_network(cfg):
             host = ipaddress.IPv6Address(int(pnet.network_address) + 1)  # 网段 ::1
             lines += [f"Address={host}/{pnet.prefixlen}"]
         # A-08：[IPv6PrefixDelegation] 段（段名与键均自 systemd ≥255 废弃，257 静默忽略）
-        # 已删除——DHCPPrefixDelegation 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告
-        # （man 原文：the prefixes will be announced through IPv6 Router Advertisement）
+        # 已删除——PD 模型两端都要开：WAN 请求前缀，LAN 在 [Network] 里声明消费
+        # （N-02：只开 WAN 前缀拿到也没人用，br-lan 依然只有 fe80），
+        # 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告（man 原文同）
+        if v6.get("mode") == "native" and cfg["wan"].get("mode") == "dhcp":
+            lines.append("DHCPPrefixDelegation=yes")
         lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600", "EmitDNS=yes"]
         if v6.get("mode") in ("nat6", "static"):
             # NAT6/静态有确定的 LAN v6 地址，直告本机（dnsmasq 在 br-lan 上服务 DNS）

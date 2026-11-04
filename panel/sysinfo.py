@@ -25,10 +25,10 @@ def init(mock=False):
 _MOCK_STATUS = {
     "ok": True,
     "converge_failed": False,
-    "wan": {"mode": "pppoe", "state": "up", "ip": "219.142.78.166", "mask": "255.255.255.0",
+    "wan": {"mode": "dhcp", "state": "up", "ip": "219.142.78.166", "mask": "255.255.255.0",
             "gw": "219.142.78.1", "session_s": 2 * 86400 + 14 * 3600, "connecting": False,
             "dns": ["223.5.5.5", "119.29.29.29"]},
-    "ipv6": {"enabled": True, "mode": "native", "addr": "2408:8456:32a0:1f02::1bed", "dns": ["240c::6666"]},
+    "ipv6": {"enabled": True, "mode": "nat6", "addr": "fda1:9e3a:8b7f::1（ULA）", "dns": ["240c::6666"]},
     "ports": [
         {"name": "eth0", "role": "wan", "link": True, "speed": "1000 Mbps"},
         {"name": "eth1", "role": "lan", "link": True, "speed": "1000 Mbps"},
@@ -50,9 +50,9 @@ _MOCK_CONFIG = {
         {"name": "eth3", "wan": False, "lan": True},
         {"name": "eth4", "wan": False, "lan": False},
     ],
-    "wan": {"mode": "pppoe", "username": "13800138000@163.gd", "dns_mode": "auto", "dns": [],
+    "wan": {"mode": "dhcp", "username": "", "dns_mode": "auto", "dns": [],
             "ip": "", "mask": "", "gw": "", "has_password": True},
-    "ipv6": {"enabled": True, "mode": "native", "dns_mode": "auto", "dns": [], "addr": "", "gw": "", "prefix": ""},
+    "ipv6": {"enabled": True, "mode": "nat6", "dns_mode": "auto", "dns": [], "addr": "", "gw": "", "prefix": ""},
     "lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
     "dhcp": {"enabled": True, "pool_start": 100, "pool_end": 200, "lease": 120, "dns1": "", "dns2": "", "gw": ""},
     "static": [

@@ -84,6 +84,7 @@ assert "DHCPPrefixDelegation=yes" in wan_nat, "A-08 回归：WAN 侧 PD 新键�
 assert "UseDNS=yes" in wan_nat and "UseDNS=no" not in wan_nat, "B-14 回归：DHCPv6 DNS 不应放弃"
 lan_nat = netgen.gen_lan_network(base_cfg("dhcp", "manual", v6=V6N8))
 assert "[IPv6PrefixDelegation]" not in lan_nat, "A-08 回归：废弃段仍在"
+assert "DHCPPrefixDelegation=yes" in lan_nat, "N-02 回归：LAN 侧未消费 PD"
 assert "EmitDNS=yes" in lan_nat and "DNS=_link_local" in lan_nat, "A-08 回归：RA DNS 宣告缺失"
 v6m = {"enabled": True, "mode": "nat6", "dns_mode": "manual", "dns": ["240c::6666"]}
 assert "server=240c::6666" in netgen.gen_dnsmasq(base_cfg("dhcp", "auto", v6=v6m)), "B-01 回归：v6 手动 DNS 在 WAN 自动模式下被丢弃"
