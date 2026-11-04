@@ -310,8 +310,12 @@ function renderNetwork(cfg) {
   $id("wan-dns1").value = (w.dns && w.dns[0]) || ""; $id("wan-dns2").value = (w.dns && w.dns[1]) || "";
 
   $id("v6-enable").checked = !!v6.enabled;
-  $id("sel-v6mode").value = v6.mode || "native";
+  var storedV6Mode = v6.mode || "native";
+  $id("sel-v6mode").value = storedV6Mode;
   onWanModeChange($id("sel-wanmode").value);   /* A-01/A-02：回显时同步 NAT6 可用性 */
+  /* N-07：存量配置与新规则冲突（如旧 nat6 + 现 PPPoE）时下拉被重置——必须显式提示，
+     否则用户没动它直接保存会提交重置后的值并被拒，且看不出任何变化 */
+  $id("v6-conflict-note").hidden = ($id("sel-v6mode").value === storedV6Mode);
   onV6ModeChange();
   setSeg("seg-v6dns", v6.dns_mode || "auto");
   $id("v6-dns1").value = (v6.dns && v6.dns[0]) || ""; $id("v6-dns2").value = (v6.dns && v6.dns[1]) || "";
@@ -424,7 +428,7 @@ $id("btn-wan-save").addEventListener("click", function () {
 });
 
 $id("v6-enable").addEventListener("change", onV6ModeChange);
-$id("sel-v6mode").addEventListener("change", onV6ModeChange);
+$id("sel-v6mode").addEventListener("change", function () { $id("v6-conflict-note").hidden = true; onV6ModeChange(); });
 function onV6ModeChange() {
   var en = $id("v6-enable").checked, mode = $id("sel-v6mode").value;
   $id("sel-v6mode").disabled = !en;
@@ -1006,7 +1010,8 @@ function loadSingbox() {
       target = custom;
     } else if (ctl) {
       var parts = ctl.split(":"), port = parts.pop(), hostonly = parts.join(":");
-      var shown = (hostonly === "0.0.0.0" || hostonly === "::" || hostonly === "") ? location.hostname : hostonly;
+      /* N-06：services[api] 缺省 listen=127.0.0.1——不替换的话链接指向用户自己的回环口 */
+      var shown = (hostonly === "0.0.0.0" || hostonly === "::" || hostonly === "" || hostonly === "127.0.0.1") ? location.hostname : hostonly;
       target = (location.protocol === "https:" ? "https" : "http") + "://" + shown + ":" + port + (sb.dashboard.ui ? "/ui" : "/");
     }
     if (target) { dash.href = target; dash.hidden = false; } else dash.hidden = true;

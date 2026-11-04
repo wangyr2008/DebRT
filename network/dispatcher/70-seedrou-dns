@@ -44,5 +44,11 @@ for line in open(sys.argv[1]):
 PYEOF
 } > "${CONF}.tmp" 2>/dev/null
 
-mv -f "${CONF}.tmp" "$CONF"
+# N-05：解析为空（WAN 刚重连、DNS 尚未学到）时保留上一份有效上游——
+# links 文件总是存在，不像旧版 lease 缺失会 exit 0 天然保旧；空上游会让 dnsmasq 断解析
+if grep -q '^server=' "${CONF}.tmp" 2>/dev/null; then
+  mv -f "${CONF}.tmp" "$CONF"
+else
+  rm -f "${CONF}.tmp"
+fi
 systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
