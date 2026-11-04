@@ -146,7 +146,7 @@
             <div class="ru-card">
               <div class="ru-chead">
                 <div><h3>IPv6 设置</h3><div class="ru-sub">开启后路由器将从运营商获取 IPv6 地址并向下分发</div></div>
-                <label class="ru-switch"><input type="checkbox" id="v6-enable" aria-label="IPv6 总开关"><span></span></label>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">IPv6<label class="ru-switch"><input type="checkbox" id="v6-enable" aria-label="IPv6 总开关"><span></span></label></div>
               </div>
               <div class="ru-frow" style="margin-top:8px">
                 <div class="ru-field" style="max-width:300px">
@@ -201,7 +201,7 @@
             <div class="ru-card">
               <div class="ru-chead">
                 <div><h3>DHCP 服务</h3><div class="ru-sub">为局域网设备自动分配 IP 地址</div></div>
-                <label class="ru-switch"><input type="checkbox" id="dhcp-enable" aria-label="DHCP 服务开关"><span></span></label>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">DHCP<label class="ru-switch"><input type="checkbox" id="dhcp-enable" aria-label="DHCP 服务开关"><span></span></label></div>
               </div>
               <div id="dhcp-body">
                 <div class="ru-frow" style="margin-top:8px">
@@ -240,7 +240,7 @@
             <div class="ru-card">
               <div class="ru-chead">
                 <div><h3>QoS 限速</h3><div class="ru-sub">对 WAN 口整体上下行流量进行限速（CAKE 算法），关闭后不限速</div></div>
-                <label class="ru-switch"><input type="checkbox" id="qos-enable" aria-label="QoS 开关"><span></span></label>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">QoS<label class="ru-switch"><input type="checkbox" id="qos-enable" aria-label="QoS 开关"><span></span></label></div>
               </div>
               <div id="qos-body">
                 <div class="ru-frow" style="margin-top:8px">
@@ -273,7 +273,7 @@
             <div class="ru-card">
               <div class="ru-chead">
                 <div><h3>端口转发</h3><div class="ru-sub">将公网端口映射到局域网设备（WAN 入站 DNAT）</div></div>
-                <label class="ru-switch"><input type="checkbox" id="fw-enable" aria-label="WAN 入站拦截开关"><span></span></label>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">WAN 入站拦截<label class="ru-switch"><input type="checkbox" id="fw-enable" aria-label="WAN 入站拦截开关"><span></span></label></div>
               </div>
               <div class="ru-callout" id="fw-on-callout"><i data-lucide="info"></i><span>LAN 侧访问默认全部放行，无需配置；WAN 侧入站默认全部拦截（除端口转发命中的流量），需要对外提供的服务请在下方添加转发规则。</span></div>
               <div class="ru-callout warn" id="fw-off-callout" hidden><i data-lucide="info"></i><span>已关闭 WAN 入站拦截：公网可直接访问路由器与局域网的所有端口，仅建议在调试时临时开启，用完请及时恢复。</span></div>
@@ -394,9 +394,9 @@
             <div class="ru-card" id="sb-subs" hidden>
               <div class="ru-chead">
                 <div><h3>配置</h3><div class="ru-sub">与 sb.sh 一致：拉取远端配置，校验通过后自动生效</div></div>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">自动更新<label class="ru-switch"><input type="checkbox" id="sb-auto-switch" aria-label="配置自动更新开关"><span></span></label></div>
+                <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
                   <span class="ru-badge" id="sb-sched-badge">已关闭</span>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">自动更新<label class="ru-switch"><input type="checkbox" id="sb-auto-switch" aria-label="配置自动更新开关"><span></span></label></div>
                   <button class="ru-btn primary sm" id="btn-sb-update"><i data-lucide="refresh-cw"></i>更新配置</button>
                 </div>
               </div>
