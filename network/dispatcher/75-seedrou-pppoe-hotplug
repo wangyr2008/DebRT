@@ -1,0 +1,31 @@
+#!/bin/sh
+# WAN 口载波恢复热插拔：PPPoE 模式下确保拨号服务在跑。
+# 背景（真机实测）：换绑 WAN 口后先保存再插网线，pppd persist 偶发不自动恢复拨号，
+# 用户需手动重新保存才连上；载波事件时主动拉起/轻推一次，链路自愈。
+IFACE="$1"
+[ -f /etc/seedrou/config.json ] || exit 0
+
+IS_WAN=$(python3 - "$IFACE" <<'PYEOF'
+import json, sys
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+    wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+    if cfg.get("wan", {}).get("mode") == "pppoe":
+        wans.append("ppp0")   # ppp0 由 25-ppp0.network 托管，其事件同样触发
+except Exception:
+    wans = []
+print("yes" if sys.argv[1] in wans else "no")
+PYEOF
+)
+[ "$IS_WAN" = "yes" ] || exit 0
+
+# 会话健在（ppp0 有 v4）就不折腾
+ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' && exit 0
+
+systemctl is-active --quiet seedrou-pppoe.service 2>/dev/null || {
+    systemctl start seedrou-pppoe.service 2>/dev/null
+    exit 0
+}
+# 服务在跑但会话不在：载波刚恢复，轻推一次重新拨号
+systemctl try-restart seedrou-pppoe.service 2>/dev/null
+exit 0

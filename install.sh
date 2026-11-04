@@ -71,10 +71,12 @@ if [ -f "$SRC_DIR/singbox/sb.sh" ]; then
     echo "[安装] 已下发 sing-box 管理器：/usr/local/bin/sb（sing-box 本体未安装，需要时在面板一键安装）"
 fi
 # networkd-dispatcher 钩子
-mkdir -p /etc/networkd-dispatcher/routable.d /etc/networkd-dispatcher/no-carrier.d
+mkdir -p /etc/networkd-dispatcher/routable.d /etc/networkd-dispatcher/no-carrier.d /etc/networkd-dispatcher/carrier.d
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/dispatcher/80-seedrou-cake" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/no-carrier.d/
+install -m 755 "$SRC_DIR/network/dispatcher/75-seedrou-pppoe-hotplug" /etc/networkd-dispatcher/carrier.d/
+install -m 755 "$SRC_DIR/network/dispatcher/75-seedrou-pppoe-hotplug" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/ppp/ip-up.d/seedrou" /etc/ppp/ip-up.d/seedrou
 install -m 755 "$SRC_DIR/network/ppp/ip-down.d/seedrou" /etc/ppp/ip-down.d/seedrou
 # systemd / sysctl / modules

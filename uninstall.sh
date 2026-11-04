@@ -25,6 +25,8 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/seedrou-pppoe.service \
       /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
       /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/ppp/ip-up.d/seedrou \
+      /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
+      /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug \
       /etc/ppp/ip-down.d/seedrou /etc/logrotate.d/seedrou \
       /etc/systemd/system/seedrou-dns-sync.service /usr/local/lib/seedrou/wait-dns-upstream \
       /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf \

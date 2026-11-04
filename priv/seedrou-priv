@@ -1340,6 +1340,19 @@ if wan_dev:
         except Exception:
             wan["mask"] = ""
     wan["gw"] = next((r.get("gateway", "") for r in routes if r.get("dev") == wan_dev), "")
+    if mode == "pppoe":
+        # 真机反馈：换绑 WAN 口后旧 ppp0 会话要等 LCP 超时（约 60s）才消失，期间概览
+        # 仍显示"已联网"。以 WAN 口载波为准：无载波立即判未连接（不再吃陈旧路由的老本）
+        _wport = next((p.get("name") for p in cfg.get("ports", []) if p.get("wan")), "")
+        _car = ""
+        try:
+            _car = open(f"/sys/class/net/{_wport}/carrier").read().strip()
+        except Exception:
+            _car = ""   # 口子不存在（刚解绑）或未 up：视为未连接
+        if _car != "1":
+            wan["state"] = "down"
+            wan_dev = ""
+            wan["ip"] = wan["mask"] = wan["gw"] = ""
     if mode == "pppoe" and not wan["gw"]:
         # PPPoE 点对点链路没有网关概念（default dev ppp0 scope link），概览显示对端地址
         try:

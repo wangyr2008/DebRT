@@ -348,6 +348,16 @@ function bindExclusiveChecks() {
       var other = role === "wan" ? "lan" : "wan";
       var oc = root.querySelector('.ru-cb[data-role="' + other + '"][data-port="' + port + '"]');
       if (cb.checked && oc) oc.checked = false;
+      /* A-03 前端约束：WAN 仅支持单口——勾第二个 WAN 自动取消第一个（此前保存才报错） */
+      if (cb.checked && role === "wan") {
+        var wans = root.querySelectorAll('.ru-cb[data-role="wan"]');
+        for (var wq = 0; wq < wans.length; wq++) {
+          if (wans[wq] !== cb && wans[wq].checked) {
+            wans[wq].checked = false;
+            showBad("msg-wan", "WAN 仅支持单口（多宽带负载均衡尚未支持）；已自动取消其他口的勾选");
+          }
+        }
+      }
       if (!cb.checked) {
         var sibs = root.querySelectorAll('.ru-cb[data-role="' + role + '"]');
         var any = false;
