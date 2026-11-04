@@ -114,6 +114,7 @@ ppp_net = netgen.gen_ppp_network(ppp_cfg)
 assert "Name=ppp0" in ppp_net, "ppp0 匹配缺失"
 assert "DHCPPrefixDelegation=yes" in ppp_net and "WithoutRA=solicit" in ppp_net, "PPPoE ppp0 PD 缺失"
 assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
+assert "UplinkInterface=:self" in ppp_net, "N-05 回归：缺 UplinkInterface=:self（客户端永不启动的真凶）"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)
 assert "DHCPPrefixDelegation=yes" in lan_ppp, "PPPoE native LAN 侧未消费 PD"
 assert "+ipv6" in netgen.gen_pppd(base_cfg("pppoe", "manual", v6=V6NAT), "pw"), "pppd nat6 下 +ipv6 缺失"

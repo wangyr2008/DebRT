@@ -135,7 +135,8 @@ def gen_ppp_network(cfg):
     return ("# 由 SeedRou 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
             "IPv6AcceptRA=no\n"
             "DHCPPrefixDelegation=yes\n\n"
-            "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n")
+            "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n\n"
+            "[DHCPPrefixDelegation]\nUplinkInterface=:self\n")
 
 
 def gen_lan_netdev(cfg):
@@ -155,6 +156,9 @@ def gen_lan_network(cfg):
     if v6.get("enabled") and v6.get("mode") == "static" and not v6.get("prefix"):
         fail("V6_STATIC_NEEDS_PREFIX", "静态 IPv6 模式缺少 LAN IPv6 前缀",
              "请在「网络设置 → IPv6 设置」补填 LAN IPv6 前缀（如 2001:db8:abcd::/64），或改用 NAT6")
+    # PPPoE×native：PD 消费与 RA 均走 networkd（v0.1.44 起 ppp0 上以
+    # [DHCPPrefixDelegation] UplinkInterface=:self 启动 DHCPv6 客户端——man 257 语义：
+    # WithoutRA=solicit 仅在该段存在时生效，v0.1.41 缺它导致客户端永不启动）
     if v6.get("enabled"):
         if v6.get("mode") == "nat6":
             lines += [f"Address={ULA_PREFIX}::1/64"]
@@ -423,6 +427,8 @@ def main():
         files.append(("etc/ppp/peers/seedrou", 0o644, gen_pppd(cfg, password)))
         files.append(("etc/ppp/chap-secrets", 0o600, gen_chap(cfg, password)))
         files.append(("etc/ppp/pap-secrets", 0o600, gen_chap(cfg, password)))
+        # PPPoE 的 IPv6 走 networkd：25-ppp0.network 的 [DHCPPrefixDelegation]
+        # UplinkInterface=:self 段是客户端启动的必要条件（man 257 语义），见 gen_ppp_network
         _v6 = cfg.get("ipv6", {})
         if _v6.get("enabled") and _v6.get("mode") in ("native", "nat6"):
             files.append(("etc/systemd/network/25-ppp0.network", 0o644, gen_ppp_network(cfg)))
