@@ -87,7 +87,7 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-kv:last-child{border-bottom:0}
 #router-ui .ru-kv .k{color:var(--ru-text2);flex:none}
 #router-ui .ru-kv .v{font-weight:500;text-align:right;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-#router-ui .ru-kv.sep{border-top:1px solid var(--ru-line);margin-top:4px}
+#router-ui .ru-kv.sep{border-top:0;margin-top:10px}  /* v4/v6 分组用间距区分；border-top 曾与上一行 border-bottom 叠成双线 */
 
 /* ===== controls ===== */
 #router-ui .ru-btn{height:34px;padding:0 16px;border-radius:980px;border:0;background:var(--ru-fill2);color:var(--ru-text);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
