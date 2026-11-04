@@ -117,5 +117,9 @@ assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)
 assert "DHCPPrefixDelegation=yes" in lan_ppp, "PPPoE native LAN 侧未消费 PD"
 assert "+ipv6" in netgen.gen_pppd(base_cfg("pppoe", "manual", v6=V6NAT), "pw"), "pppd nat6 下 +ipv6 缺失"
+# netgen 内嵌 cross_validate（收敛期防线）不得再拦 pppoe×native/nat6——v0.1.41 曾因
+# 它漏改导致 validate 放行后 netgen 仍拒绝（同类规则两处存放的教训）
+netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6N))
+netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6NAT))
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6 全部通过")
