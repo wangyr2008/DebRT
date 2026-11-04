@@ -276,7 +276,8 @@ sync_dns_upstream() {
   wan_if="$(python3 -c 'import json;print(",".join(p["name"] for p in json.load(open("'"$CONFIG_JSON"'")).get("ports",[]) if p.get("wan")) or "")' 2>/dev/null)"
   [ -n "$wan_if" ] || return 0
   for if in ${wan_if//,/ }; do
-    ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' && "$hook" "$if" routable
+    # B-13：v6-only 接入同样要触发钩子（判据与 wait-dns-upstream 一致）
+    { ip -4 addr show "$if" 2>/dev/null | grep -q 'inet ' || ip -6 addr show "$if" 2>/dev/null | grep -q 'scope global'; } && "$hook" "$if" routable
     # resolv.conf 断言：dhcpcd 等可能覆写它（真机首装实测）——收敛时顺带修正
     grep -q "nameserver 127.0.0.1" /etc/resolv.conf 2>/dev/null || \
       printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:2\n' > /etc/resolv.conf 2>/dev/null || true

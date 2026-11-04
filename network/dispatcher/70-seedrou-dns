@@ -27,20 +27,20 @@ case "$STATE" in
 esac
 
 IDX=$(cat "/sys/class/net/$IFACE/ifindex" 2>/dev/null) || exit 0
-LEASE="/run/systemd/netif/leases/$IDX"
-[ -f "$LEASE" ] || exit 0
+# A-09：改读 links/$IDX——其 DNS= 一行同时含 DHCPv4 与 RA/RDNSS/DHCPv6 学到的地址；
+# 此前只读 leases/$IDX（纯 DHCPv4），RA 下发的 IPv6 上游永不生效（真机实录）
+SRC="/run/systemd/netif/links/$IDX"
+[ -f "$SRC" ] || exit 0
 
 {
   echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
-  python3 - "$LEASE" <<'PYEOF'
+  python3 - "$SRC" <<'PYEOF'
 import sys
-dns = []
 for line in open(sys.argv[1]):
     if line.startswith("DNS=") and line.strip() != "DNS=":
-        dns += line.strip()[4:].split(" ")
-for d in dns:
-    if d:
-        print(f"server={d}")
+        for d in line.strip()[4:].split(" "):
+            if d:
+                print(f"server={d}")
 PYEOF
 } > "${CONF}.tmp" 2>/dev/null
 

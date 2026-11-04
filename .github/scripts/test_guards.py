@@ -75,6 +75,19 @@ assert "2001:db8:1::2" not in wan_net_pppoe, "pppoe+静态v6 不应落盘到以�
 dns_sa = netgen.gen_dnsmasq(base_cfg("static", "auto"))
 assert "server=223.5.5.5" in dns_sa and "servers-file" not in dns_sa, "static+auto 兜底缺失（N-03 回归）"
 
+# 7) nat6 矩阵断言见文件末尾（expect_fail 定义之后）
+
+# 8) A-08/B-14/B-01 生成断言（V6N8 本段自定义：定义顺序在 6) 段之前）
+V6N8 = {"enabled": True, "mode": "native", "dns_mode": "auto", "dns": []}
+wan_nat = netgen.gen_wan_network(base_cfg("dhcp", "manual", v6=V6N8))
+assert "DHCPPrefixDelegation=yes" in wan_nat, "A-08 回归：WAN 侧 PD 新键缺失（[Network] DHCPPrefixDelegation）"
+assert "UseDNS=yes" in wan_nat and "UseDNS=no" not in wan_nat, "B-14 回归：DHCPv6 DNS 不应放弃"
+lan_nat = netgen.gen_lan_network(base_cfg("dhcp", "manual", v6=V6N8))
+assert "[IPv6PrefixDelegation]" not in lan_nat, "A-08 回归：废弃段仍在"
+assert "EmitDNS=yes" in lan_nat and "DNS=_link_local" in lan_nat, "A-08 回归：RA DNS 宣告缺失"
+v6m = {"enabled": True, "mode": "nat6", "dns_mode": "manual", "dns": ["240c::6666"]}
+assert "server=240c::6666" in netgen.gen_dnsmasq(base_cfg("dhcp", "auto", v6=v6m)), "B-01 回归：v6 手动 DNS 在 WAN 自动模式下被丢弃"
+
 # 6) 跨段组合约束（P3-2 + 复审 v0.1.30 观察①）：pppoe×static/native、static×native 双向
 V6S = {"enabled": True, "mode": "static", "addr": "2001:db8:1::2/64", "gw": "2001:db8:1::1",
        "prefix": "2001:db8:abcd::/64", "dns_mode": "auto", "dns": []}
@@ -94,4 +107,11 @@ expect_fail("wan", {"mode": "pppoe"}, {"wan": {}, "ipv6": V6S}, "V6_STATIC_PPPPO
 expect_fail("wan", {"mode": "pppoe"}, {"wan": {}, "ipv6": V6N}, "V6_NATIVE_PPPPOE_UNSUPPORTED")
 expect_fail("wan", {"mode": "static"}, {"wan": {}, "ipv6": V6N}, "V6_NATIVE_STATIC_WAN")
 
-print("审计守卫: 撤销表/546/static+auto 拒绝/静态 v6 落盘 全部通过")
+# 9) A-01/A-02：nat6 × pppoe/static 双向拒绝（假成功空转的矩阵补全）
+V6NAT = {"enabled": True, "mode": "nat6", "dns_mode": "auto", "dns": []}
+expect_fail("ipv6", V6NAT, {"wan": {"mode": "pppoe"}}, "V6_NAT6_PPPPOE_UNSUPPORTED")
+expect_fail("ipv6", V6NAT, {"wan": {"mode": "static"}}, "V6_NAT6_STATIC_UNSUPPORTED")
+expect_fail("wan", {"mode": "pppoe"}, {"wan": {}, "ipv6": V6NAT}, "V6_NAT6_WAN_UNSUPPORTED")
+expect_fail("wan", {"mode": "static"}, {"wan": {}, "ipv6": V6NAT}, "V6_NAT6_WAN_UNSUPPORTED")
+
+print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘 全部通过")

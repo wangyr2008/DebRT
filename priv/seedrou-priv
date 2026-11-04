@@ -469,7 +469,11 @@ do_podman_ops() {
     fi
     die "PODMAN_MISSING" "Podman 未安装" "请在系统上执行 apt install podman podman-compose"
   fi
-  pod_lock
+  # B-08：只读操作不进排他区——pull 超时 660s，拉大镜像期间开容器页曾把 status 卡到 504
+  case "$action" in
+    status|list-containers|list-images|compose-get) ;;
+    *) pod_lock ;;
+  esac
   case "$action" in
     status)
       local ver running autostart
@@ -634,7 +638,6 @@ def _run(cmd):
     except Exception:
         return None
 
-installed = bool(_run(["sh", "-c", "command -v sing-box"]).stdout.strip()) if _run(["sh", "-c", "command -v sing-box"]) else False
 r = _run(["sh", "-c", "command -v sing-box"])
 installed = bool(r and r.stdout.strip())
 sb_present = os.access("/usr/local/bin/sb", os.X_OK)
@@ -695,6 +698,13 @@ for e2 in (cfg.get("endpoints") or []):
         break
 clash = (cfg.get("experimental") or {}).get("clash_api") or {}
 controller = str(clash.get("external_controller") or "")
+if not controller:
+    # A-06：新版官方形态把 API 放在 services[type=api]（无 experimental.clash_api）——
+    # 此前只认 clash_api，services 用户按钮永远隐藏
+    for _svc in (cfg.get("services") or []):
+        if _svc.get("type") == "api":
+            controller = str(_svc.get("listen") or _svc.get("external_controller") or "")
+            break
 ui = False
 ui_dir = str(clash.get("external_ui") or "")
 if ui_dir:
@@ -1225,6 +1235,27 @@ sys.exit(0 if ok else 1)
   if [ -f "/usr/local/lib/seedrou/singbox/sb.sh" ]; then
     install -m 755 "/usr/local/lib/seedrou/singbox/sb.sh" /usr/local/bin/sb 2>/dev/null || true
   fi
+  # A-04：同步 /etc 侧钩子——此前只有 install.sh 会写它们，升级用户永远停在旧钩子，
+  # 而面板版本号已是最新（排查极误导）。A-09 改的 70-seedrou-dns 正是经此通道到达升级用户
+  if [ -d /usr/local/lib/seedrou/network ]; then
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/80-seedrou-cake /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/no-carrier.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/ppp/ip-up.d/seedrou /etc/ppp/ip-up.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/ppp/ip-down.d/seedrou /etc/ppp/ip-down.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/seedrou/network/sysctl/70-seedrou.conf /etc/sysctl.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/seedrou/network/modules/seedrou.conf /etc/modules-load.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/seedrou/network/logrotate/seedrou /etc/logrotate.d/ 2>/dev/null || true
+    if [ -f /usr/local/lib/seedrou/sudoers/seedrou ]; then
+      install -m 440 /usr/local/lib/seedrou/sudoers/seedrou /etc/sudoers.d/seedrou.upgrade-tmp 2>/dev/null || true
+      if visudo -c -f /etc/sudoers.d/seedrou.upgrade-tmp >/dev/null 2>&1; then
+        mv -f /etc/sudoers.d/seedrou.upgrade-tmp /etc/sudoers.d/seedrou
+      else
+        rm -f /etc/sudoers.d/seedrou.upgrade-tmp
+      fi
+    fi
+    sysctl --system >/dev/null 2>&1 || true
+  fi
   for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
     [ -f "$pyf" ] && chmod 644 "$pyf"
   done
@@ -1297,8 +1328,12 @@ if wan_dev:
     for a in addrs:
         info = (a.get("addr_info") or [{}])[0]
         wan["ip"] = info.get("local", "")
-        wan["mask"] = {"8": "255.0.0.0", "16": "255.255.0.0", "24": "255.255.255.0", "25": "255.255.255.128",
-                       "28": "255.255.255.240", "29": "255.255.255.248", "30": "255.255.255.252", "32": "255.255.255.255"}.get(str(info.get("prefixlen")), "")
+        # B-10：映射表缺 /26 /27 /20 等 → 概览显示 —；直接用 ipaddress 全量计算
+        try:
+            import ipaddress as _ipa
+            wan["mask"] = str(_ipa.IPv4Network(f"0.0.0.0/{int(info.get('prefixlen', 32))}").netmask)
+        except Exception:
+            wan["mask"] = ""
     wan["gw"] = next((r.get("gateway", "") for r in routes if r.get("dev") == wan_dev), "")
     if mode == "pppoe":
         # 会话起点由 pppd ip-up.d 钩子写入（掉线重拨即归零），不再用服务启动时间（persist 下不准，审计 B-22）
@@ -1328,6 +1363,18 @@ if v6["enabled"]:
                 if v6["addr"]: break
         except Exception:
             pass
+    # B-02：概览"IPv6 DNS"此前永远为 —（dns 初始化后再未赋值，mock 有值真机空）——
+    # 从 networkd links 文件取 RA/DHCPv6 学到的 IPv6 DNS
+    try:
+        _wdev = wan_dev or "br-lan"
+        _idx = open(f"/sys/class/net/{_wdev}/ifindex").read().strip()
+        for _line in open(f"/run/systemd/netif/links/{_idx}"):
+            if _line.startswith("DNS="):
+                for _d in _line.strip()[4:].split(" "):
+                    if _d and ":" in _d and _d not in v6["dns"]:
+                        v6["dns"].append(_d)
+    except Exception:
+        pass
 
 # 网口
 ports = []

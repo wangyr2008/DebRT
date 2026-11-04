@@ -346,7 +346,8 @@ def norm_upgrade(section, data):
             need(src.startswith("https://"), "UPG_SOURCE_BAD",
                  "升级源 URL 仅支持 https://",
                  "示例：https://example.com/seedrou-manifest.json；或直接填 GitHub 仓库名")
-            host = src.split("/", 3)[2] if len(src.split("/", 3)) > 3 else ""
+            from urllib.parse import urlsplit
+            host = urlsplit(src).hostname or ""   # B-04：https://example.com 曾切出空 host""
             need(bool(re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{2,5})?", host)), "UPG_SOURCE_BAD",
                  f"升级源主机名 {host!r} 不合法", "请填正常的 https 地址")
             need(not url_host_blacklisted(host), "UPG_SOURCE_BAD",
@@ -377,11 +378,26 @@ def cross_validate(section, result, cur):
             and cur["wan"].get("mode") == "static":
         fail("V6_NATIVE_STATIC_WAN", "静态 WAN 不支持 IPv6 Native（PD）",
              "静态接入没有 DHCPv6 客户端，拿不到前缀委派；请改用 NAT6（自动 ULA），或把上网方式改为 DHCP 后再用 Native")
+    if section == "ipv6" and result.get("enabled") and result.get("mode") == "nat6":
+        # A-01/A-02：NAT6 需要 WAN 口持有全局 IPv6 地址做伪装出口。PPPoE 拿不到
+        #（+ipv6 仅在 native 分支生成而 native 被拒，实际死路）、静态（IPv6AcceptRA=no）
+        # 也拿不到——此前是"保存成功、实际不通"的假成功空转
+        if cur["wan"].get("mode") == "pppoe":
+            fail("V6_NAT6_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持 IPv6 NAT6",
+                 "NAT6 需要 WAN 口持有全局 IPv6 地址，PPPoE 当前无法取得；请先关闭 IPv6，或改用 DHCP 接入后再开")
+        if cur["wan"].get("mode") == "static":
+            fail("V6_NAT6_STATIC_UNSUPPORTED", "静态 WAN 不支持 IPv6 NAT6",
+                 "静态线路请改用「静态 IPv6」模式（填写 WAN IPv6 地址与网关），NAT6 无出口地址可用")
+    if section == "wan" and result.get("mode") in ("pppoe", "static") \
+            and cur_v6.get("enabled") and cur_v6.get("mode") == "nat6":
+        fail("V6_NAT6_WAN_UNSUPPORTED",
+             "切换上网方式需先调整 IPv6 模式",
+             "当前 IPv6 为 NAT6，PPPoE/静态线路拿不到出口地址；请先在「IPv6 设置」改为静态 IPv6 或关闭")
     if section == "wan" and result.get("mode") == "pppoe" \
             and cur_v6.get("enabled") and cur_v6.get("mode") == "native":
         fail("V6_NATIVE_PPPPOE_UNSUPPORTED",
              "切换到 PPPoE 需先调整 IPv6 模式",
-             "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为 NAT6 或关闭，再切换上网方式")
+             "当前 IPv6 为 Native（PD），PPPoE 线路不支持；请先在「IPv6 设置」改为关闭，再切换上网方式（NAT6 在 PPPoE 下同样不可用）")
     if section == "wan" and result.get("mode") == "pppoe" \
             and cur_v6.get("enabled") and cur_v6.get("mode") == "static":
         fail("V6_STATIC_PPPPOE_UNSUPPORTED",
@@ -408,7 +424,9 @@ def main():
         fail("VALIDATE", "请求数据必须是对象")
     cur = None
     try:
-        with open("/etc/seedrou/config.json", "r", encoding="utf-8") as f:
+        # B-09：mock 交叉校验可达——面板 mock 把当前配置写到临时文件并经此变量传入
+        import os
+        with open(os.environ.get("SEEDROU_VALIDATE_CONFIG", "/etc/seedrou/config.json"), "r", encoding="utf-8") as f:
             cur = json.load(f)
     except Exception:
         cur = None

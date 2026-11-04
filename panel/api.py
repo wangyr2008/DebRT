@@ -173,8 +173,8 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/logout": do_logout,
             "/podman/ctl": lambda b, h: (200, priv("service-ctl", "podman", _json_body(b).get("action", ""), timeout=180), None),
             "/podman/container": post_podman_container,
-            "/podman/pull": lambda b, h: (200, priv("podman-ops", "pull", _json_body(b).get("image", ""), timeout=660), None),
-            "/podman/image-rm": lambda b, h: (200, priv("podman-ops", "image-rm", _json_body(b).get("image", ""), timeout=120), None),
+            "/podman/pull": post_podman_pull,
+            "/podman/image-rm": post_podman_image_rm,
             "/podman/compose": post_compose,
             "/singbox/check": lambda b, h: (200, priv("singbox-ops", "check", timeout=90), None),
             "/singbox/dash": post_singbox_dash,
@@ -189,7 +189,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/upgrade/online": post_upgrade_online,
             "/upgrade": post_upgrade_upload,
             "/restore": post_restore,
-            "/factory-reset": lambda b, h: (200, priv("factory-reset", timeout=300), None),
+            "/factory-reset": post_factory_reset,
         }
         fn = table.get(q)
         if fn:
@@ -350,11 +350,31 @@ def post_password(body, headers):
 
 
 # ---------------- 容器 ----------------
+def _check_image(img):
+    # B-07：镜像名此前完全不校验，前导 - 可注入 podman 参数
+    img = str(img or "").strip()
+    if not img or img.startswith("-") or len(img) > 256 \
+            or not re.fullmatch(r"[A-Za-z0-9._/:%\-]+(\@sha256:[a-f0-9]+)?", img):
+        raise ApiError(400, "BAD_IMAGE", "镜像名不合法", "示例：docker.io/library/nginx:1.27-alpine")
+    return img
+
+
+def post_podman_pull(body, headers):
+    img = _check_image(_json_body(body).get("image"))
+    return 200, priv("podman-ops", "pull", img, timeout=660), None
+
+
+def post_podman_image_rm(body, headers):
+    img = _check_image(_json_body(body).get("image"))
+    return 200, priv("podman-ops", "image-rm", img, timeout=120), None
+
+
 def post_podman_container(body, headers):
     data = _json_body(body)
     name = str(data.get("name", ""))[:64]
     action = str(data.get("action", ""))
-    if not re.fullmatch(r"[\w.\-]+", name) or not name:
+    if not re.fullmatch(r"[\w.\-]+", name) or not name or name.startswith("-"):
+        # B-07：前导 - 会让 --all 被当成 podman 的参数（podman stop -t 10 --all）
         raise ApiError(400, "BAD_NAME", "容器名不合法")
     if action not in ("start", "stop", "restart", "update", "remove"):
         raise ApiError(400, "BAD_ACTION", "不支持的容器操作")
@@ -399,6 +419,13 @@ def post_singbox_install(body, headers):
         priv("singbox-ops", "sub-update", timeout=700)
         return 200, {"ok": True, "message": "sing-box 已安装，配置已更新并启动服务"}, None
     return 200, {"ok": True, "message": "sing-box 内核已安装；下一步请填写配置地址并更新配置"}, None
+
+
+def post_factory_reset(body, headers):
+    # B-06：与 singbox uninstall 同级护栏——前端有双确认，API 层也要 confirm
+    if not _json_body(body).get("confirm"):
+        raise ApiError(400, "CONFIRM", "缺少二次确认", "恢复出厂不可撤销，请先在弹窗确认")
+    return 200, priv("factory-reset", timeout=300), None
 
 
 def post_singbox_dash(body, headers):
@@ -470,6 +497,9 @@ def post_upgrade_upload(body, headers):
 
 
 def post_restore(body, headers):
+    if (headers.get("X-SeedRou-Confirm") or "") != "1":
+        # B-06：恢复会整体覆盖配置，API 层要求确认头（前端上传时携带）
+        raise ApiError(400, "CONFIRM", "缺少二次确认", "恢复将覆盖当前配置，请先在弹窗确认")
     if not body:
         raise ApiError(400, "EMPTY", "备份文件内容为空")
     path = _save_upload(body, "bak")
@@ -553,11 +583,22 @@ def mock_priv(args, input_text):
         data = json.loads(input_text or "{}")
         # mock 也过一遍真实校验（审计 6：此前 mock 下校验分支全部不可达）；
         # validate.py 读 /etc/seedrou/config.json 取 cur，缺失时以 None 安全跳过交叉校验
+        import copy as _copy
         import os as _os
+        import tempfile as _tempfile
         vpy = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "priv", "validate.py")
         if _os.path.exists(vpy):
+            # B-09：把当前 mock 配置快照传给 validate，交叉校验（pppoe×v6、池越界等）在 mock 下可达
+            _tmp = _tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+            json.dump(_copy.deepcopy(cfg), _tmp, ensure_ascii=False)
+            _tmp.close()
             p = subprocess.run([sys.executable, vpy, section], input=json.dumps(data, ensure_ascii=False),
-                               capture_output=True, text=True, timeout=20)
+                               capture_output=True, text=True, timeout=20,
+                               env={**_os.environ, "SEEDROU_VALIDATE_CONFIG": _tmp.name})
+            try:
+                _os.unlink(_tmp.name)
+            except OSError:
+                pass
             if p.returncode != 0:
                 try:
                     err = json.loads(p.stdout or "{}")

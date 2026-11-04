@@ -110,6 +110,11 @@ def gen_wan_network(cfg):
     mode = cfg["wan"]["mode"]
     if mode == "dhcp":
         lines += ["DHCP=yes", "IPv6AcceptRA=yes"]
+        if v6.get("enabled") and v6.get("mode") == "native":
+            # A-08：PD 的正确位置（systemd ≥250 把它上移到 [Network]）。旧写法
+            # [DHCPv6] PrefixDelegation= 在 257 上被静默忽略（Unknown key），PD 客户端
+            # 一个请求都不发，LAN 永远拿不到前缀——真机 journalctl 实录
+            lines.append("DHCPPrefixDelegation=yes")
     elif mode == "static":
         lines += ["DHCP=no", "IPv6AcceptRA=no",
                   f"Address={cfg['wan']['ip']}/{mask_prefix(cfg['wan']['mask'])}",
@@ -124,7 +129,9 @@ def gen_wan_network(cfg):
     if mode == "dhcp":
         lines += ["", "[DHCPv4]", "UseDNS=yes", "UseGateway=yes", "UseNTP=no", "UseHostname=no"]
         if v6.get("enabled") and v6.get("mode") == "native":
-            lines += ["", "[DHCPv6]", "PrefixDelegation=yes", "WithoutRA=solicit", "UseDNS=no"]
+            # B-14：UseDNS=yes——IPv6-only/MAP-E 运营商只经 DHCPv6 下发 DNS（RA 不带
+            # RDNSS），写 no 等于主动放弃；学到的地址由 A-09 的钩子统一落盘
+            lines += ["", "[DHCPv6]", "WithoutRA=solicit", "UseDNS=yes"]
     return "\n".join(lines) + "\n"
 
 
@@ -152,14 +159,18 @@ def gen_lan_network(cfg):
             pnet = ipaddress.IPv6Network(v6["prefix"], strict=False)
             host = ipaddress.IPv6Address(int(pnet.network_address) + 1)  # 网段 ::1
             lines += [f"Address={host}/{pnet.prefixlen}"]
-        lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600"]
+        # A-08：[IPv6PrefixDelegation] 段（段名与键均自 systemd ≥255 废弃，257 静默忽略）
+        # 已删除——DHCPPrefixDelegation 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告
+        # （man 原文：the prefixes will be announced through IPv6 Router Advertisement）
+        lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600", "EmitDNS=yes"]
         if v6.get("mode") in ("nat6", "static"):
-            # NAT6/静态有确定的 LAN v6 地址，可直告 DNS；native 的地址来自上游 PD，届时由 DHCPv4 DNS 兜底
+            # NAT6/静态有确定的 LAN v6 地址，直告本机（dnsmasq 在 br-lan 上服务 DNS）
             lan_v6 = f"{ULA_PREFIX}::1" if v6.get("mode") == "nat6" else \
                 str(ipaddress.IPv6Address(int(ipaddress.IPv6Network(v6["prefix"], strict=False).network_address) + 1))
             lines += [f"DNS={lan_v6}"]
         if v6.get("mode") == "native":
-            lines += ["", "[IPv6PrefixDelegation]", "DHCPv6PrefixDelegation=yes"]
+            # native 的 LAN 地址来自上游 PD、运行期才确定——宣告本机 link-local
+            lines.append("DNS=_link_local")
         if v6.get("mode") == "nat6":
             lines += ["", "[IPv6Prefix]", f"Prefix={ULA_PREFIX}::/64"]
         elif v6.get("mode") == "static" and v6.get("prefix"):
@@ -198,6 +209,8 @@ def gen_dnsmasq(cfg):
              "domain=lan",
              "local=/lan/",
              "cache-size=1000",
+             # A-09 后上游含 IPv6：all-servers 并行查询，避免串行被不通的 v6 上游拖慢
+             "all-servers",
              # Debian 默认租约路径：dnsmasq 启动期以 root 打开，包内目录权限即保证可写（审计 B-04）
              "dhcp-leasefile=/var/lib/misc/dnsmasq.leases"]
     if dh.get("enabled"):
@@ -236,6 +249,10 @@ def gen_dnsmasq(cfg):
         # servers-file 会在 SIGHUP 时重读（conf-dir 只在启动时读——dispatcher 钩子写完
         # 上游后 HUP dnsmasq 才能生效，真机首装实测）
         lines.append("servers-file=/run/seedrou-dns/upstream.conf")
+        # B-01：WAN DNS 自动时，IPv6 卡片手填的 DNS 也必须落盘（此前被静默丢弃）
+        v6d = v6.get("dns") if v6.get("enabled") and v6.get("dns_mode") == "manual" else []
+        for d in (v6d or []):
+            lines.append(f"server={d}")
     # 注意：RA 统一由 networkd 发布（见 gen_lan_network），dnsmasq 不发 RA（审计 B-21 单一 RA 源）
     return "\n".join(lines) + "\n"
 

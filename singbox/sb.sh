@@ -490,8 +490,9 @@ sb_do_uninstall() {
         rm -rf "$CONF_DIR"
     fi
     rm -f /etc/sysctl.d/99-sing-box.conf
-    rm -f "$SB_BIN"
-    sb_info "sing-box 已卸载（SeedRou 面板将回到「未安装」状态）"
+    # A-05：不删 $SB_BIN——它是 SeedRou 下发的管理入口，不属于"内核+订阅数据"；
+    # 删掉它面板就永远无法重装（全新安装机器点一次卸载即永久卡死）
+    sb_info "sing-box 已卸载（SeedRou 面板将回到「未安装」状态，可随时一键重装）"
 }
 
 # ---------------- 状态面板 ----------------

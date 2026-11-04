@@ -6,7 +6,7 @@ Apple 风格的 Web 管理后台（登录页 + 7 页：系统概览 / 网络设�
 
 - **仅支持有线路由**（PPPoE / DHCP / 静态 IP 三种 WAN 方式）。
 - 面板零第三方依赖：后端 Python 3 标准库，前端原生 HTML/CSS/JS。
-- **不管理 sing-box**：内核由你自己的 `sb.sh` 安装与配置（tun + auto_route +
+- **sing-box 管理**：v0.1.32 起面板接管 sing-box 的安装/卸载/状态/订阅/自动更新时间（sb.sh 增强版随包下发到 `/usr/local/bin/sb`，sing-box 本体默认不装）；tun + auto_route +
   auto_redirect），底座与其共存契约见 [singbox/COEXISTENCE.md](singbox/COEXISTENCE.md)。
 
 ## 1. Debian 13 CD 安装选项（约定）
@@ -83,7 +83,7 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 
 | 页面 | 说明（相对 demo 设计稿的修正） |
 |---|---|
-| 系统概览 | 真实 WAN 状态/会话时长、CPU/内存/温度（smartctl 未装时硬盘温度显示 —）、只读上网信息（含 IPv6）、网口角色/速率/插拔；5 秒轮询 |
+| 系统概览 | 真实 WAN 状态/会话时长、CPU/内存/温度（smartctl 未装时硬盘温度显示 —）、只读上网信息（含 IPv6）、网口角色/速率/插拔；8 秒轮询 |
 | 网络设置 | 网口绑定按真实 NIC 动态渲染；**仅支持单 WAN**（demo 提示的多 WAN 负载均衡未实现，多勾会明确报错）；IPv6 四模式：Native-PD / NAT6（自动 ULA）/ 静态 / 关；改 LAN IP 有二次确认，失败自动回滚旧 IP 保证可管理 |
 | 设备列表 | dnsmasq 租约 + 静态绑定合并，在线状态来自 ARP 表；备注按 MAC 存储并与静态分配同步 |
 | 安全中心 | demo 的"防火墙放行规则"实为**端口转发（DNAT）**，已正名并补齐增删改/启停/冲突校验；"防火墙总开关"= WAN 入站默认拦截（关闭时红色警示） |
@@ -124,7 +124,7 @@ cat /var/lib/seedrou/dnsmasq.leases         # 租约
 nft list ruleset > /tmp/before && reboot
 nft list ruleset > /tmp/after && diff /tmp/before /tmp/after
 # sing-box 共存：
-bash sb.sh install && bash sb.sh update     # LAN 仍可上网、面板可登录
+sb install && sb update     # LAN 仍可上网、面板可登录
 systemctl stop sing-box && ping 223.5.5.5   # 直连自动恢复
 # 端口转发回环：从公网侧（或手机热点）访问 WAN_IP:外部端口 → 应到达 LAN 目标
 ```

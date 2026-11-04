@@ -86,14 +86,14 @@
           <!-- ============ 2 网络设置 ============ -->
           <section class="ru-page" id="pg-network">
             <div class="ru-card">
-              <div class="ru-chead"><div><h3>网口绑定</h3><div class="ru-sub">勾选各网口角色，支持多 WAN / 多 LAN；同一网口只能属于一个角色，未勾选为「未使用」</div></div></div>
+              <div class="ru-chead"><div><h3>网口绑定</h3><div class="ru-sub">勾选各网口角色，支持多 LAN；WAN 口仅支持一个（多宽带负载均衡尚未支持），未勾选为「未使用」</div></div></div>
               <div class="ru-flabel" style="margin-top:10px">WAN 口（广域网）</div>
               <div style="display:flex;flex-wrap:wrap;gap:8px" id="bind-wan"></div>
               <div class="ru-flabel" style="margin-top:16px">LAN 口（局域网）</div>
               <div style="display:flex;flex-wrap:wrap;gap:8px" id="bind-lan"></div>
               <div class="ru-badmsg" id="msg-wan">至少需要保留 1 个 WAN 口</div>
               <div class="ru-badmsg" id="msg-lan">至少需要保留 1 个 LAN 口</div>
-              <div class="ru-hint">WAN 与 LAN 联动：同一网口不能同时属于两者；多 WAN 可用于双宽带接入。绑定变更将重建 LAN 网桥并重启网络。</div>
+              <div class="ru-hint">WAN 与 LAN 联动：同一网口不能同时属于两者；WAN 仅支持单口，其余网口请勾选 LAN 或留空。绑定变更将重建 LAN 网桥并重启网络。</div>
               <div class="ru-save"><button class="ru-btn primary" id="btn-bind-save">保存绑定</button></div>
             </div>
 
@@ -121,7 +121,7 @@
               <div data-wanblock="static" hidden>
                 <div class="ru-frow">
                   <div class="ru-field"><div class="ru-flabel">IP 地址</div><input class="ru-in" id="wan-ip" placeholder="192.168.1.2"></div>
-                  <div class="ru-field"><div class="ru-flabel">子网掩码</div><input class="ru-in" id="wan-mask" placeholder="255.255.255.0"></div>
+                  <div class="ru-field"><div class="ru-flabel">子网掩码（/24，254 台主机）</div><input class="ru-in" id="wan-mask" placeholder="255.255.255.0"></div>
                   <div class="ru-field"><div class="ru-flabel">默认网关</div><input class="ru-in" id="wan-gw" placeholder="192.168.1.1"></div>
                 </div>
               </div>
@@ -191,7 +191,7 @@
               <div class="ru-frow" style="margin-top:6px">
                 <div class="ru-field"><div class="ru-flabel">LAN IP 地址</div><input class="ru-in" id="lan-ip"></div>
                 <div class="ru-field" style="max-width:220px"><div class="ru-flabel">子网掩码</div>
-                  <select class="ru-in" id="lan-mask"><option>255.255.255.0</option><option>255.255.255.128</option><option>255.255.255.192</option><option>255.255.255.224</option></select>
+                  <select class="ru-in" id="lan-mask"><option>255.255.255.0</option></select>
                 </div>
               </div>
               <div class="ru-badmsg" id="msg-lanip"></div>

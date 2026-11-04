@@ -20,9 +20,11 @@ PY
 
 i=0
 while [ "$i" -lt 45 ]; do
-  if [ "$MODE" = "pppoe" ] && ip -4 addr show ppp0 2>/dev/null | grep -q 'inet '; then got=ppp0; break; fi
+  # B-13：IPv6-only 接入（DS-Lite/纯 RA）没有 v4 地址，判据加上全局 v6——
+  # 否则开机白等 45 秒后钩子仍拿不到上游
+  if [ "$MODE" = "pppoe" ] && { ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' || ip -6 addr show ppp0 2>/dev/null | grep -q 'scope global'; }; then got=ppp0; break; fi
   for IF in $WANIFS; do
-    ip -4 addr show "$IF" 2>/dev/null | grep -q 'inet ' && { got="$IF"; break; }
+    if ip -4 addr show "$IF" 2>/dev/null | grep -q 'inet ' || ip -6 addr show "$IF" 2>/dev/null | grep -q 'scope global'; then got="$IF"; break; fi
   done
   [ -n "${got:-}" ] && break
   # 无载波（网线没插）就不等了

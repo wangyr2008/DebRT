@@ -47,14 +47,6 @@ function showBad(id, msg) {
   el.textContent = msg || "";
   el.classList.toggle("show", !!msg);
 }
-function fmtDur(sec) {
-  sec = Math.max(0, Math.floor(sec));
-  var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
-  if (d > 0) return d + " 天 " + h + " 小时";
-  if (h > 0) return h + " 小时 " + m + " 分钟";
-  return m + " 分钟";
-}
-
 /* ===================== API ===================== */
 var API = {
   get: function (path) { return request("GET", path); },
@@ -64,6 +56,7 @@ function request(method, path, body, opts) {
   opts = opts || {};
   var headers = { "X-SeedRou": "1" };
   if (opts.raw) headers["X-Filename"] = opts.filename || "upload.bin";
+  if (opts.confirm) headers["X-SeedRou-Confirm"] = "1";   /* B-06：破坏性上传（恢复备份）API 层校验此头 */
   var init = { method: method, headers: headers, credentials: "same-origin" };
   if (body !== undefined && body !== null) {
     if (opts.raw) { init.body = body; }
@@ -314,6 +307,7 @@ function renderNetwork(cfg) {
 
   $id("v6-enable").checked = !!v6.enabled;
   $id("sel-v6mode").value = v6.mode || "native";
+  onWanModeChange($id("sel-wanmode").value);   /* A-01/A-02：回显时同步 NAT6 可用性 */
   onV6ModeChange();
   setSeg("seg-v6dns", v6.dns_mode || "auto");
   $id("v6-dns1").value = (v6.dns && v6.dns[0]) || ""; $id("v6-dns2").value = (v6.dns && v6.dns[1]) || "";
@@ -389,6 +383,12 @@ function onWanModeChange(mode) {
   root.querySelectorAll("[data-wanblock]").forEach(function (el) {
     el.hidden = el.getAttribute("data-wanblock") !== mode;
   });
+  // A-01/A-02：NAT6 需要 WAN 全局 v6 地址——PPPoE/静态下不可选（此前可选但后端空转）
+  var nat = $id("sel-v6mode").querySelector('option[value="nat6"]');
+  if (nat) {
+    nat.disabled = (mode === "pppoe" || mode === "static");
+    if (nat.disabled && $id("sel-v6mode").value === "nat6") $id("sel-v6mode").value = "native";
+  }
 }
 $id("sel-wanmode").addEventListener("change", function () { onWanModeChange(this.value); });
 bindSeg("seg-wandns");
@@ -754,7 +754,9 @@ $id("btn-pw-save").addEventListener("click", function () {
   API.post("/api/admin/password", { old: oldP, new: newP }).then(function () {
     btnBusy(btn, false);
     $id("pw-old").value = $id("pw-new").value = $id("pw-new2").value = "";
-    toast("ok", "管理密码已修改", "下次登录请使用新密码");
+    toast("ok", "管理密码已修改", "会话密钥已轮换，即将返回登录页，请用新密码登录");
+    // B-05：改密轮换会话密钥后旧 cookie 60s 内必 401——主动登出比被轮询踢回体面
+    setTimeout(function () { setLogged(false); }, 1500);
   }).catch(function (e) { btnBusy(btn, false); showBad("msg-pw", e.message || "修改失败"); });
 });
 
@@ -939,13 +941,14 @@ $id("file-compose").addEventListener("change", function () {
 
 /* ===================== 6 其他工具（sing-box / 配置 / Tailscale 托管） ===================== */
 loaders.tools = loadSingbox;
-function fmtDur(sec) {
-  if (sec == null || isNaN(sec) || sec <= 0) return "—";
+function fmtDur(sec) {  /* 全站唯一定义（B-03：曾两处且语义不一致，后定义覆盖前者） */
+  if (sec == null || isNaN(sec) || sec < 0) return "—";
+  sec = Math.floor(sec);
+  if (sec === 0) return "刚刚";
   var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
   if (d > 0) return d + " 天 " + h + " 小时";
   if (h > 0) return h + " 小时 " + m + " 分钟";
-  if (m > 0) return m + " 分钟";
-  return "刚刚";
+  return m + " 分钟";
 }
 function renderSubState(state) {
   /* 用户要求：成功只显示"多久前更新成功"；自动/手动失败都持久显示原因直到下次成功 */
@@ -1247,7 +1250,7 @@ $id("file-restore").addEventListener("change", function () {
   this.value = "";
   if (!f) return;
   if (!window.confirm("恢复将覆盖当前全部路由配置（上网方式、绑定、端口转发、静态分配等），恢复后网络会自动应用。确定继续吗？")) return;
-  API.post("/api/restore", f, { raw: true, filename: f.name }).then(function (r) {
+  API.post("/api/restore", f, { raw: true, filename: f.name, confirm: true }).then(function (r) {
     toast("ok", "配置已恢复并生效", (r && r.message) || "若管理地址变化，请用新地址重新登录");
     setTimeout(function () { loadAll(); }, 1500);
   }).catch(apiFail);
@@ -1257,7 +1260,7 @@ $id("btn-factory").addEventListener("click", function () {
   if (!window.confirm("再次确认：真的要恢复出厂设置吗？")) return;
   var btn = this;
   btnBusy(btn, true, "恢复中…");
-  API.post("/api/factory-reset").then(function () {
+  API.post("/api/factory-reset", { confirm: true }).then(function () {
     btnBusy(btn, false);
     toast("ok", "已恢复出厂设置", "网络正在重启；若 LAN IP 变为 192.168.10.1，请用新地址重新登录");
     setTimeout(function () { location.href = "http://192.168.10.1/"; }, 4000);
