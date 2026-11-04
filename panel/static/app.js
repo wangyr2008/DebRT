@@ -281,7 +281,11 @@ loaders.overview = refreshStatus;
 loaders.network = refreshConfig;
 loaders.security = refreshConfig;
 loaders.backup = refreshConfig;
-setInterval(function () { if (LOGGED && document.visibilityState !== "hidden") refreshStatus(); }, 8000);
+/* 窄屏类三重保险（实测部分内嵌浏览器/异常环境 resize 与 matchMedia change 均不触发）：
+   8s 轮询顺带校正一次 applyNarrow，代价可忽略 */
+setInterval(function () {
+  if (LOGGED && document.visibilityState !== "hidden") { applyNarrow(); refreshStatus(); }
+}, 8000);
 
 /* ===================== 2 网络设置 ===================== */
 function chipHTML(role, p) {
