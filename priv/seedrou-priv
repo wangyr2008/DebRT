@@ -262,6 +262,8 @@ PYEOF
   [ "$old_mode" != "$new_mode" ] && pppoe_needed="yes"
   [ "$old_user" != "$new_user" ] && pppoe_needed="yes"  # P2-2：改账号此前不重拨，pppd 仍持旧凭据会话
   [ "$section" = "bind" ] && [ "$new_mode" = "pppoe" ] && pppoe_needed="yes"
+  # PPPoE 下 IPv6 设置变更需要重拨：+ipv6/IPv6CP 与 ppp0 上的 DHCPv6 客户端随重拨生效
+  [ "$section" = "ipv6" ] && [ "$new_mode" = "pppoe" ] && pppoe_needed="yes"
   if [ "$section" = "wan" ] && printf '%s' "$norm" | python3 -c 'import json,sys;sys.exit(0 if json.load(sys.stdin).get("data",{}).get("password") else 1)' 2>/dev/null; then
     pppoe_needed="yes"
   fi
@@ -1338,6 +1340,13 @@ if wan_dev:
         except Exception:
             wan["mask"] = ""
     wan["gw"] = next((r.get("gateway", "") for r in routes if r.get("dev") == wan_dev), "")
+    if mode == "pppoe" and not wan["gw"]:
+        # PPPoE 点对点链路没有网关概念（default dev ppp0 scope link），概览显示对端地址
+        try:
+            _pr = json.loads(run(["ip", "-j", "-4", "route", "show", "dev", "ppp0"]) or "[]")
+            wan["gw"] = next((r.get("dst") for r in _pr if r.get("dst") and r.get("dst") != "default"), "")
+        except Exception:
+            pass
     if mode == "pppoe":
         # 会话起点由 pppd ip-up.d 钩子写入（掉线重拨即归零），不再用服务启动时间（persist 下不准，审计 B-22）
         try:

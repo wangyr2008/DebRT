@@ -105,12 +105,17 @@ import json, glob, os
 try:
     cfg = json.load(open("/etc/seedrou/config.json"))
     names = {p["name"] for p in cfg.get("ports", [])}
+    _v6 = cfg.get("ipv6", {})
+    need_ppp = (cfg.get("wan", {}).get("mode") == "pppoe"
+                and _v6.get("enabled") and _v6.get("mode") in ("native", "nat6"))
 except Exception:
     raise SystemExit
 for f in glob.glob("/etc/systemd/network/30-*.network"):
     base = os.path.basename(f)[3:-len(".network")]
     if base not in names:
         print(f)
+if not need_ppp and os.path.exists("/etc/systemd/network/25-ppp0.network"):
+    print("/etc/systemd/network/25-ppp0.network")
 PYEOF
 }
 
@@ -230,7 +235,7 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
   case "$1" in
     bind)     echo "networkd dnsmasq nft cake" ;;
     wan)      echo "networkd pppoe dnsmasq nft cake" ;;
-    ipv6)     echo "networkd dnsmasq nft" ;;
+    ipv6)     echo "networkd pppoe dnsmasq nft" ;;  # PPPoE 下开/关 v6 需重拨协商 IPv6CP
     lan)      echo "networkd dnsmasq nft cake" ;;
     dhcp)     echo "dnsmasq" ;;
     static)   echo "dnsmasq" ;;

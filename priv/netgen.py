@@ -135,6 +135,15 @@ def gen_wan_network(cfg):
     return "\n".join(lines) + "\n"
 
 
+def gen_ppp_network(cfg):
+    # PPPoE 的 IPv6：pppd 只协商 IPv6CP（链路本地），地址与前缀由 networkd 在 ppp0 上
+    # 跑 DHCPv6 客户端获取（IA_NA 出口地址 / IA_PD 委派前缀）——国内家宽标准形态
+    return ("# 由 SeedRou 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
+            "IPv6AcceptRA=no\n"
+            "DHCPPrefixDelegation=yes\n\n"
+            "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n")
+
+
 def gen_lan_netdev(cfg):
     return "# 由 SeedRou 生成 — 请勿手工修改\n[NetDev]\nName=br-lan\nKind=bridge\n"
 
@@ -163,7 +172,7 @@ def gen_lan_network(cfg):
         # 已删除——PD 模型两端都要开：WAN 请求前缀，LAN 在 [Network] 里声明消费
         # （N-02：只开 WAN 前缀拿到也没人用，br-lan 依然只有 fe80），
         # 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告（man 原文同）
-        if v6.get("mode") == "native" and cfg["wan"].get("mode") == "dhcp":
+        if v6.get("mode") == "native" and cfg["wan"].get("mode") in ("dhcp", "pppoe"):
             lines.append("DHCPPrefixDelegation=yes")
         lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600", "EmitDNS=yes"]
         if v6.get("mode") in ("nat6", "static"):
@@ -375,7 +384,7 @@ def gen_pppd(cfg, password):
         "novjccomp",
         "linkname seedrou",
     ]
-    if v6.get("enabled") and v6.get("mode") == "native":
+    if v6.get("enabled") and v6.get("mode") in ("native", "nat6"):
         lines.append("+ipv6")
     return "\n".join(lines) + "\n"
 
@@ -420,6 +429,9 @@ def main():
         files.append(("etc/ppp/peers/seedrou", 0o644, gen_pppd(cfg, password)))
         files.append(("etc/ppp/chap-secrets", 0o600, gen_chap(cfg, password)))
         files.append(("etc/ppp/pap-secrets", 0o600, gen_chap(cfg, password)))
+        _v6 = cfg.get("ipv6", {})
+        if _v6.get("enabled") and _v6.get("mode") in ("native", "nat6"):
+            files.append(("etc/systemd/network/25-ppp0.network", 0o644, gen_ppp_network(cfg)))
 
     # 变更影响面
     restart = ["dnsmasq"]

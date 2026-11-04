@@ -391,12 +391,13 @@ function onWanModeChange(mode) {
   root.querySelectorAll("[data-wanblock]").forEach(function (el) {
     el.hidden = el.getAttribute("data-wanblock") !== mode;
   });
-  // A-01/A-02：NAT6 需要 WAN 全局 v6 地址——PPPoE/静态下不可选（此前可选但后端空转）
+  // v6 模式可用性随上网方式联动：静态 WAN→仅静态 v6；PPPoE→Native/NAT6 可选（静态表单不适用）
   var nat = $id("sel-v6mode").querySelector('option[value="nat6"]');
-  if (nat) {
-    nat.disabled = (mode === "pppoe" || mode === "static");
-    if (nat.disabled && $id("sel-v6mode").value === "nat6") $id("sel-v6mode").value = "native";
-  }
+  var sta = $id("sel-v6mode").querySelector('option[value="static"]');
+  if (nat) nat.disabled = (mode === "static");
+  if (sta) sta.disabled = (mode === "pppoe");
+  if (mode === "static" && $id("sel-v6mode").value === "nat6") $id("sel-v6mode").value = "native";
+  if (mode === "pppoe" && $id("sel-v6mode").value === "static") $id("sel-v6mode").value = "native";
 }
 $id("sel-wanmode").addEventListener("change", function () { onWanModeChange(this.value); });
 bindSeg("seg-wandns");
