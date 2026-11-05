@@ -1,0 +1,50 @@
+#!/bin/sh
+# SeedRou PPPoE 看门狗
+#
+# 背景（2026-11-05 真机实录）：pppd 的 persist 对"接口被外部删除"不敏感——服务
+# 仍是 active、进程还在，但 ppp0 已经不存在，既不自愈也不报错，表现为"拨不了号"。
+# 典型诱因是 networkd 重配 / 手工 reconfigure ppp0 打断了会话。
+#
+# 策略：周期检查（默认 1 分钟）。ppp0 缺失先打标记，给拨号留一个周期；连续缺失
+# 超过 3 分钟才重启服务，避免正常拨号过程中被误杀。
+set -u
+CFG="/etc/seedrou/config.json"
+FLAG="/run/seedrou/pppoe-watchdog-miss"
+UNIT="seedrou-pppoe.service"
+
+[ -f "$CFG" ] || exit 0
+mkdir -p /run/seedrou 2>/dev/null || true
+
+MODE="$(python3 -c "import json;print(json.load(open('$CFG')).get('wan',{}).get('mode',''))" 2>/dev/null)"
+if [ "$MODE" != "pppoe" ]; then
+  rm -f "$FLAG" 2>/dev/null
+  exit 0
+fi
+
+# 服务没在跑：直接拉起
+if ! systemctl is-active --quiet "$UNIT"; then
+  logger -t seedrou-pppoe-watchdog "拨号服务未运行，拉起"
+  systemctl start "$UNIT" 2>/dev/null || true
+  rm -f "$FLAG" 2>/dev/null
+  exit 0
+fi
+
+# 健康判据：ppp0 存在且有 IPv4
+if ip -4 addr show ppp0 2>/dev/null | grep -q 'inet '; then
+  rm -f "$FLAG" 2>/dev/null
+  exit 0
+fi
+
+# 首次缺失：只打标记，等下一个周期（拨号建立本身需要时间）
+if [ ! -f "$FLAG" ]; then
+  date +%s > "$FLAG" 2>/dev/null || true
+  exit 0
+fi
+
+AGE=$(( $(date +%s) - $(cat "$FLAG" 2>/dev/null || echo 0) ))
+if [ "$AGE" -ge 180 ]; then
+  logger -t seedrou-pppoe-watchdog "ppp0 缺失 ${AGE}s（服务 active 但无会话），重启拨号"
+  systemctl restart "$UNIT" 2>/dev/null || true
+  rm -f "$FLAG" 2>/dev/null
+fi
+exit 0

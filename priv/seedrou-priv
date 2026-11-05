@@ -1264,6 +1264,14 @@ sys.exit(0 if ok else 1)
     fi
     sysctl --system >/dev/null 2>&1 || true
   fi
+  # PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时不自愈
+  # （2026-11-05 真机实录）。脚本随包进 LIB_DIR，unit 需单独落 /etc 并启用。
+  if [ -f /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.timer ]; then
+    install -m 644 /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.service /etc/systemd/system/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.timer /etc/systemd/system/ 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now seedrou-pppoe-watchdog.timer >/dev/null 2>&1 || true
+  fi
   for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
     [ -f "$pyf" ] && chmod 644 "$pyf"
   done

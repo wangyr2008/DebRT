@@ -1,0 +1,11 @@
+[Unit]
+# pppd persist 对"接口被外部删除"不敏感：服务 active 但 ppp0 已消失时不会自愈
+# （2026-11-05 真机实录）。由本单元周期探测，连续缺失 3 分钟则重启拨号。
+Description=SeedRou PPPoE 看门狗（ppp0 缺失时重启拨号）
+After=network.target
+ConditionPathExists=/etc/seedrou/config.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/seedrou/pppoe-watchdog
+TimeoutStartSec=30

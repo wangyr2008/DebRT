@@ -123,6 +123,11 @@ assert "ppp*)" in _hook, "R-02 回归：ppp0 缺少 v4/v6 合并分支"
 # 导致"插网线自愈"只对全新安装生效）
 _priv_src = open(os.path.join(ROOT, "priv", "seedrou-priv"), encoding="utf-8").read()
 assert "75-seedrou-pppoe-hotplug" in _priv_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
+# PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时必须能自愈
+_wd = open(os.path.join(ROOT, "priv", "pppoe-watchdog"), encoding="utf-8").read()
+assert "ppp0" in _wd and "systemctl restart" in _wd, "看门狗缺少 ppp0 探测或重启逻辑"
+assert os.path.exists(os.path.join(ROOT, "systemd", "seedrou-pppoe-watchdog.timer")), "看门狗 timer 缺失"
+assert "seedrou-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门狗 timer"
 assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
 assert "UplinkInterface=:self" in ppp_net, "N-05 回归：缺 UplinkInterface=:self（客户端永不启动的真凶）"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)

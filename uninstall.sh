@@ -12,7 +12,7 @@ VAR_DIR="/var/lib/seedrou"
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 
 echo "[卸载] 停止服务..."
-systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service seedrou-dns-sync.service 2>/dev/null || true
+systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service seedrou-dns-sync.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
 systemctl stop dnsmasq.service 2>/dev/null || true
 nft delete table inet seedrou_base 2>/dev/null || true
 tc qdisc del dev ifb0 root 2>/dev/null || true
@@ -23,6 +23,7 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/seedrou-panel.service /etc/systemd/system/seedrou-apply.service \
       /etc/systemd/system/seedrou-converge.service /etc/systemd/system/seedrou-converge.timer \
       /etc/systemd/system/seedrou-pppoe.service \
+      /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
       /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
       /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/ppp/ip-up.d/seedrou \
       /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
