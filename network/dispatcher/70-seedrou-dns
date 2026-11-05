@@ -12,6 +12,10 @@ import json, sys
 try:
     cfg = json.load(open("/etc/seedrou/config.json"))
     wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+    # R-02：PPPoE 下 ppp0 才是真正的 WAN 承载口，物理口只是二层链路
+    # （v0.1.41 起 IPv6 也走 ppp0 的 DHCPv6，其 DNS 必须能被这里认到）
+    if cfg.get("wan", {}).get("mode") == "pppoe":
+        wans.append("ppp0")
 except Exception:
     wans = []
 print("yes" if sys.argv[1] in wans else "no")
@@ -32,9 +36,28 @@ IDX=$(cat "/sys/class/net/$IFACE/ifindex" 2>/dev/null) || exit 0
 SRC="/run/systemd/netif/links/$IDX"
 [ -f "$SRC" ] || exit 0
 
-{
-  echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
-  python3 - "$SRC" <<'PYEOF'
+# R-02：PPPoE 的上游有两个来源——pppd ip-up.d 从 /etc/ppp/resolv.conf 抄来的 IPv4，
+# 与 networkd 在 ppp0 上经 DHCPv6 学到的 IPv6。二者必须合并：若像物理口那样全量覆盖，
+# 会把 ip-up 写入的 v4 冲掉；运营商不给 v6 DNS 时就等于没有上游。
+case "$IFACE" in
+  ppp*)
+    {
+      echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
+      [ -f "$CONF" ] && grep -E '^server=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$CONF"
+      python3 - "$SRC" <<'PYEOF'
+import sys
+for line in open(sys.argv[1]):
+    if line.startswith("DNS=") and line.strip() != "DNS=":
+        for d in line.strip()[4:].split(" "):
+            if d and ":" in d:      # ppp0 只取 IPv6；IPv4 已由 ip-up.d 写入并在此保留
+                print(f"server={d}")
+PYEOF
+    } > "${CONF}.tmp" 2>/dev/null
+    ;;
+  *)
+    {
+      echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
+      python3 - "$SRC" <<'PYEOF'
 import sys
 for line in open(sys.argv[1]):
     if line.startswith("DNS=") and line.strip() != "DNS=":
@@ -42,7 +65,9 @@ for line in open(sys.argv[1]):
             if d:
                 print(f"server={d}")
 PYEOF
-} > "${CONF}.tmp" 2>/dev/null
+    } > "${CONF}.tmp" 2>/dev/null
+    ;;
+esac
 
 # N-05：解析为空（WAN 刚重连、DNS 尚未学到）时保留上一份有效上游——
 # links 文件总是存在，不像旧版 lease 缺失会 exit 0 天然保旧；空上游会让 dnsmasq 断解析

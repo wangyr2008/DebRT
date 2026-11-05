@@ -114,6 +114,10 @@ ppp_net = netgen.gen_ppp_network(ppp_cfg)
 assert "Name=ppp0" in ppp_net, "ppp0 匹配缺失"
 assert "DHCPPrefixDelegation=yes" in ppp_net and "WithoutRA=solicit" in ppp_net, "PPPoE ppp0 PD 缺失"
 assert "DHCP=ipv6" in ppp_net, "PPPoE ppp0 缺 DHCP=ipv6（DHCPv6 客户端不会启动，真机 546/547 为零）"
+# R-02：ppp0 必须被 DNS 钩子认作 WAN，且与 ip-up.d 写入的 IPv4 上游合并而非覆盖
+_hook = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
+assert 'wans.append("ppp0")' in _hook, "R-02 回归：DNS 钩子不认 ppp0（PPPoE 的 IPv6 上游进不来）"
+assert "ppp*)" in _hook, "R-02 回归：ppp0 缺少 v4/v6 合并分支"
 assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
 assert "UplinkInterface=:self" in ppp_net, "N-05 回归：缺 UplinkInterface=:self（客户端永不启动的真凶）"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)

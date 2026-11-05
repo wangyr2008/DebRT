@@ -278,7 +278,17 @@ sync_dns_upstream() {
   local hook=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
   [ -x "$hook" ] || return 0
   local wan_if if
-  wan_if="$(python3 -c 'import json;print(",".join(p["name"] for p in json.load(open("'"$CONFIG_JSON"'")).get("ports",[]) if p.get("wan")) or "")' 2>/dev/null)"
+  # R-02：PPPoE 的承载口是 ppp0（IPv4 由 ip-up.d 写、IPv6 由 networkd DHCPv6 学），
+  # 收敛时同样要触发钩子，否则 ppp0 的 IPv6 上游不会补齐
+  wan_if="$(python3 - "$CONFIG_JSON" <<'PY' 2>/dev/null
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+ifs = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+if cfg.get("wan", {}).get("mode") == "pppoe":
+    ifs.append("ppp0")
+print(",".join(ifs))
+PY
+)"
   [ -n "$wan_if" ] || return 0
   for if in ${wan_if//,/ }; do
     # B-13：v6-only 接入同样要触发钩子（判据与 wait-dns-upstream 一致）
