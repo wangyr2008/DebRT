@@ -1450,22 +1450,22 @@ nft_ok = rc(["nft", "list", "table", "inet", "seedrou_base"]) == 0
 # 数字只增不减（用户反馈：统计的是所有上过线的设备）。
 # 判据取舍（真机实测 2026-11-05）：租约剩余时间无法区分在线/离线——13 条租约里
 # 剩余 119 分钟的没在线、剩余 90 分钟的在线的都有（dnsmasq 租期 120 分钟，离线
-# 设备也会保留到接近到期）。因此采用：REACHABLE/DELAY/PROBE 直接算在线，
-# STALE 也算（近期有过通信、当前空闲，WiFi 通常仍关联着），FAILED/INCOMPLETE 排除。
+# 设备也会保留到接近到期）。
+# B-05：与面板设备列表（sysinfo.arp_online_macs）统一用 /proc/net/arp 的 flags
+# 0x2（ARP 完整，含 STALE）——两套实现将来调判据容易改一处漏一处；这里额外按
+# br-lan 过滤，避免把 WAN 侧网关算成"已连接设备"。
 leases = 0
 try:
-    _nb = subprocess.run(["ip", "-j", "neigh", "show", "dev", "br-lan"],
-                         capture_output=True, text=True, timeout=5).stdout
     _live = set()
-    for _n in json.loads(_nb or "[]"):
-        _st = _n.get("state") or []
-        if isinstance(_st, str):
-            _st = [_st]
-        if _n.get("lladdr") and any(s in ("REACHABLE", "DELAY", "PROBE", "STALE") for s in _st):
-            _live.add(str(_n["lladdr"]).upper())
+    with open("/proc/net/arp") as _af:
+        next(_af, None)
+        for _line in _af:
+            _p = _line.split()
+            if len(_p) >= 6 and _p[2] == "0x2" and _p[3] != "00:00:00:00:00:00" and _p[5] == "br-lan":
+                _live.add(_p[3].upper())
     leases = len(_live)
 except Exception:
-    # 退化路径：ip 命令异常时仍给个数（宁可粗也不能空）
+    # 退化路径：/proc 不可读时仍给个数（宁可粗也不能空）
     try:
         with open("/var/lib/misc/dnsmasq.leases") as f:
             leases = sum(1 for _ in f)

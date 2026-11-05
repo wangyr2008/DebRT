@@ -128,6 +128,21 @@ _wd = open(os.path.join(ROOT, "priv", "pppoe-watchdog"), encoding="utf-8").read(
 assert "ppp0" in _wd and "systemctl restart" in _wd, "看门狗缺少 ppp0 探测或重启逻辑"
 assert os.path.exists(os.path.join(ROOT, "systemd", "seedrou-pppoe-watchdog.timer")), "看门狗 timer 缺失"
 assert "seedrou-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门狗 timer"
+# 看门狗健康判据必须同时认 IPv4 与全局 IPv6（只认 v4 会误杀 IPv6-only 链路，
+# 每 3 分钟重启一次拨号，比卡死更糟）
+assert "scope global" in _wd, "B-01 回归：看门狗只认 IPv4"
+# B-02：netgen 的收敛期防线必须与 validate 覆盖同一套 IPv6 × WAN 规则
+# （v0.1.42 曾因只改 validate 漏掉 netgen，导致保存放行、收敛回滚）
+_V6_STATIC_FULL = {"enabled": True, "mode": "static", "dns_mode": "auto", "dns": [],
+                   "prefix": "2001:db8:abcd::/64", "addr": "2001:db8:1::2/64", "gw": "2001:db8:1::1"}
+for _wm, _vm, _dm in (("static", "native", "manual"), ("static", "nat6", "manual"), ("pppoe", "static", "auto")):
+    _v6 = dict(_V6_STATIC_FULL) if _vm == "static" else {"enabled": True, "mode": _vm, "dns_mode": "auto", "dns": []}
+    try:
+        netgen.cross_validate(base_cfg(_wm, _dm, v6=_v6))
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("B-02 回归：netgen 未拦截 %s × %s（收敛期会生成空转配置）" % (_wm, _vm))
 assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
 assert "UplinkInterface=:self" in ppp_net, "N-05 回归：缺 UplinkInterface=:self（客户端永不启动的真凶）"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)

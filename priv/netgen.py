@@ -94,6 +94,22 @@ def cross_validate(cfg):
     w, l = set(wan_ifaces(cfg)), set(lan_ifaces(cfg))
     if w & l:
         fail("NETGEN", f"网口角色冲突：{sorted(w & l)}")
+    # IPv6 × WAN 组合的收敛期防线（与 validate.cross_validate 保持同一套规则）。
+    # 保存路径由 validate 拦，但收敛（开机/定时/升级后）直接读 config.json——
+    # 存量非法配置若无这道防线，会静默生成"看着正常、实际空转"的配置
+    # （v0.1.35 审计 A-01/A-02 的同类问题；v0.1.42 曾因只改一处漏掉 netgen 侧）。
+    v6 = cfg.get("ipv6", {})
+    wm = cfg.get("wan", {}).get("mode", "")
+    if v6.get("enabled"):
+        if wm == "static" and v6.get("mode") == "native":
+            fail("V6_NATIVE_STATIC_WAN", "静态 WAN 不支持 IPv6 Native（PD）",
+                 "静态接入没有 DHCPv6 客户端，拿不到前缀委派；请改用「静态 IPv6」模式或关闭 IPv6")
+        if wm == "static" and v6.get("mode") == "nat6":
+            fail("V6_NAT6_STATIC_UNSUPPORTED", "静态 WAN 不支持 IPv6 NAT6",
+                 "静态线路请改用「静态 IPv6」模式（填写 WAN IPv6 地址与网关），NAT6 无出口地址可用")
+        if wm == "pppoe" and v6.get("mode") == "static":
+            fail("V6_STATIC_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持静态 IPv6",
+                 "PPPoE 的 IPv6 地址由拨号与 DHCPv6 协商，不支持静态表单；请改用 Native 或 NAT6")
 
 
 def gen_wan_network(cfg):
@@ -119,7 +135,15 @@ def gen_wan_network(cfg):
     # dhcp+静态v6 是合法可保存的配置却永不落盘。dhcp 保留 IPv6AcceptRA=yes
     # （RA 与静态地址并存）；pppoe 由 validate 拒绝——v6 应落 ppp0，以太网口无承载点
     if mode in ("dhcp", "static") and v6.get("enabled") and v6.get("mode") == "static":
-        lines += [f"Address={v6['addr']}", f"Gateway={v6['gw']}"]
+        # B-04：缺字段时给结构化错误，而不是 KeyError traceback
+        _v6addr = v6.get("addr") or ""
+        _v6gw = v6.get("gw") or ""
+        if not _v6addr:
+            fail("V6_STATIC_NEEDS_ADDR", "静态 IPv6 模式缺少 WAN IPv6 地址",
+                 "请在「网络设置 → IPv6 设置」填写 WAN IPv6 地址（如 2001:db8:1::2/64）")
+        lines.append(f"Address={_v6addr}")
+        if _v6gw:
+            lines.append(f"Gateway={_v6gw}")
     if mode == "dhcp":
         lines += ["", "[DHCPv4]", "UseDNS=yes", "UseGateway=yes", "UseNTP=no", "UseHostname=no"]
         if v6.get("enabled") and v6.get("mode") == "native":

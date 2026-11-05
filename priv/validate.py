@@ -420,6 +420,12 @@ def main():
             cur = json.load(f)
     except Exception:
         cur = None
+    # B-03：PPPoE + 静态 IPv6 在字段校验之前就拒——否则用户先收到"IPv6 地址 '' 无效"，
+    # 补完地址才被告知"PPPoE 不支持静态"，白绕一圈
+    if section == "ipv6" and cur and cur.get("wan", {}).get("mode") == "pppoe" \
+            and data.get("enabled") and data.get("mode") == "static":
+        fail("V6_STATIC_PPPPOE_UNSUPPORTED", "PPPoE 线路不支持静态 IPv6",
+             "PPPoE 的 IPv6 地址由拨号与 DHCPv6 协商，不支持静态表单；请改用 Native 或 NAT6，或关闭 IPv6")
     fns = {
         "bind": lambda: norm_ports(section, data.get("ports", [])),
         "wan": lambda: norm_wan(section, data),

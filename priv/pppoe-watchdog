@@ -29,8 +29,11 @@ if ! systemctl is-active --quiet "$UNIT"; then
   exit 0
 fi
 
-# 健康判据：ppp0 存在且有 IPv4
-if ip -4 addr show ppp0 2>/dev/null | grep -q 'inet '; then
+# 健康判据：ppp0 有 IPv4 或全局 IPv6 都算通。
+# 只认 IPv4 会误杀 IPv6-only 链路（DS-Lite / 纯 IPv6 专线）：那类环境永远没有
+# IPv4，看门狗会每 3 分钟重启一次拨号，比"卡死不恢复"更糟。
+if ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' \
+   || ip -6 addr show ppp0 2>/dev/null | grep -q 'scope global'; then
   rm -f "$FLAG" 2>/dev/null
   exit 0
 fi
