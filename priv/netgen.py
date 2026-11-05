@@ -250,9 +250,12 @@ def gen_dnsmasq(cfg):
              "dhcp-authoritative",
              "domain=lan",
              "local=/lan/",
-             "cache-size=1000",
+             "cache-size=5000",
              # A-09 后上游含 IPv6：all-servers 并行查询，避免串行被不通的 v6 上游拖慢
              "all-servers",
+             # 乐观缓存（RFC 8767，dnsmasq 2.86+）：过期条目先应答再后台刷新——
+             # PPPoE 重拨/上游切换瞬间 LAN 解析无感（真机 2.91 支持该选项）
+             "use-stale-cache",
              # Debian 默认租约路径：dnsmasq 启动期以 root 打开，包内目录权限即保证可写（审计 B-04）
              "dhcp-leasefile=/var/lib/misc/dnsmasq.leases"]
     if dh.get("enabled"):

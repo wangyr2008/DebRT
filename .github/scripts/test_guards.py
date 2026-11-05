@@ -55,6 +55,7 @@ for mode in ("dhcp", "pppoe", "static"):
     cfg = base_cfg(mode, "manual")
     dns = netgen.gen_dnsmasq(cfg)
     assert "server=223.5.5.5" in dns, f"{mode}+manual 缺 server="
+    assert "use-stale-cache" in dns and "cache-size=5000" in dns, "乐观缓存/缓存容量回归"
     assert "servers-file" not in dns, f"{mode}+manual 不应引用 servers-file"
     assert "udp dport 546 accept" in netgen.gen_nft(cfg), f"{mode} wan_in 缺 DHCPv6 546 放行（P1-2 回归）"
 
