@@ -135,12 +135,16 @@ def gen_ppp_network(cfg):
     # DHCP=ipv6 是客户端的启动开关：只写 DHCPPrefixDelegation=yes 不会拉起 DHCPv6
     # 客户端（真机 ppp0 抓 546/547 为零已证实），没有它 WithoutRA/UplinkInterface
     # 都无从生效
+    # [Route] ::/0 Scope=link 也是必需的：国内运营商在 PPPoE 链路上不发 RA（真机抓
+    # 22 秒 RA 为零），DHCPv6 又不携带默认路由，缺它就只有地址没有出口——表现为
+    # "能拿到 IPv6 地址但 ping6 报 Network is unreachable"
     return ("# 由 SeedRou 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
             "IPv6AcceptRA=no\n"
             "DHCP=ipv6\n"
             "DHCPPrefixDelegation=yes\n\n"
             "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n\n"
-            "[DHCPPrefixDelegation]\nUplinkInterface=:self\n")
+            "[DHCPPrefixDelegation]\nUplinkInterface=:self\n\n"
+            "[Route]\nDestination=::/0\nScope=link\n")
 
 
 def gen_lan_netdev(cfg):
