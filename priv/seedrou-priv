@@ -1445,9 +1445,13 @@ def rc(args, timeout=5):
 dnsmasq_ok = rc(["systemctl", "is-active", "--quiet", "dnsmasq.service"]) == 0
 networkd_ok = rc(["systemctl", "is-active", "--quiet", "systemd-networkd.service"]) == 0
 nft_ok = rc(["nft", "list", "table", "inet", "seedrou_base"]) == 0
-# 概览"已连接设备"：只算 br-lan 上当前活跃的邻居（REACHABLE/DELAY/PROBE）。
+# 概览"已连接设备"：只算 br-lan 上当前在线的邻居。
 # 旧逻辑直接数 dnsmasq.leases 行数，把"已下线但租约未过期"的设备也计入，
 # 数字只增不减（用户反馈：统计的是所有上过线的设备）。
+# 判据取舍（真机实测 2026-11-05）：租约剩余时间无法区分在线/离线——13 条租约里
+# 剩余 119 分钟的没在线、剩余 90 分钟的在线的都有（dnsmasq 租期 120 分钟，离线
+# 设备也会保留到接近到期）。因此采用：REACHABLE/DELAY/PROBE 直接算在线，
+# STALE 也算（近期有过通信、当前空闲，WiFi 通常仍关联着），FAILED/INCOMPLETE 排除。
 leases = 0
 try:
     _nb = subprocess.run(["ip", "-j", "neigh", "show", "dev", "br-lan"],
@@ -1457,7 +1461,7 @@ try:
         _st = _n.get("state") or []
         if isinstance(_st, str):
             _st = [_st]
-        if _n.get("lladdr") and any(s in ("REACHABLE", "DELAY", "PROBE") for s in _st):
+        if _n.get("lladdr") and any(s in ("REACHABLE", "DELAY", "PROBE", "STALE") for s in _st):
             _live.add(str(_n["lladdr"]).upper())
     leases = len(_live)
 except Exception:
