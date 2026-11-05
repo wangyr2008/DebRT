@@ -1290,6 +1290,11 @@ sys.exit(0 if ok else 1)
   # 升级后自检并落日志（七审建议：升级目前只验证面板能起）
   /usr/local/lib/seedrou/seedrou-priv selftest >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
     logger -t seedrou-upgrade "selftest 有失败项，详见 /var/log/seedrou-upgrade-selftest.log"
+  # 升级后立即收敛一次：/etc/systemd/network/*.network 是生成物，升级换了 netgen
+  # 却要等最长 6h 的收敛 timer 才重新生成——期间旧键/旧语法还在跑（真机实录：
+  # v0.1.44 升级后用户机器仍跑旧键配置，IPv6 因此"升级了也没修好"）
+  /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
+    logger -t seedrou-upgrade "升级后收敛有报错，详见 /var/log/seedrou-upgrade-selftest.log"
 
   # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
   systemctl daemon-reload
