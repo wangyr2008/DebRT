@@ -132,8 +132,12 @@ def gen_wan_network(cfg):
 def gen_ppp_network(cfg):
     # PPPoE 的 IPv6：pppd 只协商 IPv6CP（链路本地），地址与前缀由 networkd 在 ppp0 上
     # 跑 DHCPv6 客户端获取（IA_NA 出口地址 / IA_PD 委派前缀）——国内家宽标准形态
+    # DHCP=ipv6 是客户端的启动开关：只写 DHCPPrefixDelegation=yes 不会拉起 DHCPv6
+    # 客户端（真机 ppp0 抓 546/547 为零已证实），没有它 WithoutRA/UplinkInterface
+    # 都无从生效
     return ("# 由 SeedRou 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
             "IPv6AcceptRA=no\n"
+            "DHCP=ipv6\n"
             "DHCPPrefixDelegation=yes\n\n"
             "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n\n"
             "[DHCPPrefixDelegation]\nUplinkInterface=:self\n")
