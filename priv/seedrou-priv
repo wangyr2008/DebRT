@@ -1445,12 +1445,28 @@ def rc(args, timeout=5):
 dnsmasq_ok = rc(["systemctl", "is-active", "--quiet", "dnsmasq.service"]) == 0
 networkd_ok = rc(["systemctl", "is-active", "--quiet", "systemd-networkd.service"]) == 0
 nft_ok = rc(["nft", "list", "table", "inet", "seedrou_base"]) == 0
+# 概览"已连接设备"：只算 br-lan 上当前活跃的邻居（REACHABLE/DELAY/PROBE）。
+# 旧逻辑直接数 dnsmasq.leases 行数，把"已下线但租约未过期"的设备也计入，
+# 数字只增不减（用户反馈：统计的是所有上过线的设备）。
 leases = 0
 try:
-    with open("/var/lib/misc/dnsmasq.leases") as f:
-        leases = sum(1 for _ in f)
+    _nb = subprocess.run(["ip", "-j", "neigh", "show", "dev", "br-lan"],
+                         capture_output=True, text=True, timeout=5).stdout
+    _live = set()
+    for _n in json.loads(_nb or "[]"):
+        _st = _n.get("state") or []
+        if isinstance(_st, str):
+            _st = [_st]
+        if _n.get("lladdr") and any(s in ("REACHABLE", "DELAY", "PROBE") for s in _st):
+            _live.add(str(_n["lladdr"]).upper())
+    leases = len(_live)
 except Exception:
-    pass
+    # 退化路径：ip 命令异常时仍给个数（宁可粗也不能空）
+    try:
+        with open("/var/lib/misc/dnsmasq.leases") as f:
+            leases = sum(1 for _ in f)
+    except Exception:
+        pass
 
 # 硬盘温度：smartctl 需要 root（复审 N-05），随 status 一并采集；
 # 60 秒文件缓存——5 秒轮询下不至于持续唤醒机械盘（复审 R-05）
