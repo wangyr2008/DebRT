@@ -337,10 +337,12 @@ do_apply_all() {
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
     # 存量不兼容配置的自动纠正（四审 M-01/M-02/M-03）：
-    #   LAN_MASK_TOO_WIDE            → 掩码迁回 /24（保留 IP 与地址池）
-    #   V6_NATIVE_PPPPOE_UNSUPPORTED → IPv6 模式改为 NAT6（PPPoE 线路无 PD 客户端）
+    #   LAN_MASK_TOO_WIDE → 掩码迁回 /24（保留 IP 与地址池）
+    # 注：原先还有一条 "V6_NATIVE_PPPPOE_UNSUPPORTED → 改 NAT6" 的迁移，v0.1.41 起
+    # PPPoE 已真支持 IPv6（ppp0 上跑 DHCPv6 客户端），该错误码不再产生，迁移已删除
+    # ——留着会让后来者误以为"PPPoE 只能用 NAT6"，与现行规则相反。
     # 迁移成功则重试一次生成；任何其他失败原样透传错误并中止（保证不部署半套配置）。
-    if grep -qE 'LAN_MASK_TOO_WIDE|V6_NATIVE_PPPPOE_UNSUPPORTED' "$man_json" 2>/dev/null; then
+    if grep -qE 'LAN_MASK_TOO_WIDE' "$man_json" 2>/dev/null; then
       snapshot_lastgood "m$(date +%s)"
       MIGFIX="$(python3 - <<'INNERPYEOF'
 import json, os
@@ -349,10 +351,6 @@ fixes = []
 if cfg.get("lan", {}).get("mask") != "255.255.255.0":
     cfg["lan"]["mask"] = "255.255.255.0"
     fixes.append("LAN 掩码迁移为 /24")
-if cfg.get("wan", {}).get("mode") == "pppoe" and cfg.get("ipv6", {}).get("enabled") \
-        and cfg.get("ipv6", {}).get("mode") == "native":
-    cfg["ipv6"]["mode"] = "nat6"
-    fixes.append("PPPoE 线路的 IPv6 切换为 NAT6")
 json.dump(cfg, open("/etc/seedrou/.config.tmp", "w"), ensure_ascii=False, indent=1)
 os.replace("/etc/seedrou/.config.tmp", "/etc/seedrou/config.json")
 print("；".join(fixes))
@@ -1246,6 +1244,11 @@ sys.exit(0 if ok else 1)
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/80-seedrou-cake /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/no-carrier.d/ 2>/dev/null || true
+    # R-01：v0.1.43 新增的 PPPoE 热插拔钩子——install.sh/uninstall.sh 都带了它，
+    # 升级通道曾漏掉，导致"插网线自愈"只对全新安装生效
+    install -d -m 755 /etc/networkd-dispatcher/carrier.d 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/carrier.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/ppp/ip-up.d/seedrou /etc/ppp/ip-up.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/ppp/ip-down.d/seedrou /etc/ppp/ip-down.d/ 2>/dev/null || true
     install -m 644 /usr/local/lib/seedrou/network/sysctl/70-seedrou.conf /etc/sysctl.d/ 2>/dev/null || true

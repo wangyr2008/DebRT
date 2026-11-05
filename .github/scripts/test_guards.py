@@ -118,6 +118,10 @@ assert "DHCP=ipv6" in ppp_net, "PPPoE ppp0 缺 DHCP=ipv6（DHCPv6 客户端不�
 _hook = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
 assert 'wans.append("ppp0")' in _hook, "R-02 回归：DNS 钩子不认 ppp0（PPPoE 的 IPv6 上游进不来）"
 assert "ppp*)" in _hook, "R-02 回归：ppp0 缺少 v4/v6 合并分支"
+# R-01：升级同步块必须覆盖所有 /etc 钩子（曾漏 v0.1.43 新增的热插拔钩子，
+# 导致"插网线自愈"只对全新安装生效）
+_priv_src = open(os.path.join(ROOT, "priv", "seedrou-priv"), encoding="utf-8").read()
+assert "75-seedrou-pppoe-hotplug" in _priv_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
 assert "+ipv6" in netgen.gen_pppd(ppp_cfg, "pw"), "pppd +ipv6 缺失"
 assert "UplinkInterface=:self" in ppp_net, "N-05 回归：缺 UplinkInterface=:self（客户端永不启动的真凶）"
 lan_ppp = netgen.gen_lan_network(ppp_cfg)
