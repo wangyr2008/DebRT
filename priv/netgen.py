@@ -54,10 +54,14 @@ def lan_net(cfg):
 
 def cross_validate(cfg):
     net = lan_net(cfg)
-    if net.prefixlen < 24:
+    if net.prefixlen != 24:
+        # P3-05：与 validate/UI/README 对齐——仅支持 /24。沿用 LAN_MASK_TOO_WIDE
+        # 错误码：do_apply_all 的既有迁移逻辑按它触发，/25–/30 存量与 /16 等超宽
+        # 掩码一样自动迁回 /24（收敛即自愈，用户不进网络页也能修好）
         fail("LAN_MASK_TOO_WIDE",
-             f"LAN 子网掩码 /{net.prefixlen} 过宽（历史遗留配置）",
-             "新版仅支持 /24–/30：请进入「网络设置 → 局域网 IP」把子网掩码改为 255.255.255.0 并同步调整 DHCP 地址池")
+             f"LAN 子网掩码 /{net.prefixlen} 不受支持（历史遗留配置）",
+             "当前版本仅支持 /24（255.255.255.0）——地址池按「IP 末段」配置的语义决定；"
+             "收敛将自动迁移为 /24，也可在「网络设置 → 局域网 IP」手动改选")
     lan_ip = ipaddress.IPv4Address(cfg["lan"]["ip"])
     # 静态绑定必须在 LAN 子网内且不与路由器 IP 冲突
     for s in cfg.get("static", []):

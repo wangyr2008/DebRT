@@ -321,7 +321,19 @@ function renderNetwork(cfg) {
   $id("v6-dns1").value = (v6.dns && v6.dns[0]) || ""; $id("v6-dns2").value = (v6.dns && v6.dns[1]) || "";
   $id("v6-addr").value = v6.addr || ""; $id("v6-gw").value = v6.gw || ""; $id("v6-prefix").value = v6.prefix || "";
 
-  $id("lan-ip").value = lan.ip; $id("lan-mask").value = lan.mask;
+  $id("lan-ip").value = lan.ip;
+  var _ms = $id("lan-mask");
+  _ms.value = lan.mask;
+  if (_ms.value !== lan.mask) {
+    /* P3-05：存量掩码（/25–/30，v0.1.35 前的下拉选项）不在选项里会让 value 变
+       空串——用户什么都没改点保存也会报"掩码 '' 无效"。动态插一项如实回显，
+       保存时由后端给出明确指引（改选 255.255.255.0）。 */
+    var _opt = document.createElement("option");
+    _opt.value = lan.mask;
+    _opt.textContent = lan.mask + "（存量掩码，请改选 255.255.255.0）";
+    _ms.appendChild(_opt);
+    _ms.value = lan.mask;
+  }
   $id("dhcp-enable").checked = !!dh.enabled;
   $id("dhcp-start").value = dh.pool_start; $id("dhcp-end").value = dh.pool_end;
   $id("dhcp-lease").value = dh.lease;

@@ -225,12 +225,28 @@ try:
     raise AssertionError("P3-04 回归：netgen 未拦截无前缀长度的静态 v6 地址")
 except SystemExit:
     assert netgen.ERR.get("code") == "V6_STATIC_BAD", netgen.ERR.get("code")
-# P3-05：LAN 网段/广播地址按掩码判定（/25–/30 下 .0/.255 字符串判定失效）
+# P3-05：LAN 网段/广播地址按掩码判定（ipaddress 计算，不再只看 .0/.255 字符串）
 try:
-    validate.norm_lan("lan", {"ip": "192.168.10.64", "mask": "255.255.255.192"})
-    raise AssertionError("P3-05 回归：/26 网段地址被放行")
+    validate.norm_lan("lan", {"ip": "192.168.10.0", "mask": "255.255.255.0"})
+    raise AssertionError("P3-05 回归：/24 网段地址被放行")
 except SystemExit:
     assert validate.ERR.get("code") == "LAN_IP_BAD", validate.ERR.get("code")
+# P3-05（更新版）：掩码全站对齐 /24——A-07 只收窄了 UI，validate/README/存量回显
+# 三处必须同步（保存层拒非 /24）
+try:
+    validate.norm_lan("lan", {"ip": "192.168.10.1", "mask": "255.255.255.192"})
+    raise AssertionError("P3-05 回归：/26 掩码在保存层被放行")
+except SystemExit:
+    assert validate.ERR.get("code") == "LAN_MASK_BAD", validate.ERR.get("code")
+# netgen 收敛侧同规则：非 /24 → LAN_MASK_TOO_WIDE（do_apply_all 既有迁移自动改为 /24，
+# /25–/30 存量的池越界问题随收敛自愈）
+_bad_mask = base_cfg("static", "manual")
+_bad_mask["lan"]["mask"] = "255.255.255.192"
+try:
+    netgen.cross_validate(_bad_mask)
+    raise AssertionError("P3-05 回归：netgen 未拦非 /24 LAN 掩码（存量 /25–/30 不会被迁移）")
+except SystemExit:
+    assert netgen.ERR.get("code") == "LAN_MASK_TOO_WIDE", netgen.ERR.get("code")
 # P3-10：宽带账号/密码拒绝控制字符（防 peers/chap-secrets 拆行注入）
 for _bad in ("user\nplugin evil.so", "pw\rx"):
     try:

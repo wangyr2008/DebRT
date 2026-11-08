@@ -221,10 +221,12 @@ def norm_lan(section, data, cur=None):
     mask = as_str(data.get("mask"), "LAN 子网掩码")
     need(is_ipv4(ip), "LAN_IP_BAD", f"LAN IP {ip!r} 无效", "示例：192.168.10.1")
     need(mask_ok(mask), "LAN_MASK_BAD", f"LAN 子网掩码 {mask!r} 无效", "示例：255.255.255.0")
-    # DHCP 池按「IP 末段」配置（UI 语义），仅支持 /24 及更长子网（审计 B-07）
-    need(24 <= mask_prefix(mask) <= 30, "LAN_MASK_BAD",
-         f"LAN 子网掩码 {mask} 过宽",
-         "DHCP 地址池按末段配置，仅支持 /24–/30（255.255.255.0 及更细）；如需更大网段请拆分为多个 /24")
+    # P3-05：掩码全站对齐 /24——A-07（v0.1.35）把 UI 下拉收窄到 /24（地址池按
+    # 「IP 末段」配置只与 /24 自洽，/25–/27 会池越界），当时漏了校验与文档两处；
+    # 存量非 /24 由收敛自动迁移（netgen 拦 → do_apply_all 迁移），保存层在此收口
+    need(mask == "255.255.255.0", "LAN_MASK_BAD",
+         f"LAN 子网掩码 {mask} 不受支持",
+         "当前版本仅支持 /24（255.255.255.0）——地址池按「IP 末段」配置的语义决定；请改选默认掩码后保存")
     # P3-05：网段/广播地址按掩码算，不按字符串——/25–/30 下 .0/.255 字符串判定失效
     # （如 192.168.10.64/26 是网络地址、192.168.10.7/30 是广播地址，字符串判定都放行）
     _net = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
