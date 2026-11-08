@@ -48,7 +48,9 @@ def _persist_revoked():
     for k in [k for k, v in _revoked.items() if v <= now]:
         _revoked.pop(k, None)
     try:
-        tmp = _REVOKE_PATH + ".tmp"
+        # tmp 名带时间戳：ThreadingHTTPServer 下并发 logout 若共用同名 tmp，
+        # 两个 "w" 句柄会交错写坏 JSON（损坏后 init 静默放弃 → 撤销表回到内存态）
+        tmp = f"{_REVOKE_PATH}.{time.time_ns()}.tmp"
         with open(tmp, "w") as f:
             json.dump(_revoked, f)
             f.flush()

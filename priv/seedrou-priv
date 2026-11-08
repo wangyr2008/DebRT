@@ -914,6 +914,9 @@ if not check(old, secrets.get("admin_pbkdf2", "")):
                           "hint": "密码不会因此失效"})); sys.exit(1)
     pf_save(_st)
     print(json.dumps({"ok": False, "code": "AUTH_BAD", "message": "原密码不正确", "hint": "请输入当前使用的管理密码"})); sys.exit(1)
+# C-2 收尾：原密码验证通过即清零暴破计数——否则陈旧计数无限期累积，
+# 零散输错累计 5 次（哪怕中间成功改过密）也会误触锁（与 auth-verify 成功路径同语义）
+pf_save({"fails": 0, "lock_until": 0})
 if not (8 <= len(new) <= 32):
     print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)
 secrets["admin_pbkdf2"] = pwhash.hash_new(new)
@@ -1518,12 +1521,22 @@ try:
         devices = []
         if _sh.which("smartctl"):  # P3-3：扫描只做一次（此前 elif 与下方 if 各扫一次）
             devices = json.loads(subprocess.run(["smartctl", "--scan", "-j"], capture_output=True, text=True, timeout=8).stdout or "{}").get("devices") or []
+        # C-10：诊断标记内容不变不重写——status 每 3s 轮询（缓存 miss 即走到这里），
+        # smartctl 长期缺失时无条件重写是纯写放大
         if not _sh.which("smartctl"):
-            with open("/run/seedrou/disk-unavailable", "w") as f:
-                f.write("smartmontools 未安装")
+            _note = "smartmontools 未安装"
         elif not devices:
-            with open("/run/seedrou/disk-unavailable", "w") as f:
-                f.write("未找到磁盘")
+            _note = "未找到磁盘"
+        else:
+            _note = ""
+        if _note:
+            try:
+                _unchanged = open("/run/seedrou/disk-unavailable").read() == _note
+            except OSError:
+                _unchanged = False
+            if not _unchanged:
+                with open("/run/seedrou/disk-unavailable", "w") as f:
+                    f.write(_note)
         else:
             # P3-1：采集正常时清掉历史诊断标记——否则补装 smartmontools 后
             # tooltip 仍显示"未安装"（/run 只在重启时才清）

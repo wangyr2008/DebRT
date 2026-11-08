@@ -132,6 +132,32 @@ assert "seedrou-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门
 # 看门狗健康判据必须同时认 IPv4 与全局 IPv6（只认 v4 会误杀 IPv6-only 链路，
 # 每 3 分钟重启一次拨号，比卡死更糟）
 assert "scope global" in _wd, "B-01 回归：看门狗只认 IPv4"
+# C-6：看门狗必须有载波探测——无线缆时 pppd persist 本就在重试，
+# 此刻重启只是无意义搅动（每 ~4min 一次）
+assert "carrier" in _wd, "C-6 回归：看门狗缺载波探测（无线缆时空转重启拨号）"
+# A-1：热插拔钩子必须有 WAN 模式守卫——DHCP/静态模式下载波事件绝不能拉起
+# 拨号服务（pppd 会用残留 peers 真实拨号，双默认路由劫持 DHCP 模式）。
+# watchdog 与 hotplug 是同一逻辑两处存放，守卫必须两侧断言（"改一半"第八次的教训）
+_hot = open(os.path.join(ROOT, "network", "dispatcher", "75-seedrou-pppoe-hotplug"), encoding="utf-8").read()
+assert '[ "$MODE" = "pppoe" ] || exit 0' in _hot, "A-1 回归：热插拔缺 WAN 模式守卫"
+assert '[ "$MODE" != "pppoe" ]' in _wd, "A-1 回归：看门狗缺 WAN 模式守卫（同一逻辑两处）"
+# B-2：DHCP 关闭态必须保留表单数值——此前 disabled 分支返回出厂默认，
+# 关一次开关地址池/租期/DNS 就被静默清空（norm_qos 同分支保留，非本意设计）
+_d = validate.norm_dhcp("dhcp", {"enabled": False, "pool_start": 55, "pool_end": 150,
+                                 "lease": 60, "dns1": "223.5.5.5", "dns2": "", "gw": ""})
+assert (_d["pool_start"], _d["pool_end"], _d["lease"], _d["dns1"]) == (55, 150, 60, "223.5.5.5"), \
+    "B-2 回归：关闭 DHCP 重置了地址池/租期/DNS"
+# enabled 侧池校验不得被连带放松
+try:
+    validate.norm_dhcp("dhcp", {"enabled": True, "pool_start": 1, "pool_end": 200, "lease": 120})
+    raise AssertionError("B-2 回归：enabled 侧池边界校验失效")
+except SystemExit:
+    assert validate.ERR.get("code") == "DHCP_POOL_BAD", validate.ERR.get("code")
+# B-4：撤销表必须落盘——内存态撤销表在面板重启后清零，
+# 已登出 cookie 可重放到 7 天过期（登出承诺失效）
+assert getattr(auth, "_REVOKE_PATH", "") and hasattr(auth, "_persist_revoked"), \
+    "B-4 回归：撤销表落盘缺失（重启后登出承诺失效）"
+assert "revoked" in (auth._REVOKE_PATH or ""), "B-4 回归：撤销表路径异常"
 # B-02：netgen 的收敛期防线必须与 validate 覆盖同一套 IPv6 × WAN 规则
 # （v0.1.42 曾因只改 validate 漏掉 netgen，导致保存放行、收敛回滚）
 _V6_STATIC_FULL = {"enabled": True, "mode": "static", "dns_mode": "auto", "dns": [],
@@ -154,4 +180,4 @@ assert "+ipv6" in netgen.gen_pppd(base_cfg("pppoe", "manual", v6=V6NAT), "pw"), 
 netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6N))
 netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6NAT))
 
-print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6 全部通过")
+print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波 全部通过")
