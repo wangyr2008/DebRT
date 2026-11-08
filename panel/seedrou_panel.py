@@ -149,7 +149,7 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect("/")
             return
         full = os.path.realpath(os.path.join(os.path.dirname(STATIC_DIR), rel))
-        if not full.startswith(os.path.realpath(STATIC_DIR)) or not os.path.isfile(full):
+        if not full.startswith(os.path.realpath(STATIC_DIR) + os.sep) or not os.path.isfile(full):
             self._send_json({"ok": False, "code": "NOT_FOUND", "message": "资源不存在"}, 404)
             return
         self._file(full)

@@ -5,6 +5,12 @@
 IFACE="$1"
 [ -f /etc/seedrou/config.json ] || exit 0
 
+# A-1：只认 PPPoE 模式——DHCP/静态下载波事件绝不能拉起拨号服务（pppd 会用
+# 残留的 peers 文件真实拨号，造成双默认路由劫持）。与 pppoe-watchdog 的
+# MODE 守卫保持同构（同一逻辑两处，必须两处都写）
+MODE="$(python3 -c "import json;print(json.load(open('/etc/seedrou/config.json')).get('wan',{}).get('mode',''))" 2>/dev/null)"
+[ "$MODE" = "pppoe" ] || exit 0
+
 IS_WAN=$(python3 - "$IFACE" <<'PYEOF'
 import json, sys
 try:

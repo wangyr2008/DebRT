@@ -21,6 +21,14 @@ if [ "$MODE" != "pppoe" ]; then
   exit 0
 fi
 
+# C-6：WAN 口无缆线时不清 flag 也不重启——pppd persist 本就在重试，
+# 此刻重启只是无意义搅动；载波恢复由热插拔钩子负责轻推
+WPORT="$(python3 -c "import json;print(next((p['name'] for p in json.load(open('$CFG')).get('ports',[]) if p.get('wan')),''))" 2>/dev/null)"
+if [ -n "$WPORT" ] && [ "$(cat /sys/class/net/$WPORT/carrier 2>/dev/null || echo 0)" != "1" ]; then
+  rm -f "$FLAG" 2>/dev/null
+  exit 0
+fi
+
 # 服务没在跑：直接拉起
 if ! systemctl is-active --quiet "$UNIT"; then
   logger -t seedrou-pppoe-watchdog "拨号服务未运行，拉起"

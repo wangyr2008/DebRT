@@ -874,18 +874,45 @@ do_passwd_set() {
   local out rc
   # body（含新旧密码）经环境变量传入，不进 argv（审计 B-15）
   out="$(SEEDROU_SECRET="$body" python3 - <<'PYEOF'
-import json, os, sys
+import json, os, sys, time
 sys.path.insert(0, "/usr/local/lib/seedrou")
 import pwhash
 body = json.loads(os.environ["SEEDROU_SECRET"])
 old, new = body.get("old", ""), body.get("new", "")
 secrets = json.load(open("/etc/seedrou/secrets.json"))
+# C-2：原密码暴破限速（持有会话的攻击者此前可无限尝试）——5 次锁 5 分钟
+FAILS = "/var/lib/seedrou/passwd-fails.json"
+def pf_load():
+    try:
+        return json.load(open(FAILS))
+    except Exception:
+        return {"fails": 0, "lock_until": 0}
+def pf_save(st):
+    tmp = FAILS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, FAILS)
+now = int(time.time())
+_st = pf_load()
+if _st.get("lock_until", 0) > now:
+    print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
+                      "message": f"尝试次数过多，请 {_st['lock_until'] - now + 1} 秒后重试",
+                      "hint": "密码不会因此失效"})); sys.exit(1)
 def check(pw, rec):
     try:
         return pwhash.verify(pw, rec)
     except Exception:
         return False
 if not check(old, secrets.get("admin_pbkdf2", "")):
+    _st["fails"] = _st.get("fails", 0) + 1
+    if _st["fails"] >= 5:
+        _st["lock_until"] = now + 300
+        _st["fails"] = 0
+        pf_save(_st)
+        print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
+                          "message": "原密码连续错误次数过多，已临时锁定 5 分钟",
+                          "hint": "密码不会因此失效"})); sys.exit(1)
+    pf_save(_st)
     print(json.dumps({"ok": False, "code": "AUTH_BAD", "message": "原密码不正确", "hint": "请输入当前使用的管理密码"})); sys.exit(1)
 if not (8 <= len(new) <= 32):
     print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)

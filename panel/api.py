@@ -134,7 +134,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
     # ---- 免登录 ----
     if q == "/session" and method == "GET":
         return 200, {"ok": True, "logged": auth.logged_in(headers),
-                     "lan_ip": _lan_ip(), "version": _version()}, None
+                     "version": _version()}, None
     if q == "/login" and method == "POST":
         return do_login(body, headers, client_ip)
 

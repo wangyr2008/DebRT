@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 
 MOCK = False
@@ -31,6 +32,7 @@ _REVOKE_TTL = SESSION_TTL
 if _REVOKE_TTL < SESSION_TTL:  # 守卫：撤销表短于会话期 = 登出承诺失效（启动即炸，审计四.4）
     raise RuntimeError("_REVOKE_TTL must cover SESSION_TTL")
 _REVOKE_MAX = 4096
+_REVOKE_PATH = "/var/lib/seedrou/revoked.json"   # B-4：撤销表落盘（面板有该目录读写权）
 
 
 class AuthError(Exception):
@@ -38,9 +40,36 @@ class AuthError(Exception):
         self.status, self.code, self.message, self.hint = status, code, message, hint
 
 
+def _persist_revoked():
+    """撤销表落盘（B-4）：面板重启后登出承诺不失效。失败不阻断登出。"""
+    if MOCK:
+        return
+    now = time.time()
+    for k in [k for k, v in _revoked.items() if v <= now]:
+        _revoked.pop(k, None)
+    try:
+        tmp = _REVOKE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_revoked, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _REVOKE_PATH)
+    except OSError:
+        pass
+
+
 def init(mock=False):
     global MOCK
     MOCK = mock
+    if not MOCK:
+        # B-4：启动时恢复撤销表（剪掉已过期条目）
+        try:
+            now = time.time()
+            for k, v in json.load(open(_REVOKE_PATH)).items():
+                if v > now:
+                    _revoked[k] = v
+        except Exception:
+            pass
 
 
 def _secret():
@@ -119,6 +148,7 @@ def revoke(token: str):
             _revoked.pop(k, None)
         while len(_revoked) > _REVOKE_MAX:
             _revoked.pop(next(iter(_revoked)), None)
+    _persist_revoked()
 
 
 def session_cookie(token: str) -> str:

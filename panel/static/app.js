@@ -856,7 +856,7 @@ function loadContainers() {
 function containerAction(action, name, btn) {
   var labels = { stop: "停止", start: "启动", restart: "重启", update: "更新", remove: "删除" };
   if (action === "remove" && !window.confirm("确定删除容器「" + name + "」？容器内未挂载到数据卷的数据将丢失（镜像保留）。")) return;
-  if (action === "update" && !window.confirm("更新将拉取「" + name + "」所用镜像的最新版本并按原参数重建容器，期间服务会短暂中断。继续吗？")) return;
+  if (action === "update" && !window.confirm("更新将拉取「" + name + "」所用镜像的最新版本并按原参数重建容器，期间服务会短暂中断。注意：容器的自定义启动命令（若有）更新后将丢失，此类容器请改用 Compose 管理。继续吗？")) return;
   btnBusy(btn, true, labels[action] + "中…");
   API.post("/api/podman/container", { name: name, action: action }).then(function (r) {
     btnBusy(btn, false, labels[action]);

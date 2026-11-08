@@ -15,6 +15,13 @@ echo "[卸载] 停止服务..."
 systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service seedrou-dns-sync.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
 systemctl stop dnsmasq.service 2>/dev/null || true
 nft delete table inet seedrou_base 2>/dev/null || true
+# B-3：WAN 口上的 cake/ingress 残留——不清理则运行中的机器继续被限速直到重启
+if [ -f /etc/seedrou/config.json ]; then
+  for WANP in $(python3 -c "import json;print(' '.join(p['name'] for p in json.load(open('/etc/seedrou/config.json')).get('ports',[]) if p.get('wan')))" 2>/dev/null); do
+    tc qdisc del dev "$WANP" root 2>/dev/null || true
+    tc qdisc del dev "$WANP" ingress 2>/dev/null || true
+  done
+fi
 tc qdisc del dev ifb0 root 2>/dev/null || true
 
 echo "[卸载] 移除文件..."

@@ -116,6 +116,12 @@ for f in glob.glob("/etc/systemd/network/30-*.network"):
         print(f)
 if not need_ppp and os.path.exists("/etc/systemd/network/25-ppp0.network"):
     print("/etc/systemd/network/25-ppp0.network")
+# B-1：非 PPPoE 模式清理拨号残留（peers 里有旧凭据，是热插拔误拨号的放大器；
+# secrets 里的宽带密码保留——切回 PPPoE 不应要求重输密码）
+if cfg.get("wan", {}).get("mode") != "pppoe":
+    for f in ("/etc/ppp/peers/seedrou", "/etc/ppp/chap-secrets", "/etc/ppp/pap-secrets"):
+        if os.path.exists(f):
+            print(f)
 PYEOF
 }
 
@@ -250,7 +256,9 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
 # （覆盖"先装 SeedRou 后装 sing-box"的场景；幂等，见 COEXISTENCE.md）
 maintain_singbox_dropin() {
   local di="/etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf"
-  [ -f /etc/systemd/system/sing-box.service ] || return 0
+  # A-2：官方 deb 把单元装在 /usr/lib/systemd/system（/etc 下永远没有）——
+  # 必须用机制级判断，文件路径检测会让 drop-in 兜底机制在默认安装路径上失效
+  systemctl list-unit-files sing-box.service >/dev/null 2>&1 || return 0
   [ -f /usr/local/lib/seedrou/wait-wan ] || return 0
   [ -f "$di" ] && return 0
   mkdir -p /etc/systemd/system/sing-box.service.d

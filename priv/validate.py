@@ -221,23 +221,29 @@ def norm_lan(section, data, cur=None):
     for r in reserved:
         rnet = ipaddress.IPv4Network(r)
         if net.overlaps(rnet):
+            _sug = "192.168.11.1" if net.network_address != ipaddress.IPv4Address("192.168.11.0") else "192.168.12.1"
             fail("LAN_CONFLICT",
                  f"LAN 网段 {net} 与 {r} 冲突",
-                 f"{r} 被 sing-box / Tailscale / Podman 使用；请为 LAN 选择其他网段，例如 192.168.{(int(net.network_address)+1)%256 if False else 11}.1")
+                 f"{r} 被 sing-box / Tailscale / Podman 使用；请为 LAN 选择其他网段，例如 {_sug}")
     return {"ip": ip, "mask": mask}
 
 
 def norm_dhcp(section, data, lan=None):
+    # B-2：disabled 也解析并保留表单数值——此前关一次开关配置就回出厂默认
+    # （同文件 norm_qos 的 disabled 分支是保留的，此处并非有意设计）
     enabled = bool(data.get("enabled"))
-    out = {"enabled": enabled, "pool_start": 100, "pool_end": 200, "lease": 120, "dns1": "", "dns2": "", "gw": ""}
-    if not enabled:
-        return out
     ps, pe, lease = data.get("pool_start"), data.get("pool_end"), data.get("lease")
-    need(isinstance(ps, int) and isinstance(pe, int), "DHCP_POOL_BAD", "地址池末段必须是数字")
-    need(2 <= ps <= 254 and 2 <= pe <= 254, "DHCP_POOL_BAD", "地址池末段需在 2–254 之间",
-         "0 为网段地址、1 通常为路由器、255 为广播地址")
-    need(ps <= pe, "DHCP_POOL_BAD", "地址池起始末段不能大于结束末段")
-    need(isinstance(lease, int) and 1 <= lease <= 10080, "DHCP_LEASE_BAD", "租期需在 1–10080 分钟（7 天）之间")
+    if enabled:
+        need(isinstance(ps, int) and isinstance(pe, int), "DHCP_POOL_BAD", "地址池末段必须是数字")
+        need(2 <= ps <= 254 and 2 <= pe <= 254, "DHCP_POOL_BAD", "地址池末段需在 2–254 之间",
+             "0 为网段地址、1 通常为路由器、255 为广播地址")
+        need(ps <= pe, "DHCP_POOL_BAD", "地址池起始末段不能大于结束末段")
+        need(isinstance(lease, int) and 1 <= lease <= 10080, "DHCP_LEASE_BAD", "租期需在 1–10080 分钟（7 天）之间")
+    else:
+        # 关闭态只做宽松归一：给什么存什么（int 直存），缺省回出厂
+        ps = ps if isinstance(ps, int) else 100
+        pe = pe if isinstance(pe, int) else 200
+        lease = lease if isinstance(lease, int) else 120
     d1, d2, gw = as_str(data.get("dns1"), "DHCP DNS1"), as_str(data.get("dns2"), "DHCP DNS2"), as_str(data.get("gw"), "DHCP 网关")
     if d1:
         need(is_ipv4(d1), "DHCP_DNS_BAD", f"DHCP DNS1 {d1!r} 无效")
@@ -245,14 +251,13 @@ def norm_dhcp(section, data, lan=None):
         need(is_ipv4(d2), "DHCP_DNS_BAD", f"DHCP DNS2 {d2!r} 无效")
     if gw:
         need(is_ipv4(gw), "DHCP_GW_BAD", f"DHCP 网关 {gw!r} 无效")
-    if lan:
+    if enabled and lan:
         last = int(str(lan.get("ip", "")).rsplit(".", 1)[-1] or -1)
         if ps <= last <= pe:
             fail("DHCP_POOL_COVERS_LAN",
                  f"地址池 .{ps}–.{pe} 覆盖了路由器 LAN IP（.{last}）",
                  f"路由器地址不能被分配出去；请把 LAN IP 改到池外，或把池调整到避开 .{last}")
-    out.update(pool_start=ps, pool_end=pe, lease=lease, dns1=d1, dns2=d2, gw=gw)
-    return out
+    return {"enabled": enabled, "pool_start": ps, "pool_end": pe, "lease": lease, "dns1": d1, "dns2": d2, "gw": gw}
 
 
 def norm_static(section, data):

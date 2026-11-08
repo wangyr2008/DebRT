@@ -223,9 +223,20 @@ sb_do_install() {
             sb_info "开始重新安装（官方脚本，走 gh-proxy 加速）..."
         fi
 
-        if ! curl -fsSL "$INSTALL_URL" \
-            | sed 's#https://github.com/#https://gh-proxy.org/https://github.com/#' \
-            | sh -s -- $ver_args; then
+        # C-5：三源回退（gh-proxy.org / gh-proxy.com / 直连）——单源不可用曾直接失败
+        local _ok=0
+        for _u in "$INSTALL_URL" \
+                  "https://gh-proxy.com/https://raw.githubusercontent.com/SagerNet/sing-box/stable/docs/installation/tools/install.sh" \
+                  "https://raw.githubusercontent.com/SagerNet/sing-box/stable/docs/installation/tools/install.sh"; do
+          if curl -fsSL --connect-timeout 10 --max-time 60 "$_u" \
+              | sed 's#https://github.com/#https://gh-proxy.org/https://github.com/#' \
+              | sh -s -- $ver_args; then
+            _ok=1
+            break
+          fi
+          sb_warn "安装脚本源不可用（$_u），尝试下一个源..."
+        done
+        if [ "$_ok" != 1 ]; then
             sb_err "安装脚本执行失败，请检查网络后重试"
             sb_warn "若提示 API rate limit exceeded，说明 GitHub API 配额用完，"
             sb_warn "可等 1 小时再试，或用 GITHUB_TOKEN=xxx sb install 提高配额"
@@ -347,6 +358,11 @@ sb_set_url() {
         given="${given//[[:space:]]/}"
         if [[ ! "$given" =~ ^https?:// ]]; then
             sb_err "链接需要以 http:// 或 https:// 开头"
+            return 1
+        fi
+        # C-4：与面板侧同一内网黑名单（订阅内容含节点凭据，防指向内网探查）
+        if [[ "$given" =~ ^https?://(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|\[?::1\]?) ]]; then
+            sb_err "订阅链接不能指向内网地址"
             return 1
         fi
         printf '%s\n' "$given" > "$URL_FILE"

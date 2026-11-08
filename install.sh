@@ -144,6 +144,9 @@ import json, os, sys
 sys.path.insert(0, "/usr/local/lib/seedrou")
 import pwhash   # 唯一实现（六审 P-02）
 pw = os.environ["ADMIN_PW"]
+if not (8 <= len(pw) <= 32):
+    print(json.dumps({"ok": False, "code": "PW_LEN", "message": "管理密码需为 8–32 位"}))
+    sys.exit(1)   # C-3：与面板改密同一约束，安装路径不设 1 位弱密码
 data = {
     "admin_pbkdf2": pwhash.hash_new(pw),
     "session_secret": os.urandom(32).hex(),
@@ -177,7 +180,7 @@ fi
 c_info "启用服务..."
 # sing-box 共存：检测到 sing-box.service 时，自动挂"等 WAN 就绪"drop-in
 # （防止 auto_route 在 WAN 未就绪时形成路由死循环；收敛流程也会维护，见 COEXISTENCE.md）
-if [ -f /etc/systemd/system/sing-box.service ]; then
+if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
   mkdir -p /etc/systemd/system/sing-box.service.d
   install -m 644 "$SRC_DIR/systemd/sing-box.service.d/10-seedrou-wait-wan.conf" \
     /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf
