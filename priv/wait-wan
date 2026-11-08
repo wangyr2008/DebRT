@@ -4,8 +4,10 @@
 # （ExecStartPre），取代游离的手工脚本——手工版本写死 ppp0，WAN 模式一变就失效。
 #
 # 逻辑按 /etc/seedrou/config.json 自适应：
-#   PPPoE          → 等 ppp0 拿到 IPv4
-#   DHCP / 静态    → 等任一 WAN 口拿到 IPv4
+#   PPPoE          → 等 ppp0 拿到 IPv4 或全局 IPv6
+#   DHCP / 静态    → 等任一 WAN 口拿到 IPv4 或全局 IPv6
+# P3-06：判据与 pppoe-watchdog / wait-dns-upstream 保持同构（IPv6-only 链路
+# DS-Lite/纯 v6 专线没有 IPv4——只认 v4 会让 sing-box 在通着的链路上永远起不来）
 # 超时退出非 0，由 systemd Restart=on-failure 稍后重试。
 # 为什么需要它：sing-box 的 tun auto_route 会在启动瞬间接管本机路由，若 WAN 未就绪，
 # 本机出站（含 networkd 的前缀委派、dnsmasq 上游查询）会被塞进 tun 形成死循环。
@@ -32,13 +34,14 @@ PY
 wait_iface() {
     local i=0
     while [ "$i" -lt "$WAIT_MAX" ]; do
-        if ip -4 addr show "$1" 2>/dev/null | grep -q 'inet '; then
+        if ip -4 addr show "$1" 2>/dev/null | grep -q 'inet ' \
+           || ip -6 addr show "$1" 2>/dev/null | grep -q 'scope global'; then
             echo "wait-wan: $1 已就绪（等待 ${i}s）"
             return 0
         fi
         sleep 1; i=$((i+1))
     done
-    echo "wait-wan: 等待 $1 获取 IPv4 超时（${WAIT_MAX}s），放弃本次启动" >&2
+    echo "wait-wan: 等待 $1 获取 IPv4/IPv6 超时（${WAIT_MAX}s），放弃本次启动" >&2
     return 1
 }
 
@@ -46,7 +49,8 @@ if [ "$MODE" = "pppoe" ]; then
     wait_iface ppp0
 else
     for IF in $WANIF; do
-        if ip -4 addr show "$IF" 2>/dev/null | grep -q 'inet '; then
+        if ip -4 addr show "$IF" 2>/dev/null | grep -q 'inet ' \
+           || ip -6 addr show "$IF" 2>/dev/null | grep -q 'scope global'; then
             echo "wait-wan: WAN($IF) 已就绪"
             exit 0
         fi

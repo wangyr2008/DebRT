@@ -180,4 +180,80 @@ assert "+ipv6" in netgen.gen_pppd(base_cfg("pppoe", "manual", v6=V6NAT), "pw"), 
 netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6N))
 netgen.cross_validate(base_cfg("pppoe", "manual", v6=V6NAT))
 
-print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波 全部通过")
+# ==================== v0.1.51 外部审计修复守卫（P2-01/P3-01~11/观察②③） ====================
+# P2-01：QoS 清扫必须遍历「全部配置网口 + ppp0」——只清当前 WAN_DEV 会在换口后
+# 把旧口的 cake/ingress 留在原地（双重整形 / 关闭后仍限速，真机 2026-11-06 实录）
+_qa = open(os.path.join(ROOT, "priv", "qdisc-apply"), encoding="utf-8").read()
+assert "for d in $CLEAN_DEVS" in _qa and '"ppp0","ifb0"' in _qa, \
+    "P2-01 回归：qdisc 清扫未按全部网口+ppp0 遍历"
+# P3-01：升级内联收敛必须带锁标记——子进程 acquire_lock 重开 fd9 必 BUSY，
+# 无标记时该调用 100% 失败（死代码），收敛全靠 3s 后的 converge.service 兜底
+assert "_SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent" in _priv_src, \
+    "P3-01 回归：升级内联收敛缺锁标记（子进程必 BUSY）"
+# P3-02：升级通道必须同步 network/systemd/seedrou-pppoe.service（A-04/R-01 同族第三处）
+assert "network/systemd/seedrou-pppoe.service" in _priv_src, \
+    "P3-02 回归：升级通道漏同步 PPPoE 单元"
+# P3-06：三处 WAN 就绪判据必须同时认 IPv4 与全局 IPv6——同一逻辑三处存放，
+# 只改看门狗漏掉 wait-wan 会让 sing-box 在 IPv6-only 链路上永远起不来
+for _f in ("priv/wait-wan", "priv/pppoe-watchdog", "priv/wait-dns-upstream"):
+    assert "scope global" in open(os.path.join(ROOT, _f), encoding="utf-8").read(), \
+        f"P3-06 回归：{_f} 的 WAN 就绪判据只认 IPv4"
+# P3-03：静态 WAN 网关必须同网段（跨网段网关 networkd 拒配，回滚提示误导）
+try:
+    validate.norm_wan("wan", {"mode": "static", "ip": "10.10.10.2", "mask": "255.255.255.0",
+                              "gw": "192.168.1.1", "dns_mode": "manual", "dns1": "223.5.5.5"})
+    raise AssertionError("P3-03 回归：跨网段静态网关被放行")
+except SystemExit:
+    assert validate.ERR.get("code") == "WAN_STATIC_BAD", validate.ERR.get("code")
+_bad_gw = base_cfg("static", "manual")
+_bad_gw["wan"]["gw"] = "192.168.1.1"
+try:
+    netgen.cross_validate(_bad_gw)
+    raise AssertionError("P3-03 回归：netgen 未拦截跨网段静态网关")
+except SystemExit:
+    assert netgen.ERR.get("code") == "WAN_STATIC_BAD", netgen.ERR.get("code")
+# P3-04：静态 IPv6 地址必须带前缀长度（无 /nn 落成 /128，网关不可达）
+try:
+    validate.norm_ipv6("ipv6", {"enabled": True, "mode": "static", "addr": "2001:db8:1::2",
+                                "gw": "2001:db8:1::1", "prefix": "2001:db8:abcd::/64"})
+    raise AssertionError("P3-04 回归：无前缀长度的静态 v6 地址被放行")
+except SystemExit:
+    assert validate.ERR.get("code") == "V6_STATIC_BAD", validate.ERR.get("code")
+_no_pfx = base_cfg("static", "manual", v6=dict(V6S, addr="2001:db8:1::2"))
+try:
+    netgen.cross_validate(_no_pfx)
+    raise AssertionError("P3-04 回归：netgen 未拦截无前缀长度的静态 v6 地址")
+except SystemExit:
+    assert netgen.ERR.get("code") == "V6_STATIC_BAD", netgen.ERR.get("code")
+# P3-05：LAN 网段/广播地址按掩码判定（/25–/30 下 .0/.255 字符串判定失效）
+try:
+    validate.norm_lan("lan", {"ip": "192.168.10.64", "mask": "255.255.255.192"})
+    raise AssertionError("P3-05 回归：/26 网段地址被放行")
+except SystemExit:
+    assert validate.ERR.get("code") == "LAN_IP_BAD", validate.ERR.get("code")
+# P3-10：宽带账号/密码拒绝控制字符（防 peers/chap-secrets 拆行注入）
+for _bad in ("user\nplugin evil.so", "pw\rx"):
+    try:
+        validate.norm_wan("wan", {"mode": "pppoe", "username": _bad, "password": "x" * 8, "dns_mode": "auto"})
+        raise AssertionError("P3-10 回归：控制字符账号被放行: %r" % _bad)
+    except SystemExit:
+        assert validate.ERR.get("code") == "WAN_USER_BAD", validate.ERR.get("code")
+# P3-07：卸载清单必须清宽带凭据（chap/pap-secrets 明文密码）与 ppp0 生成物
+_un = open(os.path.join(ROOT, "uninstall.sh"), encoding="utf-8").read()
+assert "chap-secrets" in _un and "pap-secrets" in _un and "25-ppp0.network" in _un, \
+    "P3-07 回归：卸载清单缺 chap/pap-secrets 或 25-ppp0.network（凭据泄漏点）"
+# P3-08：notes.json 落盘 tmp 名必须唯一化（并发保存写坏 JSON → 备注全丢）
+_si = open(os.path.join(ROOT, "panel", "sysinfo.py"), encoding="utf-8").read()
+assert "time.time_ns()" in _si, "P3-08 回归：save_notes 仍用固定 .tmp（并发保存写坏 JSON）"
+# 观察②：upstream.conf 双写者的 tmp 必须唯一，ip-up 必须保留 v6 上游（合并而非覆盖）
+_ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "seedrou"), encoding="utf-8").read()
+_hook2 = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
+assert "$$.tmp" in _ipup and "$$.tmp" in _hook2, "观察② 回归：upstream.conf 双写者仍共用固定 .tmp"
+assert "grep ':'" in _ipup, "观察② 回归：ip-up 仍全量覆盖（会冲掉 dispatcher 写入的 v6 上游）"
+# 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
+assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
+# P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
+assert 'temps.get("current")' in _priv_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
+
+print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
+      "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/观察②③ 全部通过")

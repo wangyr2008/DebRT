@@ -211,7 +211,10 @@ def load_notes():
 
 def save_notes(notes: dict):
     os.makedirs(os.path.dirname(_notes_file), exist_ok=True)
-    tmp = _notes_file + ".tmp"
+    # P3-08：tmp 名唯一化——ThreadingHTTPServer 下并发"保存备注"若共用固定 .tmp，
+    # 两个 "w" 句柄会交错写坏 JSON，load_notes 静默返回 {} 全部备注消失
+    # （与 auth._persist_revoked 同类问题，v0.1.50 修了那处，这里补齐）
+    tmp = f"{_notes_file}.{os.getpid()}.{time.time_ns()}.tmp"
     with open(tmp, "w") as f:
         json.dump(notes, f, ensure_ascii=False, indent=1)
     os.replace(tmp, _notes_file)

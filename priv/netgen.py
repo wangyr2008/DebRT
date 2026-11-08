@@ -11,6 +11,7 @@ import base64
 import ipaddress
 import json
 import os
+import re
 import sys
 
 CONFIG_PATH = "/etc/seedrou/config.json"
@@ -94,6 +95,31 @@ def cross_validate(cfg):
     w, l = set(wan_ifaces(cfg)), set(lan_ifaces(cfg))
     if w & l:
         fail("NETGEN", f"网口角色冲突：{sorted(w & l)}")
+    # ---- 以下与 validate 同规则的收敛期防线（保存层由 validate 拦；这里拦存量坏数据，
+    # 否则会静默生成"看着正常、实际起不来/空转"的配置——B-02 同族教训，两侧同断言）----
+    # P3-05：LAN IP 不能是网段/广播地址（按掩码算，/25–/30 下字符串判定失效）
+    _laddr = ipaddress.IPv4Address(cfg["lan"]["ip"])
+    if _laddr in (net.network_address, net.broadcast_address):
+        fail("LAN_IP_BAD", f"LAN IP {cfg['lan']['ip']} 是 {net} 的网段/广播地址",
+             "请改用网段内的普通主机地址（如 .1）")
+    # P3-03：静态 WAN 网关必须在同网段（跨网段网关 networkd 拒配，WAN 起不来）
+    if cfg.get("wan", {}).get("mode", "") == "static":
+        try:
+            _wnet = ipaddress.IPv4Network(f"{cfg['wan'].get('ip', '')}/{cfg['wan'].get('mask', '')}", strict=False)
+            if ipaddress.IPv4Address(cfg["wan"].get("gw", "")) not in _wnet:
+                fail("WAN_STATIC_BAD", f"静态网关 {cfg['wan'].get('gw')} 不在 WAN 网段 {_wnet} 内",
+                     "网关必须与 WAN IP 同网段，通常是该网段的 .1 或 .254")
+        except ValueError:
+            pass   # 字段本身非法由 gen_wan_network / mask_prefix 报错
+    # P3-04：静态 v6 WAN 地址必须带前缀长度（/128 让同网段网关不可达）
+    if v6.get("enabled") and v6.get("mode") == "static" and v6.get("addr") \
+            and "/" not in str(v6.get("addr")):
+        fail("V6_STATIC_BAD", f"静态 IPv6 地址 {v6.get('addr')!r} 缺少前缀长度",
+             "请补上 /nn（如 2001:db8:1::2/64）；无前缀长度会按 /128 处理，同网段网关不可达")
+    # P3-10：账号含控制字符会拆断 peers 行（shell_quote 只转义 \ 和 "）
+    if re.search(r"[\x00-\x1f\x7f]", str(cfg.get("wan", {}).get("username", "") or "")):
+        fail("PPPOE_FIELD_BAD", "宽带账号包含控制字符（换行/制表符等不可见字符）",
+             "请在「上网设置」重新输入宽带账号并保存")
     # IPv6 × WAN 组合的收敛期防线（与 validate.cross_validate 保持同一套规则）。
     # 保存路径由 validate 拦，但收敛（开机/定时/升级后）直接读 config.json——
     # 存量非法配置若无这道防线，会静默生成"看着正常、实际空转"的配置
@@ -449,6 +475,12 @@ def main():
         stage = sys.argv[sys.argv.index("--stage") + 1]
 
     password = secrets.get("pppoe_password", "")
+    # P3-10 收敛侧：密码在 secrets 里、validate 摸不到——存量坏密码在这里拦截，
+    # 否则 gen_chap 把 chap-secrets 拆断成多行，拨号永久失败且难排查。
+    # 仅 PPPoE 模式检查：其他模式下密码不参与生成，拦了会堵死"改走 DHCP"的逃生路
+    if cfg["wan"]["mode"] == "pppoe" and re.search(r"[\x00-\x1f\x7f]", password or ""):
+        fail("PPPOE_FIELD_BAD", "已保存的宽带密码包含控制字符（换行/制表符等不可见字符）",
+             "请在「上网设置 → 上网设置」重新填写宽带密码并保存")
     files = []  # (relpath, mode_octal, content)
 
     files.append(("etc/systemd/network/10-wan.network", 0o644, gen_wan_network(cfg)))

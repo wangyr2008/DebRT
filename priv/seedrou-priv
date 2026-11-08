@@ -593,6 +593,16 @@ print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || e
 # 容器"更新"：拉最新镜像并按原端口/卷/环境重建
 do_podman_update() {
   local cname="$1" img ports binds envs restart
+  # 观察③：更新只回放端口/卷/环境变量/重启策略——自定义网络与 privileged 会静默丢失，
+  # 而重建成功就返回"已更新"，用户要到连不上才发现。前置拒绝并指路 Compose。
+  local _nm _pv
+  _nm="$(podman inspect -f '{{.HostConfig.NetworkMode}}' "$cname" 2>/dev/null)"
+  case "$_nm" in
+    ""|default|bridge) ;;
+    *) die "CT_UPDATE_SKIP" "容器 $cname 使用自定义网络（$_nm），面板更新会丢失该配置" "此类容器请改用 Compose 管理，或用 podman CLI 手工重建" ;;
+  esac
+  _pv="$(podman inspect -f '{{.HostConfig.Privileged}}' "$cname" 2>/dev/null)"
+  [ "$_pv" = "true" ] && die "CT_UPDATE_SKIP" "容器 $cname 以 privileged 运行，面板更新会丢失该配置" "此类容器请改用 Compose 管理，或用 podman CLI 手工重建"
   img="$(podman inspect -f '{{.ImageName}}' "$cname" 2>/dev/null)"
   [ -n "$img" ] || die "CT_FAIL" "无法读取容器 $cname 的镜像信息"
   restart="$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$cname" 2>/dev/null)"
@@ -1284,6 +1294,9 @@ sys.exit(0 if ok else 1)
     install -m 644 /usr/local/lib/seedrou/network/sysctl/70-seedrou.conf /etc/sysctl.d/ 2>/dev/null || true
     install -m 644 /usr/local/lib/seedrou/network/modules/seedrou.conf /etc/modules-load.d/ 2>/dev/null || true
     install -m 644 /usr/local/lib/seedrou/network/logrotate/seedrou /etc/logrotate.d/ 2>/dev/null || true
+    # P3-02：PPPoE 拨号单元在 network/systemd/ 下，不在 systemd/ 的 glob 里——
+    # 升级通道此前永远不同步它（install.sh 只管全新安装；与 A-04/R-01 同族第三处）
+    install -m 644 /usr/local/lib/seedrou/network/systemd/seedrou-pppoe.service /etc/systemd/system/ 2>/dev/null || true
     if [ -f /usr/local/lib/seedrou/sudoers/seedrou ]; then
       install -m 440 /usr/local/lib/seedrou/sudoers/seedrou /etc/sudoers.d/seedrou.upgrade-tmp 2>/dev/null || true
       if visudo -c -f /etc/sudoers.d/seedrou.upgrade-tmp >/dev/null 2>&1; then
@@ -1334,7 +1347,11 @@ sys.exit(0 if ok else 1)
   # 升级后立即收敛一次：/etc/systemd/network/*.network 是生成物，升级换了 netgen
   # 却要等最长 6h 的收敛 timer 才重新生成——期间旧键/旧语法还在跑（真机实录：
   # v0.1.44 升级后用户机器仍跑旧键配置，IPv6 因此"升级了也没修好"）
-  /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
+  # P3-01：本进程持有 apply.lock（fd9），子进程 acquire_lock 会重开 fd9 再 flock -n
+  # 必然 BUSY——此前的内联收敛 100% 失败（死代码+误导日志），实际全靠下方 3s 后的
+  # converge.service 重启兜底。传 _SEEDROU_LOCK_HELD=1 让子进程复用父进程持有的锁，
+  # 收敛真正内联执行（锁由父进程持有到退出，窗口内无并发风险）。
+  _SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
     logger -t seedrou-upgrade "升级后收敛有报错，详见 /var/log/seedrou-upgrade-selftest.log"
 
   # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
@@ -1549,10 +1566,11 @@ try:
             if dev:
                 info = subprocess.run(["smartctl", "-A", "-j", dev], capture_output=True, text=True, timeout=8).stdout
                 temps = json.loads(info or "{}").get("temperature", {})
-                for tv in temps.values():
-                    if isinstance(tv, (int, float)) and 0 < tv < 120:
-                        disk_temp = int(tv)
-                        break
+                # P3-11：只取 current——temperature 字典里还有 drive_trip（阈值，
+                # 常见 60/70），current 缺失时遍历全部值会把"阈值"当"当前温度"显示
+                _cur = temps.get("current")
+                if isinstance(_cur, (int, float)) and 0 < _cur < 120:
+                    disk_temp = int(_cur)
         _os.makedirs("/run/seedrou", exist_ok=True)
         with open(cache + ".tmp", "w") as f:
             f.write(str(disk_temp if disk_temp is not None else ""))

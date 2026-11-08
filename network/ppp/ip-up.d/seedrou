@@ -10,11 +10,15 @@ mkdir -p "$RUNDIR" "$DNSDIR"
 # 会话起点（掉线重拨即归零；概览页"已连接 N 天"以此为准，审计 B-22）
 date +%s > "${RUNDIR}/ppp-session-start" 2>/dev/null
 
+# 观察②：与 70-seedrou-dns 的 ppp* 分支同构——合并而非全量覆盖。本钩子只产 v4，
+# 若重拨瞬间 ip-up 在 dispatcher 之后跑，全量覆盖会把已写入的 v6 上游冲掉，
+# 直到下一次 ppp0 事件才恢复；tmp 名带 $$：两个写者共用固定 .tmp 会交错写坏
 {
   echo "# 由 pppd ip-up.d 生成（$IFACE）— 请勿手工修改"
   [ -f /etc/ppp/resolv.conf ] && grep -E '^nameserver' /etc/ppp/resolv.conf | awk '{print "server=" $2}'
-} > "${CONF}.tmp" 2>/dev/null
-mv -f "${CONF}.tmp" "$CONF"
+  [ -f "$CONF" ] && grep -E '^server=' "$CONF" | grep ':'
+} > "${CONF}.$$.tmp" 2>/dev/null
+mv -f "${CONF}.$$.tmp" "$CONF"
 
 systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 [ -x /usr/local/lib/seedrou/qdisc-apply ] && /usr/local/lib/seedrou/qdisc-apply

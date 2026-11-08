@@ -43,7 +43,11 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/singbox-cleanup \
       /etc/dnsmasq.d/seedrou.conf /etc/nftables.d/seedrou-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
-      /etc/ppp/peers/seedrou
+      /etc/systemd/network/25-ppp0.network \
+      /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets
+      # P3-07：chap/pap-secrets 含运营商宽带账号与明文密码（netgen 生成，0600）——
+      # 卸载不清则转手/回收机器时是凭据泄漏点；25-ppp0.network 不清则 networkd
+      # 继续尝试在 ppp0 上跑 DHCPv6。均为 SeedRou 生成物（原文件内容已被覆盖）
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
 # sb.sh 与其 cron 由 SeedRou 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
 if [ -f /usr/local/bin/sb ]; then rm -f /usr/local/bin/sb; echo "[卸载] 已移除 /usr/local/bin/sb"; fi

@@ -125,8 +125,16 @@ def norm_wan(section, data):
     password = None if password in (None, "") else str(password)
     if mode == "pppoe":
         need(username, "WAN_NO_USER", "请填写宽带账号", "宽带账号一般由运营商提供，常见为手机号或区号+号码")
+        # P3-10：控制字符会拆断 peers/chap-secrets 的行（shell_quote 只转义 \ 和 "），
+        # 一个带换行的账号就能注入独立选项行——浏览器输不进，但 API 调用/粘贴不可见字符可达
+        need(not re.search(r"[\x00-\x1f\x7f]", username), "WAN_USER_BAD",
+             "宽带账号包含控制字符（换行/制表符等不可见字符）",
+             "请重新输入纯文本账号；若为复制粘贴，请检查源内容")
         if password is not None:
             need(1 <= len(password) <= 128, "VALIDATE", "宽带密码长度需在 1–128 位之间")
+            need(not re.search(r"[\x00-\x1f\x7f]", password), "WAN_USER_BAD",
+                 "宽带密码包含控制字符（换行/制表符等不可见字符）",
+                 "请重新输入密码；若为复制粘贴，请检查源内容")
     dns_mode = as_str(data.get("dns_mode"), "DNS 配置") or "auto"
     need(dns_mode in ("auto", "manual"), "VALIDATE", "DNS 配置仅支持 自动/手动")
     # P1-3：static+auto 组合下 servers-file 没有任何生产者（无 lease 文件可读），
@@ -151,6 +159,12 @@ def norm_wan(section, data):
         need(is_ipv4(ip), "WAN_STATIC_BAD", f"IP 地址 {ip!r} 无效", "请填写运营商分配的 IPv4 地址")
         need(mask_ok(mask), "WAN_STATIC_BAD", f"子网掩码 {mask!r} 无效", "示例：255.255.255.0 或 255.255.255.252")
         need(is_ipv4(gw), "WAN_STATIC_BAD", f"默认网关 {gw!r} 无效", "请填写运营商网关地址")
+        # P3-03：网关必须在同网段——跨网段网关 networkd 拒配，WAN 起不来，
+        # 回滚提示会误导到"请检查网线/上级网络"
+        _wnet = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+        need(ipaddress.IPv4Address(gw) in _wnet, "WAN_STATIC_BAD",
+             f"默认网关 {gw} 不在 WAN 网段 {_wnet} 内",
+             "网关必须与 WAN IP 同网段，通常是该网段的 .1 或 .254")
     return {"mode": mode, "username": username, "dns_mode": dns_mode, "dns": dns,
             "ip": ip, "mask": mask, "gw": gw, "password": password}
 
@@ -180,9 +194,14 @@ def norm_ipv6(section, data):
     prefix = as_str(data.get("prefix"), "LAN IPv6 前缀")
     if enabled and mode == "static":
         try:
-            ipaddress.IPv6Interface(addr)
+            _v6i = ipaddress.IPv6Interface(addr)
         except ValueError:
             fail("V6_STATIC_BAD", f"IPv6 地址 {addr!r} 无效", "格式示例：2001:db8:1::2/64")
+        # P3-04：不带 /nn 会按 /128 落盘——同网段网关不在 on-link 前缀内，邻居解析不到，
+        # IPv6 出口不通而界面显示"已启用"
+        need(_v6i.network.prefixlen != 128, "V6_STATIC_BAD",
+             f"IPv6 地址 {addr!r} 需带前缀长度（如 2001:db8:1::2/64）",
+             "不带 /nn 会按 /128 处理，同网段网关不可达")
         need(":" in gw, "V6_STATIC_BAD", f"IPv6 网关 {gw!r} 无效")
         try:
             net = ipaddress.IPv6Network(prefix, strict=False)
@@ -206,7 +225,13 @@ def norm_lan(section, data, cur=None):
     need(24 <= mask_prefix(mask) <= 30, "LAN_MASK_BAD",
          f"LAN 子网掩码 {mask} 过宽",
          "DHCP 地址池按末段配置，仅支持 /24–/30（255.255.255.0 及更细）；如需更大网段请拆分为多个 /24")
-    need(not ip.endswith(".0") and not ip.endswith(".255"), "LAN_IP_BAD", "LAN IP 不能是网段地址或广播地址")
+    # P3-05：网段/广播地址按掩码算，不按字符串——/25–/30 下 .0/.255 字符串判定失效
+    # （如 192.168.10.64/26 是网络地址、192.168.10.7/30 是广播地址，字符串判定都放行）
+    _net = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+    _laddr = ipaddress.IPv4Address(ip)
+    need(_laddr not in (_net.network_address, _net.broadcast_address), "LAN_IP_BAD",
+         "LAN IP 不能是网段地址或广播地址",
+         f"{ip} 在 {_net} 中是网络/广播地址；请改用网段内的普通主机地址（如 .1）")
     need(ipaddress.IPv4Address(ip).is_private, "LAN_IP_PUBLIC",
          "LAN IP 不能使用公网地址", f"{ip} 属于公网段；请使用 192.168.x.x / 10.x.x.x / 172.16–31.x.x 等私网地址")
     if cur and isinstance(cur.get("dhcp"), dict) and cur["dhcp"].get("enabled"):
