@@ -112,9 +112,11 @@ def cross_validate(cfg):
         except ValueError:
             pass   # 字段本身非法由 gen_wan_network / mask_prefix 报错
     # P3-04：静态 v6 WAN 地址必须带前缀长度（/128 让同网段网关不可达）
-    if v6.get("enabled") and v6.get("mode") == "static" and v6.get("addr") \
-            and "/" not in str(v6.get("addr")):
-        fail("V6_STATIC_BAD", f"静态 IPv6 地址 {v6.get('addr')!r} 缺少前缀长度",
+    # 注意：本段在 v6 矩阵段之前执行，v6/wm 尚未赋值——一律从 cfg 现取
+    _v6c = cfg.get("ipv6", {})
+    if _v6c.get("enabled") and _v6c.get("mode") == "static" and _v6c.get("addr") \
+            and "/" not in str(_v6c.get("addr")):
+        fail("V6_STATIC_BAD", f"静态 IPv6 地址 {_v6c.get('addr')!r} 缺少前缀长度",
              "请补上 /nn（如 2001:db8:1::2/64）；无前缀长度会按 /128 处理，同网段网关不可达")
     # P3-10：账号含控制字符会拆断 peers 行（shell_quote 只转义 \ 和 "）
     if re.search(r"[\x00-\x1f\x7f]", str(cfg.get("wan", {}).get("username", "") or "")):
