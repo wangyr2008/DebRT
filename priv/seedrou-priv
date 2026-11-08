@@ -1351,13 +1351,25 @@ sys.exit(0 if ok else 1)
   # 必然 BUSY——此前的内联收敛 100% 失败（死代码+误导日志），实际全靠下方 3s 后的
   # converge.service 重启兜底。传 _SEEDROU_LOCK_HELD=1 让子进程复用父进程持有的锁，
   # 收敛真正内联执行（锁由父进程持有到退出，窗口内无并发风险）。
-  _SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
-    logger -t seedrou-upgrade "升级后收敛有报错，详见 /var/log/seedrou-upgrade-selftest.log"
+  # CI 冒烟网关（install.sh --smoke 写 /run/seedrou/smoke-mode）：收敛会重启
+  # networkd/dnsmasq/nft——runner 的网络不能动（CI 实测：步骤全绿但 agent 收尾
+  # 信号传不回，job 被超时标 cancelled，run#101）；跳过内联收敛与延迟收敛重启。
+  local _smoke=0; [ -f /run/seedrou/smoke-mode ] && _smoke=1
+  if [ "$_smoke" != "1" ]; then
+    _SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
+      logger -t seedrou-upgrade "升级后收敛有报错，详见 /var/log/seedrou-upgrade-selftest.log"
+  fi
 
   # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
+  #（冒烟模式只重启面板，不碰收敛——见上）
   systemctl daemon-reload
-  systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" seedrou-converge.service 2>/dev/null \
-    || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT seedrou-converge.service" >/dev/null 2>&1 &
+  if [ "$_smoke" = "1" ]; then
+    systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" 2>/dev/null \
+      || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT" >/dev/null 2>&1 &
+  else
+    systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" seedrou-converge.service 2>/dev/null \
+      || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT seedrou-converge.service" >/dev/null 2>&1 &
+  fi
   ok_out "message" "已升级到 V${newver}，面板即将重启"
 }
 

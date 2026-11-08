@@ -201,6 +201,7 @@ pkill -x dhcpcd 2>/dev/null || true
 systemctl disable nftables.service >/dev/null 2>&1 || true
 if [ "$SMOKE" = "1" ]; then
   # CI 冒烟模式：不重启 networkd/dnsmasq、不跑 apply-all（避免断掉 runner 网络）
+  touch "$RUN_DIR/smoke-mode"   # CI 冒烟网关：升级通道据此跳过内联收敛与延迟收敛重启
   systemctl daemon-reload
   systemctl enable --now seedrou-panel.service >/dev/null 2>&1 || true
 else

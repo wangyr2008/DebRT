@@ -254,6 +254,11 @@ assert "grep ':'" in _ipup, "观察② 回归：ip-up 仍全量覆盖（会冲�
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
 assert 'temps.get("current")' in _priv_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
+# CI 冒烟网关：升级通道的内联收敛与延迟收敛重启必须按 /run/seedrou/smoke-mode 跳过
+# （runner 的网络不能动——CI 实测步骤全绿但 agent 收尾信号传不回，job 被超时标 cancelled）
+assert "smoke-mode" in _priv_src \
+    and "smoke-mode" in open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read(), \
+    "CI 冒烟回归：升级通道收敛未按 smoke-mode 标记跳过"
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/观察②③ 全部通过")
