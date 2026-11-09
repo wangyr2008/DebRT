@@ -341,6 +341,19 @@ _dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-seedrou-restar
 assert "ExecStartPre" in _dd and "upstream.conf" in _dd and "|| : >" in _dd, \
     "P3-14 回归：dnsmasq 缺 servers-file 预建（开机报 cannot read upstream.conf）"
 
+# P3-16：Safari 不认 SVG favicon（只给 data:image/svg+xml 时后台标签显示通用页面图标），
+# 必须有 PNG/ICO 兜底；面板还要直接响应 /favicon.ico（浏览器会绕过 <link> 请求它）
+_idx = open(os.path.join(ROOT, "panel", "static", "index.html"), encoding="utf-8").read()
+assert 'rel="icon" type="image/png"' in _idx, "P3-16 回归：index.html 缺 PNG favicon（Safari 显示通用图标）"
+# 按 href 断言具体文件：只查 type="image/png" 的话，删掉 32x32 那一行仍会被 16x16 顶住（假绿）
+assert 'href="/static/favicon-32.png"' in _idx and 'href="/static/favicon-16.png"' in _idx, \
+    "P3-16 回归：index.html 缺 32x32/16x16 PNG favicon 链接"
+assert 'rel="apple-touch-icon"' in _idx, "P3-16 回归：index.html 缺 apple-touch-icon"
+for _ico in ("favicon.ico", "favicon-32.png", "apple-touch-icon.png"):
+    assert os.path.exists(os.path.join(ROOT, "panel", "static", _ico)), f"P3-16 回归：缺 {_ico}"
+_panel = open(os.path.join(ROOT, "panel", "seedrou_panel.py"), encoding="utf-8").read()
+assert '"/favicon.ico"' in _panel, "P3-16 回归：面板未直接响应 /favicon.ico（会 302 成 HTML）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
-      "P3-12结构兜底/P3-13stage清理/P3-14servers预建/观察②③ 全部通过")
+      "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/观察②③ 全部通过")

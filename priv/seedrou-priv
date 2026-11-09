@@ -1276,7 +1276,7 @@ sys.exit(0 if ok else 1)
     esac
   done
   python3 -m py_compile "$stg"/panel/*.py >/dev/null 2>&1 || { rm -rf "$stg"; die "UPG_BAD" "升级包内面板程序异常（py_compile 失败）"; }
-  for need in panel/static/index.html panel/static/app.js panel/static/app.css panel/static/icons.js; do
+  for need in panel/static/index.html panel/static/app.js panel/static/app.css panel/static/icons.js panel/static/favicon.ico; do
     [ -f "$stg/$need" ] || { rm -rf "$stg"; die "UPG_BAD" "升级包缺少 $need"; }
   done
   # 4) 备份当前版本 → 原子换目录 → 修正属主

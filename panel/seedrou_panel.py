@@ -144,6 +144,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._file(os.path.join(STATIC_DIR, "index.html"))
             return
+        # 图标：浏览器/系统会绕过 <link rel="icon"> 直接请求这些固定路径（Safari 恢复
+        # 后台标签、iOS「添加到主屏」时尤其如此）。以前它们落到下面的 _redirect("/")，
+        # 拿回一段 HTML 当图标 → 标签页显示成通用页面图标（Chrome 因为有 SVG link 才正常）。
+        for ico, name in (("/favicon.ico", "favicon.ico"),
+                          ("/favicon.png", "favicon-32.png"),
+                          ("/apple-touch-icon.png", "apple-touch-icon.png"),
+                          ("/apple-touch-icon-precomposed.png", "apple-touch-icon.png")):
+            if path == ico:
+                self._file(os.path.join(STATIC_DIR, name))
+                return
         rel = path.lstrip("/")
         if not rel.startswith("static/"):
             self._redirect("/")
