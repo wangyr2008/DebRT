@@ -373,6 +373,7 @@ INNERPYEOF
           local gen_err2=""
           [ -s "$stage/netgen.err" ] && gen_err2="$(tail -n 2 "$stage/netgen.err" | tr '\n' ' ' | cut -c1-240)"
           mark_converge_failed
+          rm -rf "$stage"
           die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正${gen_err2:+。生成器输出：$gen_err2}"
         fi
       fi
@@ -380,6 +381,7 @@ INNERPYEOF
     if [ -z "$migrated" ]; then
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
       mark_converge_failed
+      rm -rf "$stage"
       die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置${gen_err:+。生成器输出：$gen_err}"
     fi
   fi
@@ -407,6 +409,11 @@ PYEOF
       # 互相等待形成死锁（真机实测）——崩溃恢复由 dnsmasq 的 Restart=on-failure 负责
       maintain_singbox_dropin
       clear_converge_failed
+      # 暂存目录必须清：这里是"无漂移"的提前返回，早于下方全量路径的清理语句。
+      # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/seedrou 留一份完整生成物，
+      # 其中 etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 实测：开机后
+      # /run/seedrou/stage.XXXXXX 里躺着 chap-secrets/pap-secrets，重启才清）
+      rm -rf "$stage"
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0
     fi
@@ -414,6 +421,10 @@ PYEOF
 
   if ! pf_out="$(preflight_stage "$stage")"; then
       mark_converge_failed
+      rm -rf "$stage"
+      # 透传预检的具体原因（nft -c / dnsmasq --test 的报错行）——此前 pf_out 被直接丢弃，
+      # 用户只看到"现有配置无法生成合法的系统配置"，无从下手（与 P3-12 同一类：错误详情被吞）
+      if [ -n "$pf_out" ]; then printf '%s\n' "$pf_out"; exit 1; fi
       die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
   fi
   apply_stage_files "$stage" "$man_json"

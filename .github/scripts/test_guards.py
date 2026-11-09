@@ -6,6 +6,7 @@
 4) PPPoE IPv6：光猫桥接 + 拨号场景（IA_NA/IA_PD 经 networkd DHCPv6 客户端获取）
 """
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -312,7 +313,27 @@ for _mk, _label in (
 assert "netgen.err" in _priv_src, "P3-12 回归：收敛路径又丢弃了 netgen 的 stderr"
 # 备份恢复必须落盘前做结构预检（只校验 json.load 会把坏配置装进系统）
 assert "--schema --config" in _priv_src, "P3-12 回归：备份恢复缺结构预检"
+# P3-12b：两处 preflight 失败分支（config-set / apply-all）都必须把 pf_out
+# （nft -c / dnsmasq --test 的具体报错）透传出去，否则用户只看到"无法生成合法的系统配置"
+_pf = re.findall(r'if ! pf_out="\$\(preflight_stage "\$stage"\)"; then(.*?)\n  fi\n', _priv_src, re.S)
+assert _pf and all("printf" in g for g in _pf), "P3-12b 回归：预检失败又吞掉了具体原因"
+
+# P3-13：收敛"无漂移"分支必须清理 stage——它在全量路径的 rm -rf 之前就 exit 0，
+# 漏了就是每次开机 / 6h 收敛 / 每次升级在 /run/seedrou 留一份完整生成物，其中
+# etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 开机后实测到 stage.XXXXXX）
+# 注意：必须按"整行命令"匹配——块里的注释也提到过这条命令，子串匹配会假绿
+# （本守卫第一版就是这么写错的，变异测试当场抓到）
+_nodrift = re.search(r'if \[ "\$drift" = "0" \]; then(.*?)\n    fi\n', _priv_src, re.S)
+assert _nodrift, "P3-13 回归：找不到无漂移分支（源码结构变了？）"
+assert re.search(r'^ +rm -rf "\$stage" *$', _nodrift.group(1), re.M), \
+    "P3-13 回归：无漂移分支未清理 stage（每次收敛泄漏一份含凭据的生成物）"
+# P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
+# 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/seedrou-dns/upstream.conf"
+_dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-seedrou-restart.conf"),
+           encoding="utf-8").read()
+assert "ExecStartPre" in _dd and "upstream.conf" in _dd and "|| : >" in _dd, \
+    "P3-14 回归：dnsmasq 缺 servers-file 预建（开机报 cannot read upstream.conf）"
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
-      "P3-12结构兜底/观察②③ 全部通过")
+      "P3-12结构兜底/P3-13stage清理/P3-14servers预建/观察②③ 全部通过")
