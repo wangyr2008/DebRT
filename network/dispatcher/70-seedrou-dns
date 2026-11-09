@@ -43,13 +43,21 @@ case "$IFACE" in
   ppp*)
     {
       echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
-      [ -f "$CONF" ] && grep -E '^server=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$CONF"
+      # v4 上游两个来源，合并去重：
+      #   ① CONF 里已有的（上一轮保留，通常由 ip-up.d 写入）
+      #   ② /etc/ppp/resolv.conf —— pppd usepeerdns 的权威输出，会话期间一直有效
+      # 只靠 ① 的话，一旦 CONF 丢了 v4，之后每次 ppp0 事件都只写 v6，运营商 v4 DNS
+      # 要等到下一次拨号才回来（2026-11-09 真机踩到：手工把 CONF 换成只剩 v6 后，
+      # 面板「DNS 服务器」一直是空的，而 /etc/ppp/resolv.conf 里两条一直都在）
+      { [ -f "$CONF" ] && grep -E '^server=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$CONF"
+        [ -f /etc/ppp/resolv.conf ] && grep -E '^nameserver' /etc/ppp/resolv.conf | awk '{print "server=" $2}'
+      } | sort -u
       python3 - "$SRC" <<'PYEOF'
 import sys
 for line in open(sys.argv[1]):
     if line.startswith("DNS=") and line.strip() != "DNS=":
         for d in line.strip()[4:].split(" "):
-            if d and ":" in d:      # ppp0 只取 IPv6；IPv4 已由 ip-up.d 写入并在此保留
+            if d and ":" in d:      # ppp0 只取 IPv6；IPv4 见上面两个来源
                 print(f"server={d}")
 PYEOF
     } > "${CONF}.$$.tmp" 2>/dev/null

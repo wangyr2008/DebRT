@@ -267,6 +267,13 @@ _ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "seedrou"), encodin
 _hook2 = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
 assert "$$.tmp" in _ipup and "$$.tmp" in _hook2, "观察② 回归：upstream.conf 双写者仍共用固定 .tmp"
 assert "grep ':'" in _ipup, "观察② 回归：ip-up 仍全量覆盖（会冲掉 dispatcher 写入的 v6 上游）"
+# P3-15：dispatcher 的 ppp* 分支必须同时读 /etc/ppp/resolv.conf——只从 CONF 保留 v4，
+# 一旦 CONF 丢了 v4 就再也回不来（真机 2026-11-09：CONF 只剩 v6 后，每次 ppp0 事件
+# 都只写 v6，面板「DNS 服务器」里运营商 v4 DNS 一直是空的，而 resolv.conf 里两条都在）
+# 必须匹配"命令本身"而不是路径字符串——注释里也提到过这个文件，子串匹配会假绿
+# （P3-13 的守卫第一版就这么错过一次，这里同款）
+assert "grep -E '^nameserver' /etc/ppp/resolv.conf" in _hook2, \
+    "P3-15 回归：ppp* 分支没读 /etc/ppp/resolv.conf（CONF 丢 v4 后无法自愈）"
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
