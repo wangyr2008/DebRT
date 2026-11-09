@@ -276,5 +276,43 @@ assert "smoke-mode" in _priv_src \
     and "smoke-mode" in open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read(), \
     "CI 冒烟回归：升级通道收敛未按 smoke-mode 标记跳过"
 
+# P3-12：收敛期结构兜底——残缺 config 不许 traceback，也不许静默生成空转配置。
+# 曾经的两种坏结局：缺 lan → KeyError（stderr 被丢弃，用户只看到"配置生成失败"）；
+# wan.mode="" → 落进 pppoe 分支，产出 DHCP=no 且无 Address 的 10-wan.network。
+def _schema_fail(cfg, label):
+    try:
+        netgen.schema_check(cfg)
+    except SystemExit:
+        assert netgen.ERR.get("code") == "CONFIG_SCHEMA", f"{label}: {netgen.ERR.get('code')}"
+    else:
+        raise AssertionError(f"P3-12 回归：{label} 未被 schema 拦截")
+
+
+netgen.schema_check(base_cfg("dhcp", "auto"))          # 合法配置必须放行
+netgen.schema_check(base_cfg("pppoe", "manual"))
+for _mk, _label in (
+    (lambda c: c["wan"].__setitem__("mode", ""), "wan.mode 为空"),
+    (lambda c: c["wan"].__setitem__("mode", "wireless"), "wan.mode 非法"),
+    (lambda c: c.pop("lan"), "缺 lan 段"),
+    (lambda c: c.pop("ipv6"), "缺 ipv6 段"),
+    (lambda c: c["ports"].__setitem__(0, {"wan": True, "lan": False}), "网口缺 name"),
+    (lambda c: c.__setitem__("static", [{"name": "x", "mac": "AA:BB:CC:DD:EE:FF"}]), "静态绑定缺 ip"),
+    (lambda c: c.__setitem__("firewall", {"wan_input_drop": True, "portfw": [
+        {"name": "x", "proto": "sctp", "wport": "80", "ip": "192.168.10.5", "lport": "80", "enabled": True}]}),
+     "转发协议非法"),
+    (lambda c: c["lan"].__setitem__("ip", None), "lan.ip 为 null"),
+    (lambda c: c["dhcp"].__setitem__("pool_start", "abc"), "DHCP 池非整数"),
+):
+    _c = base_cfg("dhcp", "auto")
+    _c["dhcp"] = {"enabled": True, "pool_start": 100, "pool_end": 200, "lease": 120,
+                  "dns1": "", "dns2": "", "gw": ""}
+    _mk(_c)
+    _schema_fail(_c, _label)
+# 收敛路径必须保留生成器 stderr（否则只剩"配置生成失败"，hint 里的"上方错误信息"是空的）
+assert "netgen.err" in _priv_src, "P3-12 回归：收敛路径又丢弃了 netgen 的 stderr"
+# 备份恢复必须落盘前做结构预检（只校验 json.load 会把坏配置装进系统）
+assert "--schema --config" in _priv_src, "P3-12 回归：备份恢复缺结构预检"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
-      "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/观察②③ 全部通过")
+      "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
+      "P3-12结构兜底/观察②③ 全部通过")

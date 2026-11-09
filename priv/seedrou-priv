@@ -335,7 +335,11 @@ do_apply_all() {
   local stage man_json migrated=""
   stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
   man_json="$stage/manifest.json"
-  if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+  if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
+    # P3-12：生成器的 stderr 不再丢弃——结构损坏（KeyError / AddressValueError）时
+    # man_json 是空的，此前只剩"配置生成失败"+"请按上方错误信息修正"，而上方什么都没有
+    local gen_err=""
+    [ -s "$stage/netgen.err" ] && gen_err="$(tail -n 2 "$stage/netgen.err" | tr '\n' ' ' | cut -c1-240)"
     # 存量不兼容配置的自动纠正（四审 M-01/M-02/M-03）：
     #   LAN_MASK_TOO_WIDE → 掩码迁回 /24（保留 IP 与地址池）
     # 注：原先还有一条 "V6_NATIVE_PPPPOE_UNSUPPORTED → 改 NAT6" 的迁移，v0.1.41 起
@@ -361,20 +365,22 @@ INNERPYEOF
         rm -rf "$stage"
         stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
         man_json="$stage/manifest.json"
-        if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>/dev/null; then
+        if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
           # 迁移成功：继续正常流程（跳过下方 die）
           :
         else
           cat "$man_json" 2>/dev/null
-      mark_converge_failed
-      die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正"
+          local gen_err2=""
+          [ -s "$stage/netgen.err" ] && gen_err2="$(tail -n 2 "$stage/netgen.err" | tr '\n' ' ' | cut -c1-240)"
+          mark_converge_failed
+          die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正${gen_err2:+。生成器输出：$gen_err2}"
         fi
       fi
     fi
     if [ -z "$migrated" ]; then
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
-        mark_converge_failed
-      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置"
+      mark_converge_failed
+      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置${gen_err:+。生成器输出：$gen_err}"
     fi
   fi
 
@@ -1005,6 +1011,15 @@ print(reason)
     || { rm -rf "$stage"; die "BACKUP_BAD" "备份文件解压失败（文件可能损坏）"; }
   python3 -c 'import json;json.load(open("'"$stage"'/etc/seedrou/config.json"))' 2>/dev/null \
     || { rm -rf "$stage"; die "BACKUP_BAD" "备份中的配置无法解析"; }
+  # P3-12：结构预检——"能 json.load" 不等于"能用"：残缺/裁剪过的配置落盘后会让收敛
+  # 在 netgen 里 traceback（stderr 曾被丢弃，用户只看到"配置生成失败"），或静默生成
+  # 空转配置（wan.mode 为空 → WAN 口无任何地址）。落盘前用生成器的 schema 检查拦住。
+  # 只查结构不查语义：存量 /25 掩码等由收敛期迁移负责，不能因噎废食拒绝恢复。
+  if ! _schema_out="$(python3 "${PRIV_DIR}/netgen.py" --schema --config "$stage/etc/seedrou/config.json")"; then
+    printf '%s\n' "$_schema_out"
+    rm -rf "$stage"
+    exit 1
+  fi
   # 原子落盘
   if [ -d "$stage/etc/seedrou" ]; then
     while IFS= read -r -d '' f; do

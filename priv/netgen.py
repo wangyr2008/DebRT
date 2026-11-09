@@ -366,7 +366,7 @@ def gen_nft(cfg):
         "",
         "table inet seedrou_base {",
         f"  define WAN_IFS = {{ {wan_set} }}",
-        f'  define LAN_BR = "br-lan"',
+        '  define LAN_BR = "br-lan"',
         f"  define LAN_NET = {net.with_prefixlen}",
         "  # 当前 WAN IPv4 地址集合：由 priv/wan-addr-sync（钩子/apply 调用）维护，",
         "  # hairpin DNAT 仅对「目的地址 = 本机 WAN IP」的 LAN 流量生效，绝不劫持其他出站流量",
@@ -460,13 +460,108 @@ def gen_chap(cfg, password):
     return f"# 由 SeedRou 生成 — 请勿手工修改\n{user} * {pwd} *\n"
 
 
+def schema_check(cfg):
+    """收敛期结构兜底（P3-12）。
+
+    validate.py 保证的是"面板写进来的配置"，而收敛路径（开机 / 6h timer / 升级后 /
+    备份恢复）直接读 /etc/seedrou/config.json。结构残缺时下游有两种坏结局：
+      1) 生成阶段 traceback（KeyError 'lan' / AddressValueError）——do_apply_all 曾把
+         stderr 丢掉，用户只看到"配置生成失败"，提示里的"上方错误信息"是空的；
+      2) 静默生成空转配置——如 wan.mode="" 会落进 pppoe 分支，产出 DHCP=no 且无
+         Address 的 10-wan.network，WAN 口彻底没地址而 apply 返回成功。
+    这里在生成前一次性拦住，全部走结构化 JSON 错误。
+    """
+    hint = ("请在「网络设置」重新保存一次；若已无法进入面板，可从 "
+            "/var/lib/seedrou/lastgood 恢复上一份可用配置")
+
+    def bad(msg, howto=hint):
+        fail("CONFIG_SCHEMA", msg, howto)
+
+    if not isinstance(cfg, dict):
+        bad("config.json 顶层不是对象", "请从 /var/lib/seedrou/lastgood 恢复，或重新运行 install.sh")
+
+    # 必填段：下游是直接下标访问（cfg["lan"] / cfg["ipv6"]["mode"] / cfg["ports"]）
+    for sec in ("ports", "wan", "lan", "ipv6"):
+        if not isinstance(cfg.get(sec), list if sec == "ports" else dict):
+            bad(f"配置缺少或损坏的段落：{sec}")
+
+    if not cfg["ports"]:
+        bad("网口列表为空", "请进入「网络设置 → 网口绑定」重新勾选 WAN/LAN 口并保存")
+    for p in cfg["ports"]:
+        if not isinstance(p, dict) or not isinstance(p.get("name"), str) or not p["name"].strip():
+            bad("网口条目缺少名称", "请进入「网络设置 → 网口绑定」重新保存")
+
+    mode = cfg["wan"].get("mode")
+    if mode not in ("dhcp", "pppoe", "static"):
+        bad(f"上网方式 {mode!r} 不受支持",
+            "请进入「网络设置 → 上网设置」重新选择（PPPoE / DHCP / 静态 IP）并保存")
+    if mode == "pppoe" and not str(cfg["wan"].get("username") or "").strip():
+        bad("PPPoE 模式缺少宽带账号", "请在「网络设置 → 上网设置」填写宽带账号并保存")
+    if mode == "static":
+        for k, label in (("ip", "IP 地址"), ("mask", "子网掩码"), ("gw", "默认网关")):
+            if not str(cfg["wan"].get(k) or "").strip():
+                bad(f"静态 IP 模式缺少{label}", "请在「网络设置 → 上网设置」补全 IP/掩码/网关后保存")
+
+    if not str(cfg["lan"].get("ip") or "").strip() or not str(cfg["lan"].get("mask") or "").strip():
+        bad("LAN IP 或子网掩码为空", "请在「网络设置 → 局域网 IP」重新填写并保存")
+
+    v6 = cfg["ipv6"]
+    if v6.get("enabled") and v6.get("mode") not in ("native", "nat6", "static"):
+        bad(f"IPv6 方式 {v6.get('mode')!r} 不受支持",
+            "请进入「网络设置 → IPv6 设置」重新选择并保存")
+
+    dh = cfg.get("dhcp")
+    if dh is not None and not isinstance(dh, dict):
+        bad("DHCP 段格式损坏", "请在「网络设置 → DHCP 服务」重新保存")
+    if isinstance(dh, dict) and dh.get("enabled"):
+        for k in ("pool_start", "pool_end", "lease"):
+            if not isinstance(dh.get(k), int) or isinstance(dh.get(k), bool):
+                bad(f"DHCP 参数 {k} 不是整数", "请在「网络设置 → DHCP 服务」重新填写地址池与租期")
+
+    st = cfg.get("static")
+    if st is not None and not isinstance(st, list):
+        bad("静态绑定段格式损坏", "请在「网络设置 → DHCP 静态 IP 分配」重新保存")
+    for s in (st or []):
+        if not isinstance(s, dict) or not all(
+                isinstance(s.get(k), str) and s.get(k).strip() for k in ("name", "ip", "mac")):
+            bad("静态绑定条目缺少 name/ip/mac", "请在「网络设置 → DHCP 静态 IP 分配」重新保存")
+
+    fw = cfg.get("firewall")
+    if fw is not None and not isinstance(fw, dict):
+        bad("防火墙段格式损坏", "请在「安全中心」重新保存")
+    for r in ((fw or {}).get("portfw") or []):
+        if not isinstance(r, dict):
+            bad("转发规则条目格式损坏", "请在「安全中心」重新保存转发规则")
+        for k in ("name", "proto", "wport", "ip", "lport"):
+            if not isinstance(r.get(k), str) or not r.get(k).strip():
+                bad(f"转发规则缺少字段 {k}", "请在「安全中心」重新保存转发规则")
+        if r.get("proto") not in ("tcp", "udp", "both"):
+            bad(f"转发规则协议 {r.get('proto')!r} 不受支持",
+                "请在「安全中心」把协议改为 TCP / UDP / TCP+UDP 后保存")
+
+    if cfg.get("qos") is not None and not isinstance(cfg.get("qos"), dict):
+        bad("QoS 段格式损坏", "请在「网络设置 → QoS 限速」重新保存")
+
+
 def main():
+    global CONFIG_PATH
+    # --config PATH：让 backup-restore 能在落盘前预检暂存配置（P3-12）
+    if "--config" in sys.argv:
+        CONFIG_PATH = sys.argv[sys.argv.index("--config") + 1]
     try:
         cfg = load_json(CONFIG_PATH)
     except FileNotFoundError:
-        fail("NO_CONFIG", "未找到 /etc/seedrou/config.json", "请先运行 install.sh 完成部署")
+        fail("NO_CONFIG", f"未找到 {CONFIG_PATH}", "请先运行 install.sh 完成部署")
     except json.JSONDecodeError as e:
         fail("CONFIG_CORRUPT", f"config.json 解析失败：{e}", "配置文件可能被意外截断；可从 /var/lib/seedrou/lastgood 恢复上一份可用配置")
+
+    # P3-12：先查结构再查语义——缺段/缺键在这里就变成结构化错误，不会等到生成阶段
+    # 抛 traceback，也不会静默产出空转配置
+    schema_check(cfg)
+    if "--schema" in sys.argv:
+        print(json.dumps({"ok": True, "schema": "ok", "config": CONFIG_PATH}, ensure_ascii=False))
+        return
+
     secrets = {}
     try:
         secrets = load_json(SECRETS_PATH)
