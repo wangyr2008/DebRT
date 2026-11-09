@@ -274,6 +274,17 @@ assert "grep ':'" in _ipup, "观察② 回归：ip-up 仍全量覆盖（会冲�
 # （P3-13 的守卫第一版就这么错过一次，这里同款）
 assert "grep -E '^nameserver' /etc/ppp/resolv.conf" in _hook2, \
     "P3-15 回归：ppp* 分支没读 /etc/ppp/resolv.conf（CONF 丢 v4 后无法自愈）"
+# P3-17：ppp0 重拨时 routable 事件常早于 DHCPv6 DNS 学到，v6 上游只能从 links 取，
+# 一旦 CONF 在链路消失时被清掉就永久丢失（真机 2026-11-09 17:35：links 里两条 v6
+# 一直在，CONF 却只剩 v4，面板与 dnsmasq 都看不到 v6，直到下次手工补）。
+# 两处必须同时存在：① 链路消失分支不删 CONF；② v4/v6 取不到时回退 CONF 旧值。
+_nc = re.search(r"\n  \*\)\n(.*?)\n\s*exit 0 ;;\n", _hook2, re.S)
+assert _nc and "rm -f" not in _nc.group(1), \
+    "P3-17 回归：链路消失分支又清空了 upstream.conf（v6 上游失去回退来源）"
+assert re.search(r'\[ -n "\$V4" \] \|\| V4=\$\(grep', _hook2), \
+    "P3-17 回归：ppp* 分支 v4 为空时没有回退 CONF 旧值"
+assert re.search(r'\[ -n "\$V6" \] \|\| V6=\$\(grep', _hook2), \
+    "P3-17 回归：ppp* 分支 v6 为空时没有回退 CONF 旧值（重拨后运营商 v6 DNS 丢失）"
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）

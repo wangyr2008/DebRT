@@ -27,7 +27,14 @@ mkdir -p "$RUNDIR"
 
 case "$STATE" in
   routable) ;;
-  *) rm -f "$CONF"; systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null; exit 0 ;;
+  *)
+    # P3-17：链路消失时不再清空 upstream.conf。清空等于把"上一份有效上游"一起丢掉，
+    # 而 ppp0 重拨时 routable 事件往往早于 DHCPv6 DNS 学到（此刻 links/$IDX 的 DNS=
+    # 还没有 v6），v6 上游就此永久丢失（真机 2026-11-09 17:35 重拨：links 里两条 v6
+    # 一直都在，CONF 却只剩 v4，面板与 dnsmasq 都看不到 v6）。保留文件 + ppp* 分支的
+    # 空值回退，两者配合才自愈。链路不通时查询会直接 ENETUNREACH 快速失败，不会变慢。
+    systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null
+    exit 0 ;;
 esac
 
 IDX=$(cat "/sys/class/net/$IFACE/ifindex" 2>/dev/null) || exit 0
@@ -41,18 +48,16 @@ SRC="/run/systemd/netif/links/$IDX"
 # 会把 ip-up 写入的 v4 冲掉；运营商不给 v6 DNS 时就等于没有上游。
 case "$IFACE" in
   ppp*)
-    {
-      echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
-      # v4 上游两个来源，合并去重：
-      #   ① CONF 里已有的（上一轮保留，通常由 ip-up.d 写入）
-      #   ② /etc/ppp/resolv.conf —— pppd usepeerdns 的权威输出，会话期间一直有效
-      # 只靠 ① 的话，一旦 CONF 丢了 v4，之后每次 ppp0 事件都只写 v6，运营商 v4 DNS
-      # 要等到下一次拨号才回来（2026-11-09 真机踩到：手工把 CONF 换成只剩 v6 后，
-      # 面板「DNS 服务器」一直是空的，而 /etc/ppp/resolv.conf 里两条一直都在）
-      { [ -f "$CONF" ] && grep -E '^server=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$CONF"
-        [ -f /etc/ppp/resolv.conf ] && grep -E '^nameserver' /etc/ppp/resolv.conf | awk '{print "server=" $2}'
-      } | sort -u
-      python3 - "$SRC" <<'PYEOF'
+    # v4 上游两个来源，取到即用：
+    #   ① /etc/ppp/resolv.conf —— pppd usepeerdns 的权威输出，会话期间一直有效
+    #   ② CONF 里的旧 v4 —— 仅当 ① 为空时回退（N-05 保旧）
+    # 只靠 ② 的话，一旦 CONF 丢了 v4，之后每次 ppp0 事件都只写 v6，运营商 v4 DNS
+    # 要等到下一次拨号才回来（2026-11-09 真机踩到：手工把 CONF 换成只剩 v6 后，
+    # 面板「DNS 服务器」一直是空的，而 /etc/ppp/resolv.conf 里两条一直都在）
+    # v6 上游只有一个来源：links/$IDX 的 DNS=（networkd 在 ppp0 上经 DHCPv6 学到）。
+    # 它会比 routable 事件晚到，为空时必须回退 CONF 里的旧 v6，否则重拨一次就永久丢失。
+    V4=$(grep -E '^nameserver' /etc/ppp/resolv.conf 2>/dev/null | awk '{print "server=" $2}' | sort -u)
+    V6=$(python3 - "$SRC" <<'PYEOF'
 import sys
 for line in open(sys.argv[1]):
     if line.startswith("DNS=") and line.strip() != "DNS=":
@@ -60,7 +65,13 @@ for line in open(sys.argv[1]):
             if d and ":" in d:      # ppp0 只取 IPv6；IPv4 见上面两个来源
                 print(f"server={d}")
 PYEOF
-    } > "${CONF}.$$.tmp" 2>/dev/null
+)
+    [ -n "$V4" ] || V4=$(grep -E '^server=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$CONF" 2>/dev/null | sort -u)
+    [ -n "$V6" ] || V6=$(grep -E '^server=[0-9a-fA-F]*:[0-9a-fA-F:]+$' "$CONF" 2>/dev/null | sort -u)
+    {
+      echo "# 由 networkd-dispatcher 生成（$IFACE $STATE）— 请勿手工修改"
+      printf '%s\n' "$V4" "$V6"
+    } | grep -v '^$' > "${CONF}.$$.tmp" 2>/dev/null
     ;;
   *)
     {
