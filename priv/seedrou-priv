@@ -1309,6 +1309,9 @@ sys.exit(0 if ok else 1)
   if [ -d /usr/local/lib/seedrou/network ]; then
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/80-seedrou-cake /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    # v0.1.56 新增：WAN 换 IPv6 前缀后修 sing-box 本地地址集合 + 清旧前缀路由
+    # （A-04/R-01/P3-02 同族第四处——升级通道漏装钩子时面板版本号已是最新，极误导）
+    install -m 755 /usr/local/lib/seedrou/network/dispatcher/90-seedrou-lan-prefix /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/no-carrier.d/ 2>/dev/null || true
     # R-01：v0.1.43 新增的 PPPoE 热插拔钩子——install.sh/uninstall.sh 都带了它，
     # 升级通道曾漏掉，导致"插网线自愈"只对全新安装生效

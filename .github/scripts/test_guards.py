@@ -285,6 +285,36 @@ assert re.search(r'\[ -n "\$V4" \] \|\| V4=\$\(grep', _hook2), \
     "P3-17 回归：ppp* 分支 v4 为空时没有回退 CONF 旧值"
 assert re.search(r'\[ -n "\$V6" \] \|\| V6=\$\(grep', _hook2), \
     "P3-17 回归：ppp* 分支 v6 为空时没有回退 CONF 旧值（重拨后运营商 v6 DNS 丢失）"
+
+# P3-18：WAN 重拨换 IPv6 前缀后有两处陈旧状态必须修——
+#   ① sing-box 的 auto_redirect 只在启动时构建 nft 集合 inet6_local_address_set，
+#     换前缀后集合仍是旧 /64，发往新 LAN 前缀（含路由器自身新地址）的 v6 被判成
+#     "非本地"被劫持进 tun（真机 2026-11-09 17:35：白名单设备"代理全挂"，手动重启
+#     sing-box 才恢复）；
+#   ② br-lan 上旧前缀的 RA 路由（proto kernel + expires ≈60h）不会被自动清掉。
+_hook3 = open(os.path.join(ROOT, "network", "dispatcher", "90-seedrou-lan-prefix"),
+              encoding="utf-8").read()
+assert re.search(r'^ +systemctl try-restart sing-box\.service', _hook3, re.M), \
+    "P3-18 回归：前缀变更钩子不再重启 sing-box（本地地址集合停在旧前缀）"
+# 重启必须以"确实在用 auto_redirect"为条件，否则每次换前缀都白断一次代理
+assert re.search(r'nft list table inet sing-box.*local_address_set', _hook3), \
+    "P3-18 回归：重启 sing-box 前未确认 auto_redirect 在用"
+# 旧前缀清理只碰带 expires 的 RA 路由，且必须跳过当前前缀（静态/当前前缀路由不能动）
+assert re.search(r"awk '/expires/ && \$1 ~ /:/", _hook3), \
+    "P3-18 回归：旧前缀路由清理未限定 RA 路由（会误删静态路由）"
+assert re.search(r'case " \$NEW " in \*" \$r "\*\) continue', _hook3), \
+    "P3-18 回归：旧前缀清理会误删当前前缀的路由"
+# exec 的重定向是持久的：这行带 2>/dev/null 会吞掉整个脚本后续的 stderr（第一版踩过）
+assert not re.search(r'^exec 9>.*2>/dev/null', _hook3, re.M), \
+    "P3-18 回归：锁文件的 exec 重定向吞掉了脚本 stderr"
+# 三处通道必须同步（A-04/R-01/P3-02 同族：升级用户拿不到新钩子，面板版本号却是最新）
+_inst = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
+assert '90-seedrou-lan-prefix" /etc/networkd-dispatcher/routable.d/' in _inst, \
+    "P3-18 回归：install.sh 未安装 90-seedrou-lan-prefix"
+assert "90-seedrou-lan-prefix /etc/networkd-dispatcher/routable.d/" in _priv_src, \
+    "P3-18 回归：升级通道未同步 90-seedrou-lan-prefix（升级用户永远拿不到）"
+assert "routable.d/90-seedrou-lan-prefix" in _un, \
+    "P3-18 回归：卸载清单缺 90-seedrou-lan-prefix"
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
@@ -367,4 +397,5 @@ assert '"/favicon.ico"' in _panel, "P3-16 回归：面板未直接响应 /favico
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
-      "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/观察②③ 全部通过")
+      "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
+      "观察②③ 全部通过")

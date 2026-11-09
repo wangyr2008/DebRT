@@ -32,6 +32,7 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/seedrou-pppoe.service \
       /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
       /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
+      /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
       /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/ppp/ip-up.d/seedrou \
       /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
       /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug \

@@ -1,0 +1,95 @@
+#!/bin/sh
+# WAN 重拨换 IPv6 前缀后的陈旧状态修复（networkd-dispatcher routable.d 钩子）。
+#
+# 背景（真机 2026-11-09 17:35，BRAS 主动 LCP terminated by peer 重拨）：
+#   ① sing-box 的 tun auto_redirect 只在**启动时**构建 nft 集合 inet6_local_address_set。
+#      WAN 换前缀后集合里仍是旧 /64 → 发往新 LAN 前缀（含路由器自身新地址）的 v6
+#      被判成"非本地"，被劫持进 tun 当代理流量处理，白名单设备表现为"代理全挂"；
+#      手动重启 sing-box 才恢复（这正是用户当时的自救动作）。
+#   ② br-lan 上旧前缀的 RA on-link 路由（proto kernel + expires ≈60h）不会被自动清掉，
+#      旧前缀流量继续被当本地直连；而旧前缀已不被运营商委派，源地址出网被 uRPF 丢弃。
+#
+# 本钩子：WAN/br-lan 的 routable 事件里，若 br-lan 全局 v6 前缀与上次记录不同
+#   ① 清掉 br-lan 上不属于当前前缀的 RA 路由；② try-restart sing-box 重建集合。
+# 只在真的换前缀时动作；开机首次（/run 已清空）只记录不重启——sing-box 启动时
+# 本来就用当时的前缀建集合。
+set -u
+
+IFACE="${1:-}"
+STATE="${2:-}"
+[ "$STATE" = "routable" ] || exit 0
+[ -f /etc/seedrou/config.json ] || exit 0
+
+RUNDIR=/run/seedrou
+REC="$RUNDIR/lan-prefix"
+mkdir -p "$RUNDIR" 2>/dev/null || true
+
+# 触发面：WAN 事件（ppp0 / DHCP-静态模式的 WAN 口）与 br-lan 事件。
+# 前者是 PPPoE 重拨的主路径；后者兜住"会话没断但 PD 换前缀"的情形。
+# 判据与 75-seedrou-pppoe-hotplug 同构
+IS_TRIGGER=$(python3 - "$IFACE" <<'PYEOF'
+import json, sys
+try:
+    cfg = json.load(open("/etc/seedrou/config.json"))
+    ifaces = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+    if cfg.get("wan", {}).get("mode") == "pppoe":
+        ifaces.append("ppp0")   # ppp0 由 25-ppp0.network 托管，其事件同样触发
+except Exception:
+    ifaces = []
+ifaces.append("br-lan")
+print("yes" if sys.argv[1] in ifaces else "no")
+PYEOF
+)
+[ "$IS_TRIGGER" = "yes" ] || exit 0
+
+# ppp0 down/up 会连发多个事件，只让一个实例干活（否则可能重复重启 sing-box）
+# 注意：这行不能带 2>/dev/null——exec 的重定向是持久的，会把整个脚本的 stderr 吞掉
+exec 9>"$RUNDIR/lan-prefix.lock"
+flock -n 9 2>/dev/null || exit 0
+
+# br-lan 当前全局 v6 前缀，统一成 x:x:x:x::/64，便于与路由表条目直接比对
+lan_prefix() {
+    ip -6 addr show dev br-lan scope global 2>/dev/null \
+      | awk '$1 == "inet6" { split($2, a, "/"); if (split(a[1], h, ":") >= 4)
+                               printf "%s:%s:%s:%s::/64\n", h[1], h[2], h[3], h[4] }' \
+      | sort -u | tr '\n' ' ' | sed 's/ *$//'
+}
+
+NEW="$(lan_prefix)"
+OLD=""
+[ -f "$REC" ] && OLD="$(cat "$REC" 2>/dev/null)"
+
+# PD 委派与 ppp0 routable 事件常在同一秒竞争，br-lan 可能还没拿到新地址：
+# 空值不算变化，最多等 15 秒（真换前缀时通常第一轮就命中）
+i=0
+while [ -z "$NEW" ] && [ "$i" -lt 15 ]; do
+    sleep 1; i=$((i+1)); NEW="$(lan_prefix)"
+done
+[ -n "$NEW" ] || exit 0
+
+if [ -z "$OLD" ]; then
+    printf '%s\n' "$NEW" > "$REC"
+    exit 0
+fi
+[ "$OLD" = "$NEW" ] && exit 0
+
+printf '%s\n' "$NEW" > "$REC"
+logger -t seedrou-lan "LAN IPv6 前缀变更：$OLD -> $NEW"
+
+# ① 清旧前缀路由：只删 br-lan 上带 expires（RA/地址派生）且不在当前前缀集合里的，
+#    静态路由（无 expires）一律不碰
+for r in $(ip -6 route show dev br-lan 2>/dev/null \
+           | awk '/expires/ && $1 ~ /:/ {print $1}'); do
+    case " $NEW " in *" $r "*) continue ;; esac
+    ip -6 route del "$r" dev br-lan 2>/dev/null \
+        && logger -t seedrou-lan "已清理旧前缀路由 $r"
+done
+
+# ② 重建 sing-box 的本地地址集合。只在它真在用 auto_redirect（nft 表里有
+#    local_address_set）时才重启——没有这套集合时重启只会白断一次代理。
+if systemctl is-active --quiet sing-box.service 2>/dev/null \
+   && nft list table inet sing-box 2>/dev/null | grep -q "local_address_set"; then
+    systemctl try-restart sing-box.service 2>/dev/null \
+        && logger -t seedrou-lan "sing-box 已重启（重建 local_address_set）"
+fi
+exit 0

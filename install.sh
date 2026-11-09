@@ -75,6 +75,7 @@ fi
 mkdir -p /etc/networkd-dispatcher/routable.d /etc/networkd-dispatcher/no-carrier.d /etc/networkd-dispatcher/carrier.d
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/dispatcher/80-seedrou-cake" /etc/networkd-dispatcher/routable.d/
+install -m 755 "$SRC_DIR/network/dispatcher/90-seedrou-lan-prefix" /etc/networkd-dispatcher/routable.d/
 install -m 755 "$SRC_DIR/network/dispatcher/70-seedrou-dns" /etc/networkd-dispatcher/no-carrier.d/
 install -m 755 "$SRC_DIR/network/dispatcher/75-seedrou-pppoe-hotplug" /etc/networkd-dispatcher/carrier.d/
 install -m 755 "$SRC_DIR/network/dispatcher/75-seedrou-pppoe-hotplug" /etc/networkd-dispatcher/routable.d/
