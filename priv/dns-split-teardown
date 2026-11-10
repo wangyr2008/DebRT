@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# dns-split-teardown —— sing-box 停止后删除 DNS 分流表
+#
+# 由 sing-box.service 的 ExecStopPost 调用（root）。
+# ExecStopPost 在**任何**停止方式下都会执行（正常 stop / 崩溃 / restart），
+# 比 OnFailure 可靠：手动 systemctl stop 不触发 OnFailure，表会残留，
+# 客户端 DNS 被 DNAT 到没人监听的 tun 地址 → 全网断解析。
+#
+# 删表后客户端 DNS 直接落到 dnsmasq，与「没装 sing-box」时完全一致。
+set -u
+
+# restart 场景下 ExecStopPost 先跑、ExecStartPost 后跑，中间有几毫秒无表窗口，
+# 客户端此时走 dnsmasq，正常。这里只负责把表清掉，不判断 sing-box 是否还活着。
+#
+# 匹配用 "seedrou_dns" 而不是 "table seedrou_dns"：nft list tables 的实际输出是
+# "table inet seedrou_dns"（含 family），带 table 前缀的匹配永远命中不了，
+# 表会一直残留 —— 真机首测就踩到这个，DNS 无法回落。
+if nft list tables 2>/dev/null | grep -q "seedrou_dns"; then
+    nft delete table inet seedrou_dns 2>/dev/null \
+        && logger -t seedrou-dns-split "sing-box 已停止，DNS 分流表已删除（回落 dnsmasq）"
+fi
+exit 0

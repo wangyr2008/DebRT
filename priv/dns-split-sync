@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# dns-split-sync —— 把 include_mac_address 派生为 nft 的 DNS 分流表
+#
+# 由 sing-box.service 的 ExecStartPost 调用（root，因为要写 nft）。
+#
+# 为什么需要它：sing-box 的 DNS 规则拿不到源 MAC（实测：即使包经 tun 进来、
+# 日志里已有 found neighbor，source_mac_address 在 DNS 规则里依然不匹配），
+# 所以「哪台设备的 DNS 走哪条路」只能在 nft 层用 ether saddr 判断。
+#
+# 数据源只有一个：/etc/sing-box/config.json 里 tun.include_mac_address
+# （由 sub-store 模板维护）。本脚本只读不写，加设备只改那一处。
+#
+# 行为矩阵：
+#   include_mac_address 为空/缺失 → 不建表（全部走 dnsmasq → 全部 fakeip → 全部走代理）
+#   include_mac_address 有值      → 建表，白名单走 dnsmasq、其余走 sing-box 真实解析
+#                                   （写 ["00:00:00:00:00:00"] 这种哨兵即为「全部直连」）
+set -u
+
+CONF=/etc/sing-box/config.json
+[ -f "$CONF" ] || exit 0
+
+# 只在 sing-box 真的活着时建表——否则表指向没人监听的地址，全网断 DNS。
+# 注意：ExecStartPost 执行的那一刻 unit 还是 activating（不是 active），
+# 只判 active 会直接退出、表永远建不起来（真机首测踩到）。
+STATE=$(systemctl is-active sing-box.service 2>/dev/null)
+case "$STATE" in
+    active|activating|reloading) ;;
+    *) exit 0 ;;
+esac
+
+# tun 可能还在初始化（ExecStartPost 紧跟启动），最多等 20 秒
+i=0
+while [ "$i" -lt 20 ]; do
+    ip link show tun0 >/dev/null 2>&1 && break
+    sleep 1; i=$((i + 1))
+done
+ip link show tun0 >/dev/null 2>&1 || exit 0
+
+# 从 config.json 读：白名单列表、tun 的 v4/v6 地址
+PARSED=$(python3 - "$CONF" <<'PYEOF'
+import ipaddress, json, sys
+
+try:
+    c = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+
+macs, v4, v6 = [], "", ""
+for ib in c.get("inbounds", []):
+    if ib.get("type") != "tun":
+        continue
+    macs = ib.get("include_mac_address") or []
+    for a in ib.get("address", []):
+        try:
+            net = ipaddress.ip_interface(a)
+        except Exception:
+            continue
+        if net.version == 4 and not v4:
+            v4 = str(net.network.network_address + 2)   # /30 里 .1 是 tun 自己，.2 是 DNS
+        elif net.version == 6 and not v6:
+            v6 = str(net.network.network_address + 2)   # /126 同理
+    break
+
+print("|".join([",".join(macs), v4, v6]))
+PYEOF
+)
+
+WLS=$(printf '%s' "$PARSED" | cut -d'|' -f1)
+TUN4=$(printf '%s' "$PARSED" | cut -d'|' -f2)
+TUN6=$(printf '%s' "$PARSED" | cut -d'|' -f3)
+
+# 拿不到 tun 地址就没法建表（订阅配置结构变了？），保持不建表 = 回落 dnsmasq
+[ -n "$TUN4" ] || exit 0
+
+# 白名单为空：不建表。此时 include_mac_address 空 = 不限 MAC = 全部流量进 tun，
+# 全部 DNS 走 dnsmasq 拿 fakeip，两者一致，不会出现黑洞
+if [ -z "$WLS" ]; then
+    nft delete table inet seedrou_dns 2>/dev/null
+    logger -t seedrou-dns-split "include_mac_address 为空，不建分流表（全部走代理）"
+    exit 0
+fi
+
+# dnsmasq 的地址（白名单设备的 DNS 回导目标）
+# 同时兼容多行与 ip -o 单行输出：单行格式下 inet 在第 3 列
+LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
+       | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
+              $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
+[ -n "$LAN4" ] || exit 0
+LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null \
+       | awk '$1 == "inet6" { split($2, a, "/"); print a[1]; exit }
+              $3 == "inet6" { split($4, a, "/"); print a[1]; exit }')
+[ -n "$LAN6" ] || LAN6="::1"
+
+# 拼 MAC 集合：0c:19:...,44:59:...
+SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
+
+# 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表
+if ! nft -f - <<EOF 2>/dev/null
+table inet seedrou_dns {
+    chain pre {
+        type nat hook prerouting priority dstnat - 2; policy accept;
+
+        iifname "br-lan" ether saddr $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4
+        iifname "br-lan" ether saddr $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to $LAN6
+        iifname "br-lan" ether saddr != $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $TUN4
+        iifname "br-lan" ether saddr != $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to ${TUN6:-::1}
+    }
+}
+EOF
+then
+    # 建表失败：删掉可能的残留，让所有 DNS 回落到 dnsmasq（安全方向）
+    nft delete table inet seedrou_dns 2>/dev/null
+    logger -t seedrou-dns-split "建表失败，已回落 dnsmasq"
+    exit 0
+fi
+
+# 用 awk 数字段：tr | wc -l 数的是换行符，最后一项没有换行会少算一台（真机首测踩到）
+COUNT=$(printf '%s' "$WLS" | awk -F, '{print NF}')
+logger -t seedrou-dns-split "DNS 分流表已重建：白名单 $COUNT 台"
+exit 0

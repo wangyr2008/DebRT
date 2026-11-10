@@ -7,7 +7,14 @@ systemctl is-active --quiet sing-box.service && exit 0        # 活着就不动
 ip link show tun0 >/dev/null 2>&1 && exit 0                   # tun 还在（启动中），不动
 
 # nft 残留表（sing-box 重启时会自动重建）
-nft list tables 2>/dev/null | grep -q "table sing-box" && nft delete table sing-box 2>/dev/null
+# 匹配不带 "table " 前缀：nft list tables 输出是 "table inet sing-box"，
+# 带前缀的匹配永远命中不了（v0.1.57 真机首测发现的存量 bug）
+nft list tables 2>/dev/null | grep -q "sing-box" && nft delete table sing-box 2>/dev/null
+
+# DNS 分流表必须一并删除：它把客户端 DNS DNAT 到 tun 的地址（172.19.0.x），
+# sing-box 没了就没人监听，残留会让所有设备断 DNS（比代理失效严重得多）。
+# ExecStopPost 已经覆盖绝大多数场景，这里是 OnFailure 路径的双保险。
+nft list tables 2>/dev/null | grep -q "seedrou_dns" && nft delete table inet seedrou_dns 2>/dev/null
 
 # ip rule 残留（特征：fwmark 0x2023/0x2024 + 表 2022）
 while read -r prio rest; do

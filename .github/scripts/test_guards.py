@@ -395,7 +395,90 @@ for _ico in ("favicon.ico", "favicon-32.png", "apple-touch-icon.png"):
 _panel = open(os.path.join(ROOT, "panel", "seedrou_panel.py"), encoding="utf-8").read()
 assert '"/favicon.ico"' in _panel, "P3-16 回归：面板未直接响应 /favicon.ico（会 302 成 HTML）"
 
+# P3-19：DNS 按 MAC 分流三件套（v0.1.57）
+# 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
+# fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。
+# 修法：nft 层按 ether saddr 分两路，白名单走 dnsmasq 拿 fakeip、其余走 sing-box 拿真实 IP。
+# 之所以不在 sing-box 里用 source_mac_address：实测即使包经 tun 进来、日志已有
+# found neighbor，DNS 规则的 MAC 匹配依然不生效（只有 route 规则认）。
+_dsp = open(os.path.join(ROOT, "priv", "dns-split-prepare"), encoding="utf-8").read()
+_dss = open(os.path.join(ROOT, "priv", "dns-split-sync"), encoding="utf-8").read()
+_dst = open(os.path.join(ROOT, "priv", "dns-split-teardown"), encoding="utf-8").read()
+
+# prepare：必须在 sing-box 启动前生成配置（它只在启动时读），且原子写
+assert "os.replace" in _dsp, "P3-19 回归：prepare 不是原子写（sing-box 可能读到半个 JSON）"
+assert "source_ip_cidr" in _dsp, "P3-19 回归：prepare 生成的规则缺 source_ip_cidr"
+assert "upstream.conf" in _dsp, "P3-19 回归：prepare 没复用 dispatcher 算好的运营商 DNS"
+assert "domain_suffix" in _dsp and "landns" in _dsp, "P3-19 回归：prepare 丢了 .lan 本地解析"
+# v6 前缀必须带 /nn：只 print(network_address) 会输出裸地址，sing-box 的
+# source_ip_cidr 不接受不带前缀长度的 IPv6（真机首装就踩到，v6 规则整条失效）
+assert "print(net)" in _dsp, "P3-19 回归：prepare 输出的 v6 前缀丢了 /nn"
+
+# sync：数据源必须是 config.json 的 include_mac_address（sub-store 维护的唯一来源）
+assert "include_mac_address" in _dss, "P3-19 回归：sync 没读 include_mac_address（数据源分裂）"
+# 空白名单必须不建表：空 = 不限 MAC = 全部流量进 tun，此时全部 DNS 该走 fakeip；
+# 若仍建表会让所有 DNS 走 carrier，而流量走 fakeip → 有地址但连不上
+assert re.search(r'if \[ -z "\$WLS" \]; then.*?exit 0', _dss, re.S), \
+    "P3-19 回归：include_mac_address 为空时仍建表（'全部走代理'的语义被破坏）"
+# nft -f 批量加载是原子的；逐条 add rule 中途失败会留下半张表（v6 没建 → 黑洞）
+assert "nft -f -" in _dss, "P3-19 回归：sync 用逐条 add rule（非原子，可能留半张表）"
+assert re.search(r'if ! nft -f -', _dss), "P3-19 回归：建表失败没有回落分支"
+# 必须确认 sing-box 真活着才建表，否则表指向没人监听的地址 → 全网断 DNS。
+# 且必须接受 activating：ExecStartPost 执行时 unit 还没到 active，
+# 只判 active 会让表永远建不起来（真机首测踩到）
+assert "systemctl is-active sing-box.service" in _dss, \
+    "P3-19 回归：sync 没确认 sing-box 存活就建表（可能指向死地址）"
+assert "activating" in _dss, \
+    "P3-19 回归：sync 不接受 activating 状态（ExecStartPost 时表建不起来）"
+
+assert "nft delete table inet seedrou_dns" in _dst, "P3-19 回归：teardown 没删表"
+# grep 不能带 "table " 前缀：nft list tables 输出是 "table inet seedrou_dns"，
+# 带前缀永远匹配不到，表会残留导致 DNS 无法回落（真机首测踩到）
+assert not re.search(r'grep -q "table ', _dst), \
+    "P3-19 回归：teardown 用 'table xxx' 匹配 nft list tables（永远命中不了）"
+assert not re.search(r'grep -q "table ', _cu := open(
+    os.path.join(ROOT, "priv", "singbox-cleanup"), encoding="utf-8").read()), \
+    "P3-19 回归：cleanup 用 'table xxx' 匹配 nft list tables（永远命中不了）"
+# 计数不能用 tr|wc -l：最后一项无换行会少算，日志里的台数就会偏小
+assert "awk -F, '{print NF}'" in _dss, \
+    "P3-19 回归：白名单计数用 wc -l（末项无换行会少算一台）"
+
+# drop-in：ExecStartPost 建表、ExecStopPost 删表。用 ExecStopPost 而不是只靠
+# OnFailure——手动 systemctl stop 不触发 OnFailure，表会残留
+_d20 = open(os.path.join(ROOT, "systemd", "sing-box.service.d",
+                         "20-seedrou-dns-split.conf"), encoding="utf-8").read()
+assert re.search(r'^ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare', _d20, re.M), \
+    "P3-19 回归：drop-in 缺 ExecStartPre（配置在启动后才写，不生效）"
+assert re.search(r'^ExecStartPost=\+/usr/local/lib/seedrou/dns-split-sync', _d20, re.M), \
+    "P3-19 回归：ExecStartPost 缺 + 前缀（sing-box 用户无权限写 nft）"
+assert re.search(r'^ExecStopPost=\+/usr/local/lib/seedrou/dns-split-teardown', _d20, re.M), \
+    "P3-19 回归：drop-in 缺 ExecStopPost（手动 stop 后表残留 → 全网断 DNS）"
+
+# cleanup：OnFailure 路径的双保险
+_cu = open(os.path.join(ROOT, "priv", "singbox-cleanup"), encoding="utf-8").read()
+assert "seedrou_dns" in _cu, "P3-19 回归：singbox-cleanup 没删 DNS 分流表（崩溃后断 DNS）"
+
+# 安装 / 卸载 / 升级通道三处必须同步（A-04 同族，已经踩过四次）
+_inst = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
+for _f in ("dns-split-prepare", "dns-split-sync", "dns-split-teardown"):
+    assert f'priv/{_f}"' in _inst, f"P3-19 回归：install.sh 没安装 {_f}"
+assert "20-seedrou-dns-split.conf" in _inst, "P3-19 回归：install.sh 没装 DNS 分流 drop-in"
+
+_un = open(os.path.join(ROOT, "uninstall.sh"), encoding="utf-8").read()
+assert "20-seedrou-dns-split.conf" in _un, "P3-19 回归：uninstall.sh 没清 drop-in"
+assert "nft delete table inet seedrou_dns" in _un, "P3-19 回归：uninstall.sh 没清 nft 表"
+for _f in ("dns-split-prepare", "dns-split-sync", "dns-split-teardown"):
+    assert f"/usr/local/lib/seedrou/{_f}" in _un, f"P3-19 回归：uninstall.sh 没清 {_f}"
+
+assert "20-seedrou-dns-split.conf" in _priv_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
+assert "dns-split-prepare" in _priv_src, "P3-19 回归：升级通道没同步 dns-split-prepare"
+
+# 前缀变更钩子必须重新生成配置：source_ip_cidr 里含旧 v6 前缀，
+# nft 表里白名单的 v6 DNS 目标也指向 dnsmasq 的旧全局地址
+assert "dns-split-prepare" in _hook3, \
+    "P3-19 回归：前缀变更后没重新生成 DNS 配置（v6 网段停在旧前缀）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
-      "观察②③ 全部通过")
+      "P3-19DNS按MAC分流/观察②③ 全部通过")

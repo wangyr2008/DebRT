@@ -25,8 +25,11 @@
 
 1. **永不 `nft flush ruleset`**。应用配置时只 `delete table inet seedrou_base` 后重建自己的表；
    `sing-box`、podman（netavark）的表原样保留（tailscale 自 0.1.32 起以 sing-box endpoint 托管，不再有独立表）。
-2. **除"LAN IPv6 前缀变更"这一种情形外，永不 restart / disable `sing-box.service`**，也不读写 `/etc/sing-box/`。
-   面板与收敛定时器（`apply-all --convergent`）都不触碰它。
+2. **除"LAN IPv6 前缀变更"这一种情形外，永不 restart / disable `sing-box.service`**；
+   **永不读写 `/etc/sing-box/config.json`**（那是 sub-store 的地盘）。
+   SeedRou 只写自己那一个文件 `/etc/sing-box/00-seedrou-dns.json`——靠 `-C /etc/sing-box`
+   的目录合并排在最前面，订阅更新覆盖 `config.json` 时它纹丝不动。
+   面板与收敛定时器（`apply-all --convergent`）都不触碰 sing-box 本体。
    唯一例外：`90-seedrou-lan-prefix` 在 WAN 重拨导致 br-lan 前缀**确实变化**时执行一次
    `systemctl try-restart sing-box`。原因是 `auto_redirect` 的 nft 集合 `inet*_local_address_set`
    只在启动时构建，前缀变了不重建就会把发往新 LAN 前缀（含路由器自身新地址）的流量误判成
@@ -46,6 +49,14 @@
 
 ## 3. 已知交互（属预期行为，非故障）
 
+- **DNS 按 MAC 分两路（v0.1.57）**：fakeip 是 sing-box 的全局 DNS 行为，而 tun 拦截按
+  `include_mac_address` 走——两者不同步时，非白名单设备会拿到 fakeip 却没人接管（黑洞）。
+  解法在 nft 层：`inet seedrou_dns` 把 br-lan 的 53 端口按 `ether saddr` 分成两路，
+  白名单回导 dnsmasq（走 fakeip）、其余 DNAT 到 sing-box 的 DNS 监听器（走运营商真实解析）。
+  两张表由 `sing-box.service` 的 drop-in 维护：`ExecStartPre` 生成
+  `00-seedrou-dns.json`、`ExecStartPost` 建表、`ExecStopPost` 删表。
+  **手动 `systemctl stop sing-box` 后表会被删掉，DNS 自动回落 dnsmasq**——这是刻意的：
+  代理挂了不该连带把全网 DNS 拖死。日志：`journalctl -t seedrou-dns-split`。
 - **LAN 客户端 DNS 到 192.168.10.1 仍走 dnsmasq**：目标是本机地址，走 main 表本地投递，不入 tun。
 - **dnsmasq 的上游查询会被 sing-box 劫持**（你的配置 `port 53 / protocol dns → hijack-dns`），
   这是你的分流策略的一部分；sing-box 停止后自动回落直连解析。
@@ -76,4 +87,6 @@
 | LAN 192.168.10.0/24 | 避开 tun/fakeip/podman 常用段 |
 | NAT6 ULA `fda1:9e3a:8b7f::/48` | 避开 tun 的 fdfe:dcba::/126 |
 | 面板端口 80 | 与 7890/9090/53/67 无冲突 |
-| 不劫持 53 端口转发规则 | DNS 分流权完全归 sing-box |
+| 不劫持 53 端口转发规则 | 域名分流权完全归 sing-box |
+| DNS 分流只动 br-lan 的 53 端口 | 不碰 sing-box 的 7890/9090，也不碰 WAN 入站 |
+| `include_mac_address` 为空则不建分流表 | 空 = 不限 MAC = 全部进 tun，此时全部 DNS 走 fakeip 才自洽 |

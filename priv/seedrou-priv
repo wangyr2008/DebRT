@@ -1326,6 +1326,21 @@ sys.exit(0 if ok else 1)
     # P3-02：PPPoE 拨号单元在 network/systemd/ 下，不在 systemd/ 的 glob 里——
     # 升级通道此前永远不同步它（install.sh 只管全新安装；与 A-04/R-01 同族第三处）
     install -m 644 /usr/local/lib/seedrou/network/systemd/seedrou-pppoe.service /etc/systemd/system/ 2>/dev/null || true
+    # v0.1.57：DNS 分流 drop-in（启动前生成 00-seedrou-dns.json、启动后派生 nft 表、
+    # 停止时删表回落 dnsmasq）。与 A-04/R-01/P3-02/P3-18 同族——升级通道漏装时
+    # 面板版本号已是最新，排查极误导，所以这里用覆盖写而不是"不存在才创建"
+    if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
+      install -d -m 755 /etc/systemd/system/sing-box.service.d 2>/dev/null || true
+      cat > /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf <<'DPEOF'
+# 由 SeedRou 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
+# 启动前生成 00-seedrou-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
+[Service]
+ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare
+ExecStartPost=+/usr/local/lib/seedrou/dns-split-sync
+ExecStopPost=+/usr/local/lib/seedrou/dns-split-teardown
+DPEOF
+      systemctl daemon-reload 2>/dev/null || true
+    fi
     if [ -f /usr/local/lib/seedrou/sudoers/seedrou ]; then
       install -m 440 /usr/local/lib/seedrou/sudoers/seedrou /etc/sudoers.d/seedrou.upgrade-tmp 2>/dev/null || true
       if visudo -c -f /etc/sudoers.d/seedrou.upgrade-tmp >/dev/null 2>&1; then

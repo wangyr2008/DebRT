@@ -252,18 +252,23 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
   esac
 }
 
-# sing-box 共存维护：sing-box.service 存在但缺"等 WAN"drop-in 时自动补挂
+# sing-box 共存维护：sing-box.service 存在但缺 drop-in 时自动补挂
 # （覆盖"先装 SeedRou 后装 sing-box"的场景；幂等，见 COEXISTENCE.md）
+#   10-…wait-wan    启动前等 WAN（防 auto_route 死循环）
+#   20-…dns-split   启动前生成 DNS 分流配置、启动后派生 nft 表、停止时删表
 maintain_singbox_dropin() {
-  local di="/etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf"
+  local dir="/etc/systemd/system/sing-box.service.d"
+  local d10="$dir/10-seedrou-wait-wan.conf"
+  local d20="$dir/20-seedrou-dns-split.conf"
   # A-2：官方 deb 把单元装在 /usr/lib/systemd/system（/etc 下永远没有）——
   # 必须用机制级判断，文件路径检测会让 drop-in 兜底机制在默认安装路径上失效
   systemctl list-unit-files sing-box.service >/dev/null 2>&1 || return 0
-  [ -f /usr/local/lib/seedrou/wait-wan ] || return 0
-  [ -f "$di" ] && return 0
-  mkdir -p /etc/systemd/system/sing-box.service.d
-  # 内容与发行版 systemd/sing-box.service.d/10-seedrou-wait-wan.conf 保持一致
-  cat > "$di" <<'DPEOF'
+  mkdir -p "$dir"
+  local changed=0
+
+  if [ ! -f "$d10" ] && [ -f /usr/local/lib/seedrou/wait-wan ]; then
+    # 内容与发行版 systemd/sing-box.service.d/10-seedrou-wait-wan.conf 保持一致
+    cat > "$d10" <<'DPEOF'
 # 由 SeedRou 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
 [Unit]
 OnFailure=seedrou-singbox-cleanup.service
@@ -273,8 +278,25 @@ TimeoutStartSec=210
 Restart=on-failure
 RestartSec=3
 DPEOF
-  systemctl daemon-reload
-  echo "wait-wan: 已为 sing-box 安装 WAN 就绪 drop-in"
+    echo "wait-wan: 已为 sing-box 安装 WAN 就绪 drop-in"
+    changed=1
+  fi
+
+  if [ ! -f "$d20" ] && [ -f /usr/local/lib/seedrou/dns-split-sync ]; then
+    # 内容与发行版 systemd/sing-box.service.d/20-seedrou-dns-split.conf 保持一致
+    cat > "$d20" <<'DPEOF'
+# 由 SeedRou 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
+# 启动前生成 00-seedrou-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
+[Service]
+ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare
+ExecStartPost=+/usr/local/lib/seedrou/dns-split-sync
+ExecStopPost=+/usr/local/lib/seedrou/dns-split-teardown
+DPEOF
+    echo "dns-split: 已为 sing-box 安装 DNS 分流 drop-in"
+    changed=1
+  fi
+
+  [ "$changed" = "1" ] && systemctl daemon-reload
   return 0
 }
 

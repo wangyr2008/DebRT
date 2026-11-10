@@ -40,8 +40,11 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       /etc/systemd/system/seedrou-dns-sync.service /usr/local/lib/seedrou/wait-dns-upstream \
       /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf \
       /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
+      /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf \
       /etc/systemd/system/seedrou-singbox-cleanup.service \
       /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/singbox-cleanup \
+      /usr/local/lib/seedrou/dns-split-prepare /usr/local/lib/seedrou/dns-split-sync \
+      /usr/local/lib/seedrou/dns-split-teardown \
       /etc/dnsmasq.d/seedrou.conf /etc/nftables.d/seedrou-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
       /etc/systemd/network/25-ppp0.network \
@@ -50,6 +53,8 @@ rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/s
       # 卸载不清则转手/回收机器时是凭据泄漏点；25-ppp0.network 不清则 networkd
       # 继续尝试在 ppp0 上跑 DHCPv6。均为 SeedRou 生成物（原文件内容已被覆盖）
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
+# DNS 分流表：把客户端 DNS DNAT 到 tun 的地址，卸载后没人监听，必须清掉
+nft delete table inet seedrou_dns 2>/dev/null || true
 # sb.sh 与其 cron 由 SeedRou 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
 if [ -f /usr/local/bin/sb ]; then rm -f /usr/local/bin/sb; echo "[卸载] 已移除 /usr/local/bin/sb"; fi
 if [ -f /etc/cron.d/sing-box ]; then rm -f /etc/cron.d/sing-box; echo "[卸载] 已移除 sing-box 每日更新 cron"; fi

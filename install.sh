@@ -185,11 +185,19 @@ if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
   mkdir -p /etc/systemd/system/sing-box.service.d
   install -m 644 "$SRC_DIR/systemd/sing-box.service.d/10-seedrou-wait-wan.conf" \
     /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf
-  c_info "检测到 sing-box：已安装 WAN 就绪 drop-in（priv/wait-wan）"
+  # DNS 分流：启动前生成 00-seedrou-dns.json、启动后派生 nft 表、停止时删表
+  install -m 644 "$SRC_DIR/systemd/sing-box.service.d/20-seedrou-dns-split.conf" \
+    /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf
+  c_info "检测到 sing-box：已安装 WAN 就绪 + DNS 分流 drop-in"
 fi
 # singbox-cleanup 单元/脚本无条件安装（幂等无害；后装 sing-box 的用户由 converge 补 drop-in）
 install -m 755 "$SRC_DIR/priv/singbox-cleanup" "$LIB_DIR/singbox-cleanup"
 install -m 644 "$SRC_DIR/systemd/seedrou-singbox-cleanup.service" /etc/systemd/system/
+# DNS 分流三件套（prepare/sync/teardown）——只由 sing-box 的 drop-in 调用，
+# 没有 sing-box 时不会被触发，安装无害
+install -m 755 "$SRC_DIR/priv/dns-split-prepare"  "$LIB_DIR/dns-split-prepare"
+install -m 755 "$SRC_DIR/priv/dns-split-sync"     "$LIB_DIR/dns-split-sync"
+install -m 755 "$SRC_DIR/priv/dns-split-teardown" "$LIB_DIR/dns-split-teardown"
 # 接管网口：清理 ifupdown/dhcpcd 残留——否则 dhcpcd 会在网桥端口上跑 DHCP 客户端、
 # 覆写 /etc/resolv.conf、留下指向 link-local 的死默认路由（真机首装实测）
 if [ -f /etc/network/interfaces ] && [ -f "$ETC_DIR/config.json" ]; then

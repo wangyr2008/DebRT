@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# dns-split-prepare —— sing-box 启动前生成 00-seedrou-dns.json
+#
+# 为什么必须在启动前：sing-box 用 -C /etc/sing-box 做目录合并，配置只在启动时读取。
+# 启动后再写这个文件不会生效，所以本脚本挂在 ExecStartPre（wait-wan 之后）。
+#
+# 生成内容（只含「设备维度」的规则，域名维度的分流归 sub-store 的 config.json）：
+#   1. xxx.lan          → dnsmasq（landns），保住本地主机名与 PTR 反查
+#   2. 局域网来源 A/AAAA → 运营商 DNS（carrier），拿到真实 IP
+#
+# source_ip_cidr 里的 IPv6 前缀是 PD 委派的、会变，所以每次启动都重新生成。
+# 写文件用 tmp + rename，避免 sing-box 读到半个 JSON。
+set -u
+
+CONF=/etc/sing-box/config.json
+DNSJSON=/etc/sing-box/00-seedrou-dns.json
+[ -f "$CONF" ] || exit 0
+
+# br-lan 的 v4 地址（dnsmasq 的监听地址，也是客户端 DNS 指向）
+# 同时兼容多行（inet 在行首）与 ip -o 单行（inet 在第 3 列）两种输出——
+# 只写 $1 == "inet" 的话，单行格式会静默回落到默认值，LAN 不是 192.168.10.x 时写错地址
+LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
+       | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
+              $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
+[ -n "$LAN4" ] || LAN4="192.168.10.1"
+
+# br-lan 的全局 v6 前缀，统一成 x:x:x:x::/64
+# 用 ipaddress 而不是 awk 拼 hextet：地址带 :: 压缩时（如 fd00:1234::1/64）
+# awk 的 split 会分出错位的空字段，拼出 fd00:1234::1::/64 这种非法前缀
+LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null \
+       | awk '$1 == "inet6" { print $2; exit } $3 == "inet6" { print $4; exit }' \
+       | python3 -c '
+import sys, ipaddress
+s = sys.stdin.read().strip()
+if s:
+    try:
+        net = ipaddress.ip_interface(s).network
+        if net.prefixlen == 64:
+            # 必须打印整个网络（含 /64）——只打印 network_address 会得到裸地址，
+            # sing-box 的 source_ip_cidr 不接受不带前缀长度的 IPv6
+            print(net)
+    except Exception:
+        pass
+' 2>/dev/null)
+
+# 运营商 DNS：用 dispatcher 已经算好的上游文件里的 v4 服务器，
+# 保证「非白名单设备的解析结果」和「dnsmasq 的上游」是同一家，CDN 调度一致
+CARRIER=""
+if [ -f /run/seedrou-dns/upstream.conf ]; then
+    CARRIER=$(sed -n 's/^server=\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' \
+              /run/seedrou-dns/upstream.conf 2>/dev/null | head -1)
+fi
+[ -n "$CARRIER" ] || CARRIER="211.138.164.6"
+
+python3 - "$DNSJSON" "$LAN4" "$LAN6" "$CARRIER" <<'PYEOF'
+import json, os, sys
+
+path, lan4, lan6, carrier = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+# 局域网网段：v4 取 /24（与 br-lan 的地址同网段），v6 用 PD 前缀
+cidrs = [lan4.rsplit(".", 1)[0] + ".0/24"]
+if lan6:
+    cidrs.append(lan6)
+
+cfg = {
+    "dns": {
+        "servers": [
+            {"type": "udp", "server": lan4,    "tag": "landns"},
+            {"type": "udp", "server": carrier, "tag": "carrier"},
+        ],
+        "rules": [
+            # 本地主机名优先，且必须在 carrier 规则之前
+            {"domain_suffix": ["lan"], "server": "landns"},
+            # 非白名单设备的查询落到这里 → 真实 IP；白名单设备的查询在 nft 层
+            # 就被导回 dnsmasq 了，走不到这条
+            {"source_ip_cidr": cidrs, "query_type": ["A", "AAAA"], "server": "carrier"},
+        ],
+    }
+}
+
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PYEOF
+
+# 文件由 sing-box 用户创建（ExecStartPre 以 User=sing-box 运行），属主本来就对；
+# 这里只在以 root 手动执行时兜底修正，失败不影响功能
+chown sing-box:sing-box "$DNSJSON" 2>/dev/null || true
+exit 0

@@ -85,11 +85,21 @@ for r in $(ip -6 route show dev br-lan 2>/dev/null \
         && logger -t seedrou-lan "已清理旧前缀路由 $r"
 done
 
-# ② 重建 sing-box 的本地地址集合。只在它真在用 auto_redirect（nft 表里有
+# ② 前缀变了，先重新生成 DNS 分流配置：
+#    00-seedrou-dns.json 的 source_ip_cidr 里含旧 v6 前缀，
+#    nft 表里白名单的 v6 DNS 目标也指向 dnsmasq 的旧全局地址。
+#    必须在重启 sing-box 之前写文件——它只在启动时读配置。
+/usr/local/lib/seedrou/dns-split-prepare 2>/dev/null || true
+
+# ③ 重建 sing-box 的本地地址集合。只在它真在用 auto_redirect（nft 表里有
 #    local_address_set）时才重启——没有这套集合时重启只会白断一次代理。
 if systemctl is-active --quiet sing-box.service 2>/dev/null \
    && nft list table inet sing-box 2>/dev/null | grep -q "local_address_set"; then
     systemctl try-restart sing-box.service 2>/dev/null \
         && logger -t seedrou-lan "sing-box 已重启（重建 local_address_set）"
+else
+    # sing-box 没在跑（或没启用 auto_redirect）：重启不会发生，也就不会触发
+    # ExecStartPost，这里手动刷新 nft 分流表，让白名单设备的 v6 DNS 目标跟上新前缀
+    /usr/local/lib/seedrou/dns-split-sync 2>/dev/null || true
 fi
 exit 0
