@@ -1,0 +1,8 @@
+# DebRT：面板用户仅可经此唯一入口执行特权操作（子命令白名单在脚本内部再校验）
+Defaults:dert !requiretty
+# sudo 审计写入专用日志文件（/etc/logrotate.d/dert 负责轮转）。
+# 注意：不能写 "!syslog, logfile=..." —— sudoers 里 syslog 是取值选项而非布尔旗标，
+# 加 ! 会被 visudo 拒绝（CI 冒烟实测），因此采用双重记录；面板轮询已放宽到 8 秒。
+Defaults:dert logfile=/var/log/dert-sudo.log
+Cmnd_Alias DERT_PRIV = /usr/local/lib/dert/dert-priv *
+dert ALL=(root) NOPASSWD: DERT_PRIV

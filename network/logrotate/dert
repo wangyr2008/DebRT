@@ -1,4 +1,4 @@
-/var/log/seedrou-sudo.log {
+/var/log/dert-sudo.log {
     weekly
     rotate 4
     compress

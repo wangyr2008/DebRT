@@ -12,11 +12,11 @@ set -u
 # restart 场景下 ExecStopPost 先跑、ExecStartPost 后跑，中间有几毫秒无表窗口，
 # 客户端此时走 dnsmasq，正常。这里只负责把表清掉，不判断 sing-box 是否还活着。
 #
-# 匹配用 "seedrou_dns" 而不是 "table seedrou_dns"：nft list tables 的实际输出是
-# "table inet seedrou_dns"（含 family），带 table 前缀的匹配永远命中不了，
+# 匹配用 "dert_dns" 而不是 "table dert_dns"：nft list tables 的实际输出是
+# "table inet dert_dns"（含 family），带 table 前缀的匹配永远命中不了，
 # 表会一直残留 —— 真机首测就踩到这个，DNS 无法回落。
-if nft list tables 2>/dev/null | grep -q "seedrou_dns"; then
-    nft delete table inet seedrou_dns 2>/dev/null \
-        && logger -t seedrou-dns-split "sing-box 已停止，DNS 分流表已删除（回落 dnsmasq）"
+if nft list tables 2>/dev/null | grep -q "dert_dns"; then
+    nft delete table inet dert_dns 2>/dev/null \
+        && logger -t dert-dns-split "sing-box 已停止，DNS 分流表已删除（回落 dnsmasq）"
 fi
 exit 0

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# SeedRou 特权入口 —— 面板经 sudo 白名单唯一直达的 root 脚本。
+# DebRT 特权入口 —— 面板经 sudo 白名单唯一直达的 root 脚本。
 #
 # 安全设计：
 #   * 子命令白名单分发，绝不 eval 用户输入；
@@ -9,7 +9,7 @@
 #     失败自动回滚，并以可操作的 JSON 错误返回；
 #   * 与 sing-box / podman 的共存契约见 COEXISTENCE.md（tailscale 自 0.1.32 起
 #     以 sing-box endpoint 托管，本层不再管理 tailscaled）：
-#     本脚本只操作自己的 nft 表 inet seedrou_base，永不 flush ruleset，
+#     本脚本只操作自己的 nft 表 inet dert_base，永不 flush ruleset，
 #     永不 restart sing-box。
 # ============================================================================
 set -u
@@ -36,17 +36,17 @@ do_auth_verify() {
   # 暴力破解兜底限速：按来源 IP 的限速在面板层做；本层是全局兜底（20 次失败锁 300 秒），
   # 阈值放宽以免全局单计数器被用来把管理员锁在门外（审计 B-18）。
   lock_state='{"fails":0,"lock_until":0}'
-  [ -f "${SEEDROU_VAR}/auth-state.json" ] && lock_state="$(cat "${SEEDROU_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
+  [ -f "${DERT_VAR}/auth-state.json" ] && lock_state="$(cat "${DERT_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
   # 密码经环境变量传入（/proc/<pid>/environ 为 0400 root，ps 不可见），不走 argv（审计 B-15）
-  out="$(SEEDROU_SECRET="$pw" python3 - "$lock_state" <<'PYEOF'
+  out="$(DERT_SECRET="$pw" python3 - "$lock_state" <<'PYEOF'
 import json, os, sys, time
-sys.path.insert(0, "/usr/local/lib/seedrou")
+sys.path.insert(0, "/usr/local/lib/dert")
 import pwhash
 try:
     state = json.loads(sys.argv[1])
 except Exception:
     state = {"fails": 0, "lock_until": 0}  # P3-1：状态损坏兜底——限速计数可丢，登录不能丢
-pw = os.environ.get("SEEDROU_SECRET", "")
+pw = os.environ.get("DERT_SECRET", "")
 now = int(time.time())
 if state.get("lock_until", 0) > now:
     print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
@@ -57,13 +57,13 @@ elif state.get("lock_until", 0):
     state["fails"] = 0        # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
     state["lock_until"] = 0   # 过期时间戳一并清零（复审顺手项）
 try:
-    rec = json.load(open("/etc/seedrou/secrets.json"))["admin_pbkdf2"]
+    rec = json.load(open("/etc/dert/secrets.json"))["admin_pbkdf2"]
     ok = pwhash.verify(pw, rec)
 except ValueError:
     # 记录格式坏：与"密码不正确"区分开，CI/排查一眼定位（六审建议）
     print(json.dumps({"ok": False, "code": "AUTH_RECORD_BAD",
                       "message": "密码记录无法解析（secrets.json 可能损坏或来自旧版本）",
-                      "hint": "在系统上执行：rm /etc/seedrou/secrets.json && sudo bash install.sh 重新生成密码"}))
+                      "hint": "在系统上执行：rm /etc/dert/secrets.json && sudo bash install.sh 重新生成密码"}))
     sys.exit(1)
 except Exception:
     ok = False
@@ -77,13 +77,13 @@ else:
         state["lock_until"] = now + 300
         print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
                           "message": "连续多次密码错误，已临时锁定 5 分钟",
-                          "hint": "若忘记密码：长按机身 Reset 键 8 秒恢复出厂，或在控制台执行 seedrou-priv factory-reset"}))
+                          "hint": "若忘记密码：长按机身 Reset 键 8 秒恢复出厂，或在控制台执行 dert-priv factory-reset"}))
     else:
         print(json.dumps({"ok": False, "code": "AUTH_BAD",
                           "message": "管理密码不正确", "hint": "请检查密码后重试"}))
 # P3-1：全项目 /etc 写入都是 tmp+os.replace，唯独这里曾直写——断电写一半会
 # 打碎 auth-state.json，下次 json.loads 抛异常 → 无输出 → 登录不可用（须 root 手删）
-state_path = "/var/lib/seedrou/auth-state.json"
+state_path = "/var/lib/dert/auth-state.json"
 with open(state_path + ".tmp", "w") as f:
     json.dump(state, f)
 os.replace(state_path + ".tmp", state_path)
@@ -98,7 +98,7 @@ do_session_secret() {
   python3 - <<'PYEOF'
 import json
 try:
-    s = json.load(open("/etc/seedrou/secrets.json")).get("session_secret", "")
+    s = json.load(open("/etc/dert/secrets.json")).get("session_secret", "")
     print(json.dumps({"ok": True, "secret": s}))
 except Exception:
     print(json.dumps({"ok": False, "code": "NO_SECRET", "message": "secrets.json 缺失或损坏", "hint": "请重新运行 install.sh"}))
@@ -111,9 +111,9 @@ PYEOF
 do_config_get() {
   python3 - <<'PYEOF'
 import json
-cfg = json.load(open("/etc/seedrou/config.json"))
+cfg = json.load(open("/etc/dert/config.json"))
 try:
-    has_pw = bool(json.load(open("/etc/seedrou/secrets.json")).get("pppoe_password"))
+    has_pw = bool(json.load(open("/etc/dert/secrets.json")).get("pppoe_password"))
 except Exception:
     has_pw = False
 cfg.setdefault("wan", {})["has_password"] = has_pw
@@ -132,7 +132,7 @@ do_config_set() {
   acquire_lock
 
   local in_json norm tag stage man_json pre_wan acts failed
-  in_json="$(mktemp /run/seedrou/in.XXXXXX)"
+  in_json="$(mktemp /run/dert/in.XXXXXX)"
   cat > "$in_json"
 
   # 1) 校验与规范化（失败时 validate.py 直接输出可操作的 JSON 错误）
@@ -144,19 +144,19 @@ do_config_set() {
   # 此前把 norm JSON 字符串当文件路径 open()，保存静默失败，真机实测）
   if [ "$section" = "upgrade" ]; then
     local norm_file
-    norm_file="$(mktemp /run/seedrou/norm.XXXXXX)"
+    norm_file="$(mktemp /run/dert/norm.XXXXXX)"
     chmod 600 "$norm_file"
     printf '%s' "$norm" > "$norm_file"
     if ! python3 - "$in_json" "$norm_file" <<'PYEOF'
 import json, sys, os
 in_file, norm_file = sys.argv[1], sys.argv[2]
 norm = json.load(open(norm_file))["data"]
-cfg = json.load(open("/etc/seedrou/config.json"))
+cfg = json.load(open("/etc/dert/config.json"))
 cfg["upgrade"] = norm
-tmp = "/etc/seedrou/.config.tmp"
+tmp = "/etc/dert/.config.tmp"
 json.dump(cfg, open(tmp, "w"), ensure_ascii=False, indent=1)
 os.chmod(tmp, 0o644)
-os.replace(tmp, "/etc/seedrou/config.json")
+os.replace(tmp, "/etc/dert/config.json")
 PYEOF
     then
       rm -f "$in_json" "$norm_file"
@@ -176,19 +176,19 @@ PYEOF
   tag="s$(date +%s%N | tail -c 9)"
   snapshot_lastgood "$tag"
   local new_cfg new_sec norm_file
-  new_cfg="$(mktemp /run/seedrou/cfg.XXXXXX)"
-  new_sec="$(mktemp /run/seedrou/sec.XXXXXX)"
-  norm_file="$(mktemp /run/seedrou/norm.XXXXXX)"
+  new_cfg="$(mktemp /run/dert/cfg.XXXXXX)"
+  new_sec="$(mktemp /run/dert/sec.XXXXXX)"
+  norm_file="$(mktemp /run/dert/norm.XXXXXX)"
   chmod 600 "$new_sec" "$norm_file"
   printf '%s' "$norm" > "$norm_file"
   if ! python3 - "$section" "$in_json" "$norm_file" "$new_cfg" "$new_sec" <<'PYEOF'
 import json, sys
 section, in_file, norm_file, out_cfg, out_sec = sys.argv[1:6]
-cfg = json.load(open("/etc/seedrou/config.json"))
+cfg = json.load(open("/etc/dert/config.json"))
 sec_in = json.load(open(in_file))
 norm = json.load(open(norm_file))["data"]
 try:
-    secrets = json.load(open("/etc/seedrou/secrets.json"))
+    secrets = json.load(open("/etc/dert/secrets.json"))
 except Exception:
     secrets = {}
 if section == "bind":
@@ -228,7 +228,7 @@ PYEOF
     die "MERGE" "配置合并失败" "本次修改未生效；请刷新页面重试"
   fi
 
-  # 3) 先采样 + 落盘：netgen 读固定路径 /etc/seedrou/config.json，必须让它在
+  # 3) 先采样 + 落盘：netgen 读固定路径 /etc/dert/config.json，必须让它在
   #    生成前看到"新配置"，否则每次保存生效的都是上一版（复审 v0.1.2 P-01）
   #    pre_wan 语义仍是"改动前 WAN 是否可用"（审计 B-03），在写盘前采样
   pre_wan="$(wan_route_ok)"
@@ -236,7 +236,7 @@ PYEOF
   [ -s "$new_sec" ] && write_atomic "$SECRETS_JSON" 600 < "$new_sec"
 
   # 4) 用新配置生成 + 预检。此时原生文件尚未部署，失败回滚后系统与旧配置完全一致（安全）
-  stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+  stage="$(mktemp -d /run/dert/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json"; then
     cat "$man_json"
@@ -283,12 +283,12 @@ PYEOF
     if [ "$section" = "wan" ] && [ "$mode" = "pppoe" ]; then tmo=45; else tmo=25; fi
     if ! wait_wan "$tmo"; then
       if [ "$mode" = "pppoe" ]; then
-        if journalctl -u seedrou-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "PAP authentication failed|CHAP authentication failed|authentication failed"; then
+        if journalctl -u dert-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "PAP authentication failed|CHAP authentication failed|authentication failed"; then
           err_hint="PPPoE 拨号被服务器拒绝（认证失败）：请检查宽带账号/密码是否正确；若账号正在其他设备上拨号，请先断开再试"
-        elif journalctl -u seedrou-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "timeout|LCP: timeout|No response"; then
+        elif journalctl -u dert-pppoe.service -n 40 --no-pager 2>/dev/null | grep -qiE "timeout|LCP: timeout|No response"; then
           err_hint="PPPoE 服务器无响应：请确认光猫已改为桥接模式、WAN 线已插在绑定的 WAN 口上"
         else
-          err_hint="PPPoE 未能在预期时间内建立连接：journalctl -u seedrou-pppoe -n 40 查看详情"
+          err_hint="PPPoE 未能在预期时间内建立连接：journalctl -u dert-pppoe -n 40 查看详情"
         fi
       else
         err_hint="应用后 WAN 未能恢复连接：请检查上级网络/网线；可尝试在「网络设置」重新保存上网设置"
@@ -301,7 +301,7 @@ PYEOF
     # 回滚到修改前配置并重放
     restore_lastgood "$tag"
     local stage2 man2
-    stage2="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+    stage2="$(mktemp -d /run/dert/stage.XXXXXX)"
     man2="$stage2/manifest.json"
     if python3 "${PRIV_DIR}/netgen.py" --stage "$stage2" > "$man2" 2>/dev/null; then
       apply_stage_files "$stage2" "$man2"
@@ -330,10 +330,10 @@ PYEOF
 do_apply_all() {
   require_root
   local convergent=""; [ "${1:-}" = "--convergent" ] && convergent="1"
-  mkdir -p /run/seedrou-dns /run/seedrou
+  mkdir -p /run/dert-dns /run/dert
   acquire_lock
   local stage man_json migrated=""
-  stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+  stage="$(mktemp -d /run/dert/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
     # P3-12：生成器的 stderr 不再丢弃——结构损坏（KeyError / AddressValueError）时
@@ -350,20 +350,20 @@ do_apply_all() {
       snapshot_lastgood "m$(date +%s)"
       MIGFIX="$(python3 - <<'INNERPYEOF'
 import json, os
-cfg = json.load(open("/etc/seedrou/config.json"))
+cfg = json.load(open("/etc/dert/config.json"))
 fixes = []
 if cfg.get("lan", {}).get("mask") != "255.255.255.0":
     cfg["lan"]["mask"] = "255.255.255.0"
     fixes.append("LAN 掩码迁移为 /24")
-json.dump(cfg, open("/etc/seedrou/.config.tmp", "w"), ensure_ascii=False, indent=1)
-os.replace("/etc/seedrou/.config.tmp", "/etc/seedrou/config.json")
+json.dump(cfg, open("/etc/dert/.config.tmp", "w"), ensure_ascii=False, indent=1)
+os.replace("/etc/dert/.config.tmp", "/etc/dert/config.json")
 print("；".join(fixes))
 INNERPYEOF
 )"
       if [ -n "$MIGFIX" ]; then
         migrated="已自动修正不兼容的存量配置（$MIGFIX）"
         rm -rf "$stage"
-        stage="$(mktemp -d /run/seedrou/stage.XXXXXX)"
+        stage="$(mktemp -d /run/dert/stage.XXXXXX)"
         man_json="$stage/manifest.json"
         if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
           # 迁移成功：继续正常流程（跳过下方 die）
@@ -382,7 +382,7 @@ INNERPYEOF
       cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
       mark_converge_failed
       rm -rf "$stage"
-      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/seedrou/lastgood 恢复上一份可用配置${gen_err:+。生成器输出：$gen_err}"
+      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/dert/lastgood 恢复上一份可用配置${gen_err:+。生成器输出：$gen_err}"
     fi
   fi
 
@@ -410,9 +410,9 @@ PYEOF
       maintain_singbox_dropin
       clear_converge_failed
       # 暂存目录必须清：这里是"无漂移"的提前返回，早于下方全量路径的清理语句。
-      # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/seedrou 留一份完整生成物，
+      # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/dert 留一份完整生成物，
       # 其中 etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 实测：开机后
-      # /run/seedrou/stage.XXXXXX 里躺着 chap-secrets/pap-secrets，重启才清）
+      # /run/dert/stage.XXXXXX 里躺着 chap-secrets/pap-secrets，重启才清）
       rm -rf "$stage"
       ok_out "message" "无漂移，运行时已确认" "converged" "true"
       exit 0
@@ -472,7 +472,7 @@ do_service_ctl() {
 # podman-ops
 # ---------------------------------------------------------------------------
 POD_LOCK=0
-pod_lock() { exec 8>/run/seedrou/podman.lock; flock -w 600 8 || die "BUSY" "另一个容器操作正在进行中，请稍后重试"; }
+pod_lock() { exec 8>/run/dert/podman.lock; flock -w 600 8 || die "BUSY" "另一个容器操作正在进行中，请稍后重试"; }
 
 podman_json() { python3 -c "$1"; }
 
@@ -573,26 +573,26 @@ print(json.dumps({"ok": True, "images": [imgs[k] for k in order]}))' ;;
     compose-get)
       ok_out "content" "$(python3 -c '
 import json, os
-p = "/etc/seedrou/compose.yaml"
+p = "/etc/dert/compose.yaml"
 print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || echo '""')" ;;
     compose-set)
-      write_atomic "${SEEDROU_ETC}/compose.yaml" 644
+      write_atomic "${DERT_ETC}/compose.yaml" 644
       ok_out "message" "Compose 文件已保存" ;;
     compose-deploy)
-      [ -f "${SEEDROU_ETC}/compose.yaml" ] || die "COMPOSE_EMPTY" "尚未保存 Compose 内容" "请先在文本框中填写并部署"
+      [ -f "${DERT_ETC}/compose.yaml" ] || die "COMPOSE_EMPTY" "尚未保存 Compose 内容" "请先在文本框中填写并部署"
       command -v podman-compose >/dev/null 2>&1 || die "COMPOSE_MISSING" "未安装 podman-compose" "在系统上执行 apt install podman-compose 后重试"
       local logf logtail
-      logf="$(mktemp /run/seedrou/compose.XXXXXX)"
-      if ! podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou up -d >"$logf" 2>&1; then
+      logf="$(mktemp /run/dert/compose.XXXXXX)"
+      if ! podman-compose -f "${DERT_ETC}/compose.yaml" -p dert up -d >"$logf" 2>&1; then
         # pod 建立时 cgroup slice 竞态：报 OCI "No such file or directory" 且容器
         # State=created——重试一次即好（真机实测一次）
         if grep -qiE "no such file or directory|OCI runtime" "$logf" && \
-           grep -qE "State=created|created" "$(podman ps -a --filter label=com.docker.compose.project=seedrou --format '{{.Names}}' 2>/dev/null | head -1 | xargs -r podman inspect -f '{{.State.Status}} {{.State.Error}}' 2>/dev/null)" 2>/dev/null; then
+           grep -qE "State=created|created" "$(podman ps -a --filter label=com.docker.compose.project=dert --format '{{.Names}}' 2>/dev/null | head -1 | xargs -r podman inspect -f '{{.State.Status}} {{.State.Error}}' 2>/dev/null)" 2>/dev/null; then
           sleep 2
-          podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou up -d >>"$logf" 2>&1 || true
+          podman-compose -f "${DERT_ETC}/compose.yaml" -p dert up -d >>"$logf" 2>&1 || true
         fi
       fi
-      if ! podman ps -a --filter label=com.docker.compose.project=seedrou --format '{{.Names}}' | head -1 | xargs -r test -n; then
+      if ! podman ps -a --filter label=com.docker.compose.project=dert --format '{{.Names}}' | head -1 | xargs -r test -n; then
         logtail="$(tail -n 4 "$logf" | tr '\n' ' ' | cut -c1-260)"
         rm -f "$logf"
         die "COMPOSE_FAIL" "Compose 部署失败" "常见原因：语法错误、镜像名/标签不存在、端口被占用。日志：${logtail}"
@@ -601,7 +601,7 @@ print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || e
       rm -f "$logf"
       ok_out "message" "Compose 已部署" "log_tail" "$logtail" ;;
     compose-stop)
-      podman-compose -f "${SEEDROU_ETC}/compose.yaml" -p seedrou down >/dev/null 2>&1 || true
+      podman-compose -f "${DERT_ETC}/compose.yaml" -p dert down >/dev/null 2>&1 || true
       ok_out "message" "Compose 已停止（数据卷保留）" ;;
     *) die "USAGE" "podman-ops 未知操作：${action}" ;;
   esac
@@ -742,7 +742,7 @@ if ui_dir:
     ui = os.path.isdir(full)
 custom = ""
 try:
-    custom = open("/var/lib/seedrou/singbox-dash-url").read().strip()
+    custom = open("/var/lib/dert/singbox-dash-url").read().strip()
 except Exception:
     custom = ""
 up_s = None
@@ -783,7 +783,7 @@ SBJ
       esac
       ok_out "message" "开机自启已$([ "$on" = on ] && echo 开启 || echo 关闭)" ;;
     install)
-      [ -x /usr/local/bin/sb ] || die "SB_NO_SB" "未找到 sb 命令" "sb.sh 由 SeedRou 安装包下发（/usr/local/bin/sb）；请重装 SeedRou"
+      [ -x /usr/local/bin/sb ] || die "SB_NO_SB" "未找到 sb 命令" "sb.sh 由 DebRT 安装包下发（/usr/local/bin/sb）；请重装 DebRT"
       local out rc
       out="$(/usr/local/bin/sb install 2>&1)" && rc=0 || rc=$?
       if [ "$rc" -ne 0 ]; then
@@ -802,7 +802,7 @@ SBJ
       esac
       python3 - "$url" <<'SBURL' || die "SB_URL_BAD" "配置地址不能指向内网或主机名无效" "请使用公网可访问的配置地址"
 import sys
-sys.path.insert(0, "/usr/local/lib/seedrou")
+sys.path.insert(0, "/usr/local/lib/dert")
 import validate
 from urllib.parse import urlparse
 host = (urlparse(sys.argv[1]).hostname or "").lower()
@@ -814,7 +814,7 @@ $url
 SBURLF
       ok_out "message" "配置地址已保存（页面上显示脱敏值）" ;;
     sub-update)
-      [ -x /usr/local/bin/sb ] || die "SB_NO_SB" "未找到 sb 命令" "sb.sh 由 SeedRou 安装包下发；请重装 SeedRou"
+      [ -x /usr/local/bin/sb ] || die "SB_NO_SB" "未找到 sb 命令" "sb.sh 由 DebRT 安装包下发；请重装 DebRT"
       local out rc st_ok st_err
       out="$(SB_UPDATE_TRIGGER=manual /usr/local/bin/sb update 2>&1)" && rc=0 || rc=$?
       st_ok="$(python3 -c 'import json;print("1" if json.load(open("/var/lib/sing-box/update-state.json")).get("ok") else "0")' 2>/dev/null || echo "$([ "$rc" -eq 0 ] && echo 1 || echo 0)")"
@@ -858,13 +858,13 @@ SBURLF
       local out rc
       out="$(/usr/local/bin/sb uninstall --yes 2>&1)" && rc=0 || rc=$?
       [ "$rc" -eq 0 ] || { printf '%s\n' "$out" | tail -n 5 >&2; die "SB_UNINSTALL_FAIL" "卸载失败" "以上为 sb 输出尾部；可稍后重试或在控制台执行 sb uninstall"; }
-      ok_out "message" "sing-box 已卸载（原配置备份在 /var/lib/seedrou/）" ;;
+      ok_out "message" "sing-box 已卸载（原配置备份在 /var/lib/dert/）" ;;
     dash-set)
       local url
       url="$(python3 -c 'import json,sys;print(str(json.load(sys.stdin).get("url","")).strip())' 2>/dev/null)" || die "SB_DASH_BAD" "请求格式错误"
-      mkdir -p /var/lib/seedrou
+      mkdir -p /var/lib/dert
       if [ -z "$url" ]; then
-        rm -f /var/lib/seedrou/singbox-dash-url
+        rm -f /var/lib/dert/singbox-dash-url
         ok_out "message" "Dashboard 地址已清除（回到按配置自动推导）"
         exit 0
       fi
@@ -872,7 +872,7 @@ SBURLF
         https://*|http://*) ;;
         *) die "SB_DASH_BAD" "Dashboard 地址需以 http(s):// 开头" "示例：https://metacubexd.pages.dev" ;;
       esac
-      write_atomic "/var/lib/seedrou/singbox-dash-url" 644 <<SBDASH
+      write_atomic "/var/lib/dert/singbox-dash-url" 644 <<SBDASH
 $url
 SBDASH
       ok_out "message" "Dashboard 地址已保存" ;;
@@ -900,15 +900,15 @@ do_passwd_set() {
   body="$(cat)"
   local out rc
   # body（含新旧密码）经环境变量传入，不进 argv（审计 B-15）
-  out="$(SEEDROU_SECRET="$body" python3 - <<'PYEOF'
+  out="$(DERT_SECRET="$body" python3 - <<'PYEOF'
 import json, os, sys, time
-sys.path.insert(0, "/usr/local/lib/seedrou")
+sys.path.insert(0, "/usr/local/lib/dert")
 import pwhash
-body = json.loads(os.environ["SEEDROU_SECRET"])
+body = json.loads(os.environ["DERT_SECRET"])
 old, new = body.get("old", ""), body.get("new", "")
-secrets = json.load(open("/etc/seedrou/secrets.json"))
+secrets = json.load(open("/etc/dert/secrets.json"))
 # C-2：原密码暴破限速（持有会话的攻击者此前可无限尝试）——5 次锁 5 分钟
-FAILS = "/var/lib/seedrou/passwd-fails.json"
+FAILS = "/var/lib/dert/passwd-fails.json"
 def pf_load():
     try:
         return json.load(open(FAILS))
@@ -949,12 +949,12 @@ if not (8 <= len(new) <= 32):
 secrets["admin_pbkdf2"] = pwhash.hash_new(new)
 # 轮换会话密钥：改密后所有旧会话（含可能被盗的 cookie）立即失效（审计 B-17）
 secrets["session_secret"] = os.urandom(32).hex()
-tmp = "/etc/seedrou/.secrets.tmp"
+tmp = "/etc/dert/.secrets.tmp"
 with open(tmp, "w") as f:
     json.dump(secrets, f, ensure_ascii=False, indent=1)
     f.flush(); os.fsync(f.fileno())
 os.chmod(tmp, 0o600)
-os.replace(tmp, "/etc/seedrou/secrets.json")
+os.replace(tmp, "/etc/dert/secrets.json")
 print(json.dumps({"ok": True, "message": "管理密码已更新"}))
 PYEOF
 )"
@@ -970,12 +970,12 @@ do_backup_create() {
   require_root
   local out_path="${1:?缺少输出路径}"
   tar -C / -czf "$out_path" \
-    --exclude='var/lib/seedrou/backups' --exclude='var/lib/seedrou/lastgood' \
-    --exclude='etc/seedrou/secrets.json' \
-    etc/seedrou var/lib/seedrou/notes.json 2>/dev/null || true
+    --exclude='var/lib/dert/backups' --exclude='var/lib/dert/lastgood' \
+    --exclude='etc/dert/secrets.json' \
+    etc/dert var/lib/dert/notes.json 2>/dev/null || true
   [ -s "$out_path" ] || die "BACKUP_FAIL" "备份打包失败" "请检查磁盘空间（df -h）"
   # 备份不含 secrets（已剔除）：640 归面板用户，仅供下载
-  chown seedrou:seedrou "$out_path" 2>/dev/null || true
+  chown dert:dert "$out_path" 2>/dev/null || true
   chmod 640 "$out_path"
   ok_out "path" "$out_path"
 }
@@ -986,7 +986,7 @@ do_backup_restore() {
   local src="${1:?缺少备份文件路径}"
   [ -f "$src" ] || die "NO_FILE" "备份文件不存在"
   # 成员白名单校验——先 posixpath.normpath 归一再判断（复审 N-01：
-  # `etc/seedrou/./secrets.json`、`etc/seedrou//secrets.json` 曾同时绕过
+  # `etc/dert/./secrets.json`、`etc/dert//secrets.json` 曾同时绕过
   # secrets 精确匹配与前缀白名单，而 tar 解压会自动规范化，端到端可写穿）
   verdict="$(tar -tzf "$src" 2>/dev/null | python3 -c '
 import sys, posixpath
@@ -997,48 +997,48 @@ for line in sys.stdin:
     np = posixpath.normpath(p)
     if p.startswith("/") or ".." in p.split("/"):
         reason = "BAD"; break
-    if np == "etc/seedrou/secrets.json":
+    if np == "etc/dert/secrets.json":
         reason = "SECRETS"; break
-    if not (np == "etc/seedrou" or np.startswith("etc/seedrou/") or np == "var/lib/seedrou/notes.json"):
+    if not (np == "etc/dert" or np.startswith("etc/dert/") or np == "var/lib/dert/notes.json"):
         reason = "BAD"; break
 print(reason)
 ')"
   case "$verdict" in
     OK) ;;
-    SECRETS) die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 seedrou-priv" ;;
-    *) die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）" ;;
+    SECRETS) die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 dert-priv" ;;
+    *) die "BACKUP_BAD" "备份文件内容不符合 DebRT 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）" ;;
   esac
   # 拒绝符号/硬链接条目：防止"备份内软链指向 /etc"穿越写盘（审计 5.3）
   if tar -tvzf "$src" 2>/dev/null | awk '{print substr($1,1,1)}' | grep -qE '^[lh]'; then
     die "BACKUP_BAD" "备份包内含链接条目，已拒绝" "为防路径穿越，备份包只允许普通文件与目录"
   fi
   if ! tar -tzf "$src" 2>/dev/null | grep -q .; then
-    die "BACKUP_BAD" "备份文件内容不符合 SeedRou 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
+    die "BACKUP_BAD" "备份文件内容不符合 DebRT 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
   fi
   snapshot_lastgood "r$(date +%s)"
-  local stage; stage="$(mktemp -d /run/seedrou/restore.XXXXXX)"
+  local stage; stage="$(mktemp -d /run/dert/restore.XXXXXX)"
   # --no-same-owner：root 解压不保留包内属主；防软链/目录覆盖类穿越（审计 5.3）
   tar -C "$stage" --no-same-owner --no-overwrite-dir -xzf "$src" 2>/dev/null \
     || { rm -rf "$stage"; die "BACKUP_BAD" "备份文件解压失败（文件可能损坏）"; }
-  python3 -c 'import json;json.load(open("'"$stage"'/etc/seedrou/config.json"))' 2>/dev/null \
+  python3 -c 'import json;json.load(open("'"$stage"'/etc/dert/config.json"))' 2>/dev/null \
     || { rm -rf "$stage"; die "BACKUP_BAD" "备份中的配置无法解析"; }
   # P3-12：结构预检——"能 json.load" 不等于"能用"：残缺/裁剪过的配置落盘后会让收敛
   # 在 netgen 里 traceback（stderr 曾被丢弃，用户只看到"配置生成失败"），或静默生成
   # 空转配置（wan.mode 为空 → WAN 口无任何地址）。落盘前用生成器的 schema 检查拦住。
   # 只查结构不查语义：存量 /25 掩码等由收敛期迁移负责，不能因噎废食拒绝恢复。
-  if ! _schema_out="$(python3 "${PRIV_DIR}/netgen.py" --schema --config "$stage/etc/seedrou/config.json")"; then
+  if ! _schema_out="$(python3 "${PRIV_DIR}/netgen.py" --schema --config "$stage/etc/dert/config.json")"; then
     printf '%s\n' "$_schema_out"
     rm -rf "$stage"
     exit 1
   fi
   # 原子落盘
-  if [ -d "$stage/etc/seedrou" ]; then
+  if [ -d "$stage/etc/dert" ]; then
     while IFS= read -r -d '' f; do
       rel="${f#$stage/}"
       write_atomic "/${rel}" "$(stat -c %a "/$rel" 2>/dev/null || echo 600)" < "$f"
-    done < <(find "$stage/etc/seedrou" -type f -print0)
+    done < <(find "$stage/etc/dert" -type f -print0)
   fi
-  [ -f "$stage/var/lib/seedrou/notes.json" ] && write_atomic "${SEEDROU_VAR}/notes.json" 644 < "$stage/var/lib/seedrou/notes.json"
+  [ -f "$stage/var/lib/dert/notes.json" ] && write_atomic "${DERT_VAR}/notes.json" 644 < "$stage/var/lib/dert/notes.json"
   rm -rf "$stage"
   chmod 600 "$SECRETS_JSON" 2>/dev/null || true
   # 备份不含 secrets：按 secrets.json 实际内容重算 has_password（复审 N-04）
@@ -1046,15 +1046,15 @@ print(reason)
   python3 - <<'PYEOF'
 import json
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
-    sec = json.load(open("/etc/seedrou/secrets.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
+    sec = json.load(open("/etc/dert/secrets.json"))
 except Exception:
     raise SystemExit
 has = bool(sec.get("pppoe_password"))
 cfg.setdefault("wan", {})["has_password"] = has
-json.dump(cfg, open("/etc/seedrou/config.json.new", "w"), ensure_ascii=False, indent=1)
+json.dump(cfg, open("/etc/dert/config.json.new", "w"), ensure_ascii=False, indent=1)
 import os
-os.replace("/etc/seedrou/config.json.new", "/etc/seedrou/config.json")
+os.replace("/etc/dert/config.json.new", "/etc/dert/config.json")
 PYEOF
   if [ "$(python3 -c 'import json;c=json.load(open("'"$CONFIG_JSON"'"));print(c["wan"]["mode"]=="pppoe" and not c["wan"].get("has_password"))' 2>/dev/null)" = "True" ]; then
     pw_warn="注意：备份不含宽带密码，PPPoE 拨号尚未可用——请在「网络设置 → 上网设置」重新填写宽带密码并保存"
@@ -1068,8 +1068,8 @@ do_factory_reset() {
   require_root
   acquire_lock
   snapshot_lastgood "f$(date +%s)"
-  local prebak="${SEEDROU_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
-  tar -C / -czf "$prebak" --exclude='etc/seedrou/secrets.json' etc/seedrou 2>/dev/null || true
+  local prebak="${DERT_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
+  tar -C / -czf "$prebak" --exclude='etc/dert/secrets.json' etc/dert 2>/dev/null || true
   chmod 600 "$prebak" 2>/dev/null || true
   # 发现网口：eth*/en* 排除 ppp/tun/br/veth
   python3 - <<'PYEOF'
@@ -1093,26 +1093,26 @@ cfg = {
     "upgrade": {"source": ""},
 }
 try:
-    old = json.load(open("/etc/seedrou/config.json"))
+    old = json.load(open("/etc/dert/config.json"))
     cfg["upgrade"]["source"] = old.get("upgrade", {}).get("source", "")  # 升级源保留
 except Exception:
     pass
-json.dump(cfg, open("/etc/seedrou/config.json.new", "w"), ensure_ascii=False, indent=1)
+json.dump(cfg, open("/etc/dert/config.json.new", "w"), ensure_ascii=False, indent=1)
 PYEOF
   mv -f "${CONFIG_JSON}.new" "$CONFIG_JSON"
   # 宽带密码属于路由配置：一并清除；管理密码保留
   python3 - <<'PYEOF'
 import json
 try:
-    s = json.load(open("/etc/seedrou/secrets.json"))
+    s = json.load(open("/etc/dert/secrets.json"))
     s.pop("pppoe_password", None)
-    json.dump(s, open("/etc/seedrou/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
-    import os; os.chmod("/etc/seedrou/.secrets.tmp", 0o600)
-    os.replace("/etc/seedrou/.secrets.tmp", "/etc/seedrou/secrets.json")
+    json.dump(s, open("/etc/dert/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
+    import os; os.chmod("/etc/dert/.secrets.tmp", 0o600)
+    os.replace("/etc/dert/.secrets.tmp", "/etc/dert/secrets.json")
 except Exception:
     pass
 PYEOF
-  systemctl disable --quiet seedrou-pppoe.service 2>/dev/null || true
+  systemctl disable --quiet dert-pppoe.service 2>/dev/null || true
   local ap; ap="$(do_apply_all 2>&1)" || { printf '%s\n' "$ap"; exit 1; }
   ok_out "message" "已恢复出厂设置（LAN 192.168.10.1，DHCP 池 .100–.200）"
 }
@@ -1136,7 +1136,7 @@ github_latest_ver() { # github_latest_ver owner/repo
   done
   return 1
 }
-cur_version() { cat "$VERSION_FILE" 2>/dev/null || cat "${SEEDROU_ROOT}/VERSION" 2>/dev/null || echo "0.0.0"; }
+cur_version() { cat "$VERSION_FILE" 2>/dev/null || cat "${DERT_ROOT}/VERSION" 2>/dev/null || echo "0.0.0"; }
 ver_ge() { python3 -c '
 import re, sys
 def parse(v):
@@ -1149,7 +1149,7 @@ print("yes" if a >= b else "no")' "$1" "$2"; }
 
 do_upgrade_check() {
   local src; src="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("upgrade",{}).get("source",""))' 2>/dev/null || echo "")"
-  [ -n "$src" ] || die "UPG_NO_SOURCE" "尚未配置升级源" "请在「备份与升级」页填写 GitHub 仓库（如 yourname/seedrou）并保存"
+  [ -n "$src" ] || die "UPG_NO_SOURCE" "尚未配置升级源" "请在「备份与升级」页填写 GitHub 仓库（如 yourname/dert）并保存"
   local cur latest
   cur="$(cur_version)"
   if [[ "$src" == *"://"* ]]; then
@@ -1158,7 +1158,7 @@ do_upgrade_check() {
     latest="$(printf '%s' "$body" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("version") or d.get("tag_name") or "")' 2>/dev/null || echo "")"
     [ -n "$latest" ] || die "UPG_MANIFEST" "升级源清单格式不正确" "清单需为 JSON 且含 version 字段"
   else
-    latest="$(github_latest_ver "$src")" || die "UPG_NET" "无法获取 GitHub 最新版本" "请检查仓库名（yourname/seedrou）与网络；GitHub 可能限流，可稍后重试"
+    latest="$(github_latest_ver "$src")" || die "UPG_NET" "无法获取 GitHub 最新版本" "请检查仓库名（yourname/dert）与网络；GitHub 可能限流，可稍后重试"
   fi
   latest="${latest#v}"
   if [ "$(ver_ge "$latest" "$cur")" = "no" ] || [ "$latest" = "$cur" ]; then
@@ -1174,8 +1174,8 @@ do_upgrade_download() {
   local src repo asset
   src="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("upgrade",{}).get("source",""))')"
   ver="${ver#v}"
-  mkdir -p "${SEEDROU_VAR}/staging"
-  local out="${SEEDROU_VAR}/staging/pkg.tar.gz"
+  mkdir -p "${DERT_VAR}/staging"
+  local out="${DERT_VAR}/staging/pkg.tar.gz"
   rm -f "$out" "${out}.sha256"
   local prefix base="https://github.com" rc=1
   if [[ "$src" == *"://"* ]]; then
@@ -1204,18 +1204,18 @@ print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/n
   else
     repo="$src"
     for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
-      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${base}/${repo}/releases/download/v${ver}/seedrou-${ver}.tar.gz" -o "$out" 2>/dev/null && { rc=0; break; }
+      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz" -o "$out" 2>/dev/null && { rc=0; break; }
     done
     if [ "$rc" -eq 0 ]; then
       for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
-        curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${base}/${repo}/releases/download/v${ver}/seedrou-${ver}.tar.gz.sha256" -o "${out}.sha256" 2>/dev/null && break
+        curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz.sha256" -o "${out}.sha256" 2>/dev/null && break
       done
     fi
   fi
   [ "$rc" -eq 0 ] && [ -s "$out" ] || die "UPG_NET" "下载升级包失败" "请检查升级源与网络；也可在页面手动上传升级包"
   # P2-4：此前 .sha256 下载失败会静默跳过校验——升级源支持第三方镜像，代理正是篡改风险点
-  [ -s "${out}.sha256" ] || { rm -f "$out"; die "UPG_SHA" "升级源未提供 sha256 校验文件" "为防篡改，缺少 .sha256 时不安装；请确认发布页包含 seedrou-<版本>.tar.gz.sha256"; }
-  # .sha256 内容记录的是原始资产名（seedrou-x.y.z.tar.gz），不能直接 -c；
+  [ -s "${out}.sha256" ] || { rm -f "$out"; die "UPG_SHA" "升级源未提供 sha256 校验文件" "为防篡改，缺少 .sha256 时不安装；请确认发布页包含 dert-<版本>.tar.gz.sha256"; }
+  # .sha256 内容记录的是原始资产名（dert-x.y.z.tar.gz），不能直接 -c；
   # 提取期望哈希与实际文件比对（存在性已由上方强制，无需再包一层 if）
   local want got
   want="$(awk 'NR==1{print $1}' "${out}.sha256" 2>/dev/null)"
@@ -1228,6 +1228,9 @@ print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/n
 do_upgrade_apply() {
   require_root
   acquire_lock
+  # DebRT 改名迁移（v0.1.50）：必须在任何 dert 路径引用之前执行——
+  # 此刻机器上还是 seedrou 布局（旧单元活跃、/etc/seedrou 在），搬完才能继续
+  migrate_seedrou_to_dert
   local pkg="${1:?缺少升级包路径}"
   [ -f "$pkg" ] || die "NO_FILE" "升级包不存在"
   # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越
@@ -1246,13 +1249,13 @@ for line in sys.stdin:
     ok = False; break
 sys.exit(0 if ok else 1)
 '; then
-    die "UPG_BAD" "升级包含不认识的条目" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
+    die "UPG_BAD" "升级包含不认识的条目" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包"
   fi
   tar -tvzf "$pkg" 2>/dev/null | awk '{print substr($1,1,1)}' | grep -qE '^[lh]' \
     && die "UPG_BAD" "升级包含链接条目，已拒绝" "为防路径穿越，升级包只允许普通文件与目录"
-  tar -tzf "$pkg" 2>/dev/null | grep -qE '^VERSION$' || die "UPG_BAD" "升级包缺少 VERSION 文件" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
-  tar -tzf "$pkg" 2>/dev/null | grep -qE '^panel/' || die "UPG_BAD" "升级包缺少 panel/ 目录" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
-  tar -tzf "$pkg" 2>/dev/null | grep -qE '^priv/' || die "UPG_BAD" "升级包缺少 priv/ 目录" "请确认上传的是 SeedRou 官方发布的 .tar.gz 升级包"
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^VERSION$' || die "UPG_BAD" "升级包缺少 VERSION 文件" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包"
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^panel/' || die "UPG_BAD" "升级包缺少 panel/ 目录" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包"
+  tar -tzf "$pkg" 2>/dev/null | grep -qE '^priv/' || die "UPG_BAD" "升级包缺少 priv/ 目录" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包"
   # 2) 版本校验（允许同版本重装，拒绝降级）
   local newver cur
   newver="$(tar -xOzf "$pkg" VERSION 2>/dev/null | tr -d '[:space:]')"
@@ -1261,7 +1264,7 @@ sys.exit(0 if ok else 1)
   [ "$(ver_ge "$newver" "$cur")" = "yes" ] || die "UPG_DOWNGRADE" "不能从 V${cur} 降级到 V${newver}" "如需回退旧版本，请先恢复出厂前的备份并手动放置旧版包"
   # 3) 解压到暂存区 + 自检
   # 暂存区必须在被替换目录之外：放里面会随 mv 一起改名，第二步 mv 必 ENOENT（五审 P-03）
-  local stg="/usr/local/lib/.seedrou.upgrade.$$"
+  local stg="/usr/local/lib/.dert.upgrade.$$"
   rm -rf "$stg"; mkdir -p "$stg"
   tar -C "$stg" --no-same-owner --no-overwrite-dir -xzf "$pkg" 2>/dev/null || { rm -rf "$stg"; die "UPG_BAD" "升级包解压失败（文件损坏）"; }
   find "$stg" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -1280,128 +1283,128 @@ sys.exit(0 if ok else 1)
     [ -f "$stg/$need" ] || { rm -rf "$stg"; die "UPG_BAD" "升级包缺少 $need"; }
   done
   # 4) 备份当前版本 → 原子换目录 → 修正属主
-  # L3：同版本重装时目标已存在，cp -a 会嵌套成 app-<ver>/seedrou/，手工回退路径失效
-  rm -rf "${SEEDROU_VAR}/lastgood/app-$(cur_version)"
-  cp -a "/usr/local/lib/seedrou" "${SEEDROU_VAR}/lastgood/app-$(cur_version)" 2>/dev/null || true
-  local old="/usr/local/lib/seedrou.prev.$$"
-  mv "/usr/local/lib/seedrou" "$old" && mv "$stg" "/usr/local/lib/seedrou" || { mv "$old" "/usr/local/lib/seedrou" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
-  # 布局对齐（CI 冒烟揭出）：install.sh 是扁平布局（seedrou-priv/lib.sh/*.py 在根），
+  # L3：同版本重装时目标已存在，cp -a 会嵌套成 app-<ver>/dert/，手工回退路径失效
+  rm -rf "${DERT_VAR}/lastgood/app-$(cur_version)"
+  cp -a "/usr/local/lib/dert" "${DERT_VAR}/lastgood/app-$(cur_version)" 2>/dev/null || true
+  local old="/usr/local/lib/dert.prev.$$"
+  mv "/usr/local/lib/dert" "$old" && mv "$stg" "/usr/local/lib/dert" || { mv "$old" "/usr/local/lib/dert" 2>/dev/null; rm -rf "$stg"; die "UPG_SWAP" "升级替换失败，已保留原版本"; }
+  # 布局对齐（CI 冒烟揭出）：install.sh 是扁平布局（dert-priv/lib.sh/*.py 在根），
   # 而升级包保持 priv/ 子目录 —— 换目录后必须把 priv/* 拷回根并重整权限，
-  # 否则 sudo 调用的 /usr/local/lib/seedrou/seedrou-priv 直接消失
-  cp -f /usr/local/lib/seedrou/priv/* /usr/local/lib/seedrou/ 2>/dev/null || true
+  # 否则 sudo 调用的 /usr/local/lib/dert/dert-priv 直接消失
+  cp -f /usr/local/lib/dert/priv/* /usr/local/lib/dert/ 2>/dev/null || true
   local exef
   # 机制级：直接遍历根目录，有 shebang 的一律 755——与包结构（扁平/子目录）无关，
   # 也不依赖白名单（复审 v0.1.16 4.2）
-  for exef in /usr/local/lib/seedrou/*; do
+  for exef in /usr/local/lib/dert/*; do
     [ -f "$exef" ] && head -c 2 "$exef" | grep -q '#!' && chmod 755 "$exef"
   done
-  for exef in /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/wait-dns-upstream \
-              /usr/local/lib/seedrou/singbox-cleanup /usr/local/lib/seedrou/qdisc-apply; do
+  for exef in /usr/local/lib/dert/wait-wan /usr/local/lib/dert/wait-dns-upstream \
+              /usr/local/lib/dert/singbox-cleanup /usr/local/lib/dert/qdisc-apply; do
     [ -f "$exef" ] && chmod 755 "$exef"
   done
   # sb.sh 管理器随升级保持最新（与 install.sh 同路径）：旧 sb 无更新状态记录，
   # 面板"上次更新"会一直空（2026-11-04 真机反馈）
-  if [ -f "/usr/local/lib/seedrou/singbox/sb.sh" ]; then
-    install -m 755 "/usr/local/lib/seedrou/singbox/sb.sh" /usr/local/bin/sb 2>/dev/null || true
+  if [ -f "/usr/local/lib/dert/singbox/sb.sh" ]; then
+    install -m 755 "/usr/local/lib/dert/singbox/sb.sh" /usr/local/bin/sb 2>/dev/null || true
   fi
   # A-04：同步 /etc 侧钩子——此前只有 install.sh 会写它们，升级用户永远停在旧钩子，
-  # 而面板版本号已是最新（排查极误导）。A-09 改的 70-seedrou-dns 正是经此通道到达升级用户
-  if [ -d /usr/local/lib/seedrou/network ]; then
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/80-seedrou-cake /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+  # 而面板版本号已是最新（排查极误导）。A-09 改的 70-dert-dns 正是经此通道到达升级用户
+  if [ -d /usr/local/lib/dert/network ]; then
+    install -m 755 /usr/local/lib/dert/network/dispatcher/70-dert-dns /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/dispatcher/80-dert-cake /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
     # v0.1.56 新增：WAN 换 IPv6 前缀后修 sing-box 本地地址集合 + 清旧前缀路由
     # （A-04/R-01/P3-02 同族第四处——升级通道漏装钩子时面板版本号已是最新，极误导）
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/90-seedrou-lan-prefix /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/70-seedrou-dns /etc/networkd-dispatcher/no-carrier.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/dispatcher/90-dert-lan-prefix /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/dispatcher/70-dert-dns /etc/networkd-dispatcher/no-carrier.d/ 2>/dev/null || true
     # R-01：v0.1.43 新增的 PPPoE 热插拔钩子——install.sh/uninstall.sh 都带了它，
     # 升级通道曾漏掉，导致"插网线自愈"只对全新安装生效
     install -d -m 755 /etc/networkd-dispatcher/carrier.d 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/carrier.d/ 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/dispatcher/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/ppp/ip-up.d/seedrou /etc/ppp/ip-up.d/ 2>/dev/null || true
-    install -m 755 /usr/local/lib/seedrou/network/ppp/ip-down.d/seedrou /etc/ppp/ip-down.d/ 2>/dev/null || true
-    install -m 644 /usr/local/lib/seedrou/network/sysctl/70-seedrou.conf /etc/sysctl.d/ 2>/dev/null || true
-    install -m 644 /usr/local/lib/seedrou/network/modules/seedrou.conf /etc/modules-load.d/ 2>/dev/null || true
-    install -m 644 /usr/local/lib/seedrou/network/logrotate/seedrou /etc/logrotate.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/dispatcher/75-dert-pppoe-hotplug /etc/networkd-dispatcher/carrier.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/dispatcher/75-dert-pppoe-hotplug /etc/networkd-dispatcher/routable.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/ppp/ip-up.d/dert /etc/ppp/ip-up.d/ 2>/dev/null || true
+    install -m 755 /usr/local/lib/dert/network/ppp/ip-down.d/dert /etc/ppp/ip-down.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/dert/network/sysctl/70-dert.conf /etc/sysctl.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/dert/network/modules/dert.conf /etc/modules-load.d/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/dert/network/logrotate/dert /etc/logrotate.d/ 2>/dev/null || true
     # P3-02：PPPoE 拨号单元在 network/systemd/ 下，不在 systemd/ 的 glob 里——
     # 升级通道此前永远不同步它（install.sh 只管全新安装；与 A-04/R-01 同族第三处）
-    install -m 644 /usr/local/lib/seedrou/network/systemd/seedrou-pppoe.service /etc/systemd/system/ 2>/dev/null || true
-    # v0.1.57：DNS 分流 drop-in（启动前生成 00-seedrou-dns.json、启动后派生 nft 表、
+    install -m 644 /usr/local/lib/dert/network/systemd/dert-pppoe.service /etc/systemd/system/ 2>/dev/null || true
+    # v0.1.57：DNS 分流 drop-in（启动前生成 00-dert-dns.json、启动后派生 nft 表、
     # 停止时删表回落 dnsmasq）。与 A-04/R-01/P3-02/P3-18 同族——升级通道漏装时
     # 面板版本号已是最新，排查极误导，所以这里用覆盖写而不是"不存在才创建"
     if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
       install -d -m 755 /etc/systemd/system/sing-box.service.d 2>/dev/null || true
-      cat > /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf <<'DPEOF'
-# 由 SeedRou 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
-# 启动前生成 00-seedrou-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
+      cat > /etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf <<'DPEOF'
+# 由 DebRT 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
+# 启动前生成 00-dert-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
 [Service]
-ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare
-ExecStartPost=+/usr/local/lib/seedrou/dns-split-sync
-ExecStopPost=+/usr/local/lib/seedrou/dns-split-teardown
+ExecStartPre=/usr/local/lib/dert/dns-split-prepare
+ExecStartPost=+/usr/local/lib/dert/dns-split-sync
+ExecStopPost=+/usr/local/lib/dert/dns-split-teardown
 DPEOF
       systemctl daemon-reload 2>/dev/null || true
     fi
-    if [ -f /usr/local/lib/seedrou/sudoers/seedrou ]; then
-      install -m 440 /usr/local/lib/seedrou/sudoers/seedrou /etc/sudoers.d/seedrou.upgrade-tmp 2>/dev/null || true
-      if visudo -c -f /etc/sudoers.d/seedrou.upgrade-tmp >/dev/null 2>&1; then
-        mv -f /etc/sudoers.d/seedrou.upgrade-tmp /etc/sudoers.d/seedrou
+    if [ -f /usr/local/lib/dert/sudoers/dert ]; then
+      install -m 440 /usr/local/lib/dert/sudoers/dert /etc/sudoers.d/dert.upgrade-tmp 2>/dev/null || true
+      if visudo -c -f /etc/sudoers.d/dert.upgrade-tmp >/dev/null 2>&1; then
+        mv -f /etc/sudoers.d/dert.upgrade-tmp /etc/sudoers.d/dert
       else
-        rm -f /etc/sudoers.d/seedrou.upgrade-tmp
+        rm -f /etc/sudoers.d/dert.upgrade-tmp
       fi
     fi
     sysctl --system >/dev/null 2>&1 || true
   fi
   # PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时不自愈
   # （2026-11-05 真机实录）。脚本随包进 LIB_DIR，unit 需单独落 /etc 并启用。
-  if [ -f /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.timer ]; then
-    install -m 644 /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.service /etc/systemd/system/ 2>/dev/null || true
-    install -m 644 /usr/local/lib/seedrou/systemd/seedrou-pppoe-watchdog.timer /etc/systemd/system/ 2>/dev/null || true
+  if [ -f /usr/local/lib/dert/systemd/dert-pppoe-watchdog.timer ]; then
+    install -m 644 /usr/local/lib/dert/systemd/dert-pppoe-watchdog.service /etc/systemd/system/ 2>/dev/null || true
+    install -m 644 /usr/local/lib/dert/systemd/dert-pppoe-watchdog.timer /etc/systemd/system/ 2>/dev/null || true
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now seedrou-pppoe-watchdog.timer >/dev/null 2>&1 || true
+    systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   fi
-  for pyf in /usr/local/lib/seedrou/*.py /usr/local/lib/seedrou/lib.sh; do
+  for pyf in /usr/local/lib/dert/*.py /usr/local/lib/dert/lib.sh; do
     [ -f "$pyf" ] && chmod 644 "$pyf"
   done
-  find /usr/local/lib/seedrou -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-  rm -rf /usr/local/lib/seedrou/priv    # 扁平化后 priv/ 子目录是冗余副本，删掉避免"哪份生效"的歧义
-  chown -R root:root /usr/local/lib/seedrou
+  find /usr/local/lib/dert -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  rm -rf /usr/local/lib/dert/priv    # 扁平化后 priv/ 子目录是冗余副本，删掉避免"哪份生效"的歧义
+  chown -R root:root /usr/local/lib/dert
   # 单元同步（复审 v0.1.12 2.2）：升级包的新 systemd 能力落到 /etc/systemd，
   # 否则只有全新安装才生效、升级用户拿不到 dns-sync/cleanup/重启策略
-  if [ -d /usr/local/lib/seedrou/systemd ]; then
+  if [ -d /usr/local/lib/dert/systemd ]; then
     mkdir -p /etc/systemd/system/dnsmasq.service.d /etc/systemd/system/sing-box.service.d
     local uf
-    for uf in /usr/local/lib/seedrou/systemd/*.service \
-              /usr/local/lib/seedrou/systemd/*.timer; do
+    for uf in /usr/local/lib/dert/systemd/*.service \
+              /usr/local/lib/dert/systemd/*.timer; do
       [ -f "$uf" ] && install -m 644 "$uf" /etc/systemd/system/
     done
-    for uf in /usr/local/lib/seedrou/systemd/dnsmasq.service.d/* \
-              /usr/local/lib/seedrou/systemd/sing-box.service.d/*; do
+    for uf in /usr/local/lib/dert/systemd/dnsmasq.service.d/* \
+              /usr/local/lib/dert/systemd/sing-box.service.d/*; do
       [ -f "$uf" ] && install -m 644 "$uf" "/etc/systemd/system/$(echo "$uf" | sed 's|.*systemd/||')"
     done
-    systemctl enable seedrou-panel.service seedrou-dns-sync.service seedrou-converge.timer >/dev/null 2>&1 || true
+    systemctl enable dert-panel.service dert-dns-sync.service dert-converge.timer >/dev/null 2>&1 || true
   fi
   systemctl daemon-reload
   rm -rf "$old"
   # VERSION 同时落包根与 share/（审计 B-02：目录整体替换后 share/ 会消失，必须重建再拷贝）
-  mkdir -p "$SEEDROU_SHARE"
-  cp /usr/local/lib/seedrou/VERSION "$SEEDROU_SHARE/VERSION" 2>/dev/null || true
+  mkdir -p "$DERT_SHARE"
+  cp /usr/local/lib/dert/VERSION "$DERT_SHARE/VERSION" 2>/dev/null || true
   # 升级后自检并落日志（七审建议：升级目前只验证面板能起）
-  /usr/local/lib/seedrou/seedrou-priv selftest >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
-    logger -t seedrou-upgrade "selftest 有失败项，详见 /var/log/seedrou-upgrade-selftest.log"
+  /usr/local/lib/dert/dert-priv selftest >> /var/log/dert-upgrade-selftest.log 2>&1 || \
+    logger -t dert-upgrade "selftest 有失败项，详见 /var/log/dert-upgrade-selftest.log"
   # 升级后立即收敛一次：/etc/systemd/network/*.network 是生成物，升级换了 netgen
   # 却要等最长 6h 的收敛 timer 才重新生成——期间旧键/旧语法还在跑（真机实录：
   # v0.1.44 升级后用户机器仍跑旧键配置，IPv6 因此"升级了也没修好"）
   # P3-01：本进程持有 apply.lock（fd9），子进程 acquire_lock 会重开 fd9 再 flock -n
   # 必然 BUSY——此前的内联收敛 100% 失败（死代码+误导日志），实际全靠下方 3s 后的
-  # converge.service 重启兜底。传 _SEEDROU_LOCK_HELD=1 让子进程复用父进程持有的锁，
+  # converge.service 重启兜底。传 _DERT_LOCK_HELD=1 让子进程复用父进程持有的锁，
   # 收敛真正内联执行（锁由父进程持有到退出，窗口内无并发风险）。
-  # CI 冒烟网关（install.sh --smoke 写 /run/seedrou/smoke-mode）：收敛会重启
+  # CI 冒烟网关（install.sh --smoke 写 /run/dert/smoke-mode）：收敛会重启
   # networkd/dnsmasq/nft——runner 的网络不能动（CI 实测：步骤全绿但 agent 收尾
   # 信号传不回，job 被超时标 cancelled，run#101）；跳过内联收敛与延迟收敛重启。
-  local _smoke=0; [ -f /run/seedrou/smoke-mode ] && _smoke=1
+  local _smoke=0; [ -f /run/dert/smoke-mode ] && _smoke=1
   if [ "$_smoke" != "1" ]; then
-    _SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent >> /var/log/seedrou-upgrade-selftest.log 2>&1 || \
-      logger -t seedrou-upgrade "升级后收敛有报错，详见 /var/log/seedrou-upgrade-selftest.log"
+    _DERT_LOCK_HELD=1 /usr/local/lib/dert/dert-priv apply-all --convergent >> /var/log/dert-upgrade-selftest.log 2>&1 || \
+      logger -t dert-upgrade "升级后收敛有报错，详见 /var/log/dert-upgrade-selftest.log"
   fi
 
   # 5) 延迟重启面板（先让本次响应送达客户端）；一并重启收敛单元以加载新逻辑
@@ -1411,8 +1414,8 @@ DPEOF
     systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" 2>/dev/null \
       || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT" >/dev/null 2>&1 &
   else
-    systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" seedrou-converge.service 2>/dev/null \
-      || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT seedrou-converge.service" >/dev/null 2>&1 &
+    systemd-run --on-active=3 --quiet systemctl restart "$PANEL_UNIT" dert-converge.service 2>/dev/null \
+      || setsid bash -c "sleep 3; systemctl restart $PANEL_UNIT dert-converge.service" >/dev/null 2>&1 &
   fi
   ok_out "message" "已升级到 V${newver}，面板即将重启"
 }
@@ -1424,7 +1427,7 @@ do_status() {
   python3 - <<'PYEOF'
 import json, os, subprocess, time
 
-cfg = json.load(open("/etc/seedrou/config.json"))
+cfg = json.load(open("/etc/dert/config.json"))
 ULA_PREFIX_STATIC = "fda1:9e3a:8b7f"
 wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
 wans_set = set(wans) | ({"ppp0"} if cfg.get("wan", {}).get("mode") == "pppoe" else set())
@@ -1482,7 +1485,7 @@ if wan_dev:
     if mode == "pppoe":
         # 会话起点由 pppd ip-up.d 钩子写入（掉线重拨即归零），不再用服务启动时间（persist 下不准，审计 B-22）
         try:
-            st = os.stat("/run/seedrou/ppp-session-start")
+            st = os.stat("/run/dert/ppp-session-start")
             wan["session_s"] = max(0, int(time.time() - st.st_mtime))
         except OSError:
             wan["session_s"] = None
@@ -1547,7 +1550,7 @@ def rc(args, timeout=5):
         return 1
 dnsmasq_ok = rc(["systemctl", "is-active", "--quiet", "dnsmasq.service"]) == 0
 networkd_ok = rc(["systemctl", "is-active", "--quiet", "systemd-networkd.service"]) == 0
-nft_ok = rc(["nft", "list", "table", "inet", "seedrou_base"]) == 0
+nft_ok = rc(["nft", "list", "table", "inet", "dert_base"]) == 0
 # 概览"已连接设备"：只算 br-lan 上当前在线的邻居。
 # 旧逻辑直接数 dnsmasq.leases 行数，把"已下线但租约未过期"的设备也计入，
 # 数字只增不减（用户反馈：统计的是所有上过线的设备）。
@@ -1580,7 +1583,7 @@ except Exception:
 disk_temp = None
 try:
     import os as _os
-    cache = "/run/seedrou/disk-temp"
+    cache = "/run/dert/disk-temp"
     now = time.time()
     cached = None
     try:
@@ -1604,17 +1607,17 @@ try:
             _note = ""
         if _note:
             try:
-                _unchanged = open("/run/seedrou/disk-unavailable").read() == _note
+                _unchanged = open("/run/dert/disk-unavailable").read() == _note
             except OSError:
                 _unchanged = False
             if not _unchanged:
-                with open("/run/seedrou/disk-unavailable", "w") as f:
+                with open("/run/dert/disk-unavailable", "w") as f:
                     f.write(_note)
         else:
             # P3-1：采集正常时清掉历史诊断标记——否则补装 smartmontools 后
             # tooltip 仍显示"未安装"（/run 只在重启时才清）
             try:
-                os.remove("/run/seedrou/disk-unavailable")
+                os.remove("/run/dert/disk-unavailable")
             except OSError:
                 pass
         if devices:
@@ -1627,7 +1630,7 @@ try:
                 _cur = temps.get("current")
                 if isinstance(_cur, (int, float)) and 0 < _cur < 120:
                     disk_temp = int(_cur)
-        _os.makedirs("/run/seedrou", exist_ok=True)
+        _os.makedirs("/run/dert", exist_ok=True)
         with open(cache + ".tmp", "w") as f:
             f.write(str(disk_temp if disk_temp is not None else ""))
         _os.replace(cache + ".tmp", cache)
@@ -1635,7 +1638,7 @@ except Exception:
     disk_temp = None
 
 ver = "0.0.0"
-for vp in ("/usr/local/lib/seedrou/share/VERSION", "/usr/local/lib/seedrou/VERSION"):
+for vp in ("/usr/local/lib/dert/share/VERSION", "/usr/local/lib/dert/VERSION"):
     try:
         ver = open(vp).read().strip()
         break
@@ -1643,13 +1646,13 @@ for vp in ("/usr/local/lib/seedrou/share/VERSION", "/usr/local/lib/seedrou/VERSI
         continue
 print(json.dumps({
     "ok": True,
-    "converge_failed": os.path.exists("/run/seedrou/converge-failed"),
+    "converge_failed": os.path.exists("/run/dert/converge-failed"),
     "wan": wan, "ipv6": v6, "ports": ports,
     "lan": cfg.get("lan", {}),
     "version": ver,
     "system_ok": bool(dnsmasq_ok and networkd_ok and nft_ok),
     "disk_temp": disk_temp,
-    "disk_temp_note": (open("/run/seedrou/disk-unavailable").read().strip() if os.path.exists("/run/seedrou/disk-unavailable") else ""),
+    "disk_temp_note": (open("/run/dert/disk-unavailable").read().strip() if os.path.exists("/run/dert/disk-unavailable") else ""),
     "leases_count": leases,
 }, ensure_ascii=False))
 PYEOF
@@ -1665,23 +1668,23 @@ checks = []
 def add(name, ok, hint=""):
     checks.append({"name": name, "ok": bool(ok), "hint": hint})
 try:
-    json.load(open("/etc/seedrou/config.json"))
+    json.load(open("/etc/dert/config.json"))
     add("config.json 存在且可解析", True)
 except Exception as e:
-    add("config.json 存在且可解析", False, f"解析失败：{e}；可从 /var/lib/seedrou/lastgood 恢复")
+    add("config.json 存在且可解析", False, f"解析失败：{e}；可从 /var/lib/dert/lastgood 恢复")
 if os.path.exists("/etc/resolv.conf"):
     rc = open("/etc/resolv.conf").read()
     add("/etc/resolv.conf 指向本机 dnsmasq", "nameserver 127.0.0.1" in rc,
         "被 dhcpcd 等覆写；重跑安装或收敛会自动修复")
-add("secrets.json 存在", os.path.exists("/etc/seedrou/secrets.json"))
+add("secrets.json 存在", os.path.exists("/etc/dert/secrets.json"))
 for c in ("nft", "dnsmasq", "pppd", "curl", "python3", "ip"):
     add(f"命令可用: {c}", bool(shutil.which(c)), f"apt install {c}" if c in ("nft", "dnsmasq", "pppd") else "")
-add("netgen 校验", subprocess.run(["python3", "/usr/local/lib/seedrou/netgen.py", "--check"], capture_output=True).returncode == 0)
+add("netgen 校验", subprocess.run(["python3", "/usr/local/lib/dert/netgen.py", "--check"], capture_output=True).returncode == 0)
 try:
-    out = subprocess.run(["nft", "list", "table", "inet", "seedrou_base"], capture_output=True).returncode
-    add("nft 表 seedrou_base 已加载", out == 0)
+    out = subprocess.run(["nft", "list", "table", "inet", "dert_base"], capture_output=True).returncode
+    add("nft 表 dert_base 已加载", out == 0)
 except Exception:
-    add("nft 表 seedrou_base 已加载", False)
+    add("nft 表 dert_base 已加载", False)
 add("sing-box 不受本脚本管理（仅检测）", True)
 bad = [c for c in checks if not c["ok"]]
 print(json.dumps({"ok": not bad, "checks": checks, "summary": f"{len(checks) - len(bad)}/{len(checks)} 通过"}, ensure_ascii=False))

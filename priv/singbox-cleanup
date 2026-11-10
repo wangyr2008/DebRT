@@ -14,7 +14,7 @@ nft list tables 2>/dev/null | grep -q "sing-box" && nft delete table sing-box 2>
 # DNS 分流表必须一并删除：它把客户端 DNS DNAT 到 tun 的地址（172.19.0.x），
 # sing-box 没了就没人监听，残留会让所有设备断 DNS（比代理失效严重得多）。
 # ExecStopPost 已经覆盖绝大多数场景，这里是 OnFailure 路径的双保险。
-nft list tables 2>/dev/null | grep -q "seedrou_dns" && nft delete table inet seedrou_dns 2>/dev/null
+nft list tables 2>/dev/null | grep -q "dert_dns" && nft delete table inet dert_dns 2>/dev/null
 
 # ip rule 残留（特征：fwmark 0x2023/0x2024 + 表 2022）
 while read -r prio rest; do
@@ -23,5 +23,5 @@ done < <(ip rule show | awk '$1 ~ /^(9000|9001)$/ && /0x202[34]/ {print $1}')
 
 # 表 2022 已空、无引用则一并删除
 ip rule show | grep -q "lookup 2022" || ip route flush table 2022 2>/dev/null || true
-logger -t seedrou-cleanup "sing-box failed 残留已清理，直连已恢复"
+logger -t dert-cleanup "sing-box failed 残留已清理，直连已恢复"
 exit 0

@@ -1,7 +1,0 @@
-[Unit]
-Description=SeedRou 定时防漂移收敛
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/lib/seedrou/seedrou-priv apply-all --convergent
-TimeoutStartSec=120

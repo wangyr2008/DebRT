@@ -1,20 +1,20 @@
 [Unit]
-Description=SeedRou 管理面板
+Description=DebRT 管理面板
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=seedrou
-Group=seedrou
+User=dert
+Group=dert
 # 绑定 80 端口用 Ambient 即可；【不能】配 CapabilityBoundingSet —— bounding 集不含
 # CAP_SETUID/CAP_SETGID 会让面板里的 setuid sudo 提权失败（"unable to change to root gid"，
 # 真机首装实测），登录与全部特权操作断链。安全边界由 sudo 白名单 + 无 shell 用户保证。
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=/usr/bin/python3 /usr/local/lib/seedrou/panel/seedrou_panel.py --port 80
+ExecStart=/usr/bin/python3 /usr/local/lib/dert/panel/dert_panel.py --port 80
 Restart=on-failure
 RestartSec=3
-ReadWritePaths=/var/lib/seedrou /run/seedrou
+ReadWritePaths=/var/lib/dert /run/dert
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

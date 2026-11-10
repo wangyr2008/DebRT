@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SeedRou</title>
+<title>DebRT</title>
 <!-- PNG/ICO 在前：Safari 不认 SVG favicon（只认位图），只给 data:image/svg+xml 时后台标签
      显示成通用页面图标；Chrome 会优先用下面那行矢量版，缩放更清晰 -->
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
@@ -21,8 +21,8 @@
     <div class="ru-body">
       <aside class="ru-side">
         <div class="ru-brand">
-          <span class="ru-brandicon"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srg)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></span>
-          <span><b>SeedRou</b><small id="ru-sidever">V0.1.0</small></span>
+          <span class="ru-brandicon"><svg viewBox="0 0 64 64" role="img" aria-label="DebRT"><defs><linearGradient id="srg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srg)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></span>
+          <span><b>DebRT</b><small id="ru-sidever">V0.1.0</small></span>
         </div>
         <nav class="ru-nav" aria-label="页面导航">
           <button class="ru-navitem active" data-nav="overview"><i data-lucide="gauge"></i>系统概览</button>
@@ -40,7 +40,7 @@
         <div class="ru-mhead">
           <div style="display:flex;align-items:center;gap:10px">
             <span class="ru-brandicon" style="width:30px;height:30px;border-radius:8px"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="srgm" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgm)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></span>
-            <div class="ru-mtitle">SeedRou</div>
+            <div class="ru-mtitle">DebRT</div>
           </div>
           <nav class="ru-nav" aria-label="页面导航">
             <button class="ru-navitem active" data-nav="overview">系统概览</button>
@@ -363,10 +363,10 @@
 
           <!-- ============ 6 其他工具 ============ -->
           <section class="ru-page" id="pg-tools">
-            <!-- 未安装：一键安装（sb.sh 已随 SeedRou 下发，默认不装 sing-box） -->
+            <!-- 未安装：一键安装（sb.sh 已随 DebRT 下发，默认不装 sing-box） -->
             <div class="ru-card" id="sb-uninstalled" hidden>
-              <div class="ru-chead"><div><h3>sing-box 服务</h3><div class="ru-sub">未安装 · sb.sh 管理器已随 SeedRou 下发</div></div></div>
-              <div class="ru-callout"><i data-lucide="info"></i><span>一键安装将从官方源部署 sing-box 内核（GitHub 被墙时自动走 gh-proxy 回退），不改动 SeedRou 的路由与防火墙配置；安装完成后请填写配置地址并更新配置。默认不自动安装，需要时才点。</span></div>
+              <div class="ru-chead"><div><h3>sing-box 服务</h3><div class="ru-sub">未安装 · sb.sh 管理器已随 DebRT 下发</div></div></div>
+              <div class="ru-callout"><i data-lucide="info"></i><span>一键安装将从官方源部署 sing-box 内核（GitHub 被墙时自动走 gh-proxy 回退），不改动 DebRT 的路由与防火墙配置；安装完成后请填写配置地址并更新配置。默认不自动安装，需要时才点。</span></div>
               <div class="ru-save"><button class="ru-btn primary" id="btn-sb-install">一键安装 sing-box</button></div>
               <div class="ru-badmsg" id="msg-sb-install"></div>
             </div>
@@ -393,7 +393,7 @@
               </div>
               <div class="ru-kv" style="margin-top:10px"><span class="k">已运行</span><span class="v" id="sb-uptime">—</span></div>
               <div class="ru-hint">Dashboard 可查看实时连接、流量与节点启停。配置里含 clash_api 时自动按其地址跳转；使用官方/第三方在线面板（如 metacubexd）请在上面的地址栏填写。停止服务后全部代理节点不可用，LAN 直连与路由功能不受影响。检查更新只对比版本；升级内核保留配置与节点数据。</div>
-              <div class="ru-hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--ru-line)"><span style="color:var(--ru-red);font-weight:500">危险操作：</span><button class="ru-linkbtn" id="btn-sb-uninstall">卸载 sing-box</button>——将删除内核、配置与全部节点数据（卸载前自动在 /var/lib/seedrou 留一份配置备份），不可恢复；确认不再使用时才执行。</div>
+              <div class="ru-hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--ru-line)"><span style="color:var(--ru-red);font-weight:500">危险操作：</span><button class="ru-linkbtn" id="btn-sb-uninstall">卸载 sing-box</button>——将删除内核、配置与全部节点数据（卸载前自动在 /var/lib/dert 留一份配置备份），不可恢复；确认不再使用时才执行。</div>
             </div>
 
             <!-- 配置卡：配置来源地址 / 自动更新开关与时间 / 更新状态 -->
@@ -442,7 +442,7 @@
                 <button class="ru-btn primary" id="btn-ver-check">检查更新</button>
               </div>
               <div class="ru-frow">
-                <div class="ru-field"><div class="ru-flabel">升级源（GitHub 仓库或清单地址）</div><input class="ru-in" id="upg-source" placeholder="如 yourname/seedrou"></div>
+                <div class="ru-field"><div class="ru-flabel">升级源（GitHub 仓库或清单地址）</div><input class="ru-in" id="upg-source" placeholder="如 yourname/dert"></div>
                 <button class="ru-btn" id="btn-upg-source">保存升级源</button>
               </div>
               <div id="ver-line" hidden></div>
@@ -478,8 +478,8 @@
   <!-- ============ 登录页 ============ -->
   <section class="ru-login" id="ru-login" hidden>
     <div class="ru-lcard">
-      <div class="ru-llogo"><svg viewBox="0 0 64 64" role="img" aria-label="SeedRou"><defs><linearGradient id="srgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgl)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></div>
-      <h2>SeedRou</h2>
+      <div class="ru-llogo"><svg viewBox="0 0 64 64" role="img" aria-label="DebRT"><defs><linearGradient id="srgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0150cf"/></linearGradient></defs><rect width="64" height="64" rx="14.4" fill="url(#srgl)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M32 45.5V30.5" stroke-width="4.2"/><path d="M21.5 45.5H42.5" stroke-width="3.2"/></g><rect x="14.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><rect x="42.6" y="42.1" width="6.8" height="6.8" rx="2" fill="#fff"/><path d="M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z" fill="#fff"/><path d="M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z" fill="#fff"/></svg></div>
+      <h2>DebRT</h2>
       <div class="ru-lsub" id="ru-lsub">管理后台</div>
       <form id="ru-loginform" autocomplete="off">
         <div class="ru-flabel">管理密码</div>

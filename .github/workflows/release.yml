@@ -23,18 +23,18 @@ jobs:
 
       - name: 语法自检
         run: |
-          for f in install.sh uninstall.sh priv/seedrou-priv priv/lib.sh priv/qdisc-apply \
+          for f in install.sh uninstall.sh priv/dert-priv priv/lib.sh priv/qdisc-apply \
                    network/dispatcher/* network/ppp/ip-up.d/*; do bash -n "$f"; done
           python3 -m py_compile panel/*.py priv/*.py
 
-      - name: 打包 seedrou-<ver>.tar.gz
+      - name: 打包 dert-<ver>.tar.gz
         run: |
           VER="$(tr -d '[:space:]' < VERSION)"
-          tar -czf "seedrou-${VER}.tar.gz" \
+          tar -czf "dert-${VER}.tar.gz" \
             --exclude='__pycache__' --exclude='*.pyc' \
             panel priv config systemd network singbox sudoers \
             install.sh uninstall.sh VERSION README.md
-          sha256sum "seedrou-${VER}.tar.gz" > "seedrou-${VER}.tar.gz.sha256"
+          sha256sum "dert-${VER}.tar.gz" > "dert-${VER}.tar.gz.sha256"
           echo "VER=$VER" >> "$GITHUB_ENV"
 
       - name: 上传到 Release
@@ -42,5 +42,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ env.VER }}" \
-            "seedrou-${{ env.VER }}.tar.gz" "seedrou-${{ env.VER }}.tar.gz.sha256" \
-            --title "SeedRou v${{ env.VER }}" --generate-notes --repo "$GITHUB_REPOSITORY"
+            "dert-${{ env.VER }}.tar.gz" "dert-${{ env.VER }}.tar.gz.sha256" \
+            --title "DebRT v${{ env.VER }}" --generate-notes --repo "$GITHUB_REPOSITORY"

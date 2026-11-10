@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""SeedRou 管理面板入口。
+"""DebRT 管理面板入口。
 
 - Python 3 标准库实现，零第三方依赖（Debian 13 minimal 开箱即用）。
-- 以专用用户 seedrou 运行；特权操作一律经 sudo 调用 seedrou-priv（见 priv/）。
+- 以专用用户 dert 运行；特权操作一律经 sudo 调用 dert-priv（见 priv/）。
 - --mock：无 sudo 的纯前端预览模式（开发用，固定数据）。
 """
 import argparse
@@ -26,7 +26,7 @@ MAX_BODY = 128 * 1024 * 1024  # 上传上限 128MB
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "SeedRouPanel/0.1"
+    server_version = "DebRTPanel/0.1"
     timeout = 60  # 读 body 的 socket 超时：谎报 Content-Length 的请求不能无限挂住 drain 循环
 
     # ---------- 基础 ----------
@@ -134,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write(f"[panel] {self.path}: {type(e).__name__}: {e}\n")
             self._send_json({"ok": False, "code": "INTERNAL",
                              "message": "面板内部错误",
-                             "hint": "请重试；若持续出现，请在系统上执行 journalctl -u seedrou-panel -n 50 查看日志"}, 500)
+                             "hint": "请重试；若持续出现，请在系统上执行 journalctl -u dert-panel -n 50 查看日志"}, 500)
 
     def _static(self):
         path = self.path.split("?", 1)[0].split("#", 1)[0]
@@ -175,8 +175,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SeedRou 管理面板")
-    ap.add_argument("--port", type=int, default=int(os.environ.get("SEEDROU_PORT", "80")))
+    ap = argparse.ArgumentParser(description="DebRT 管理面板")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("DERT_PORT", "80")))
     ap.add_argument("--mock", action="store_true", help="开发预览：固定数据，不需要 sudo/root")
     args = ap.parse_args()
 
@@ -186,7 +186,7 @@ def main():
 
     httpd = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     httpd.daemon_threads = True
-    print(f"SeedRou panel listening on :{args.port}" + (" (mock)" if args.mock else ""), flush=True)
+    print(f"DebRT panel listening on :{args.port}" + (" (mock)" if args.mock else ""), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

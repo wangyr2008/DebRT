@@ -3,18 +3,18 @@
 # 背景（真机实测）：换绑 WAN 口后先保存再插网线，pppd persist 偶发不自动恢复拨号，
 # 用户需手动重新保存才连上；载波事件时主动拉起/轻推一次，链路自愈。
 IFACE="$1"
-[ -f /etc/seedrou/config.json ] || exit 0
+[ -f /etc/dert/config.json ] || exit 0
 
 # A-1：只认 PPPoE 模式——DHCP/静态下载波事件绝不能拉起拨号服务（pppd 会用
 # 残留的 peers 文件真实拨号，造成双默认路由劫持）。与 pppoe-watchdog 的
 # MODE 守卫保持同构（同一逻辑两处，必须两处都写）
-MODE="$(python3 -c "import json;print(json.load(open('/etc/seedrou/config.json')).get('wan',{}).get('mode',''))" 2>/dev/null)"
+MODE="$(python3 -c "import json;print(json.load(open('/etc/dert/config.json')).get('wan',{}).get('mode',''))" 2>/dev/null)"
 [ "$MODE" = "pppoe" ] || exit 0
 
 IS_WAN=$(python3 - "$IFACE" <<'PYEOF'
 import json, sys
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
     wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
     if cfg.get("wan", {}).get("mode") == "pppoe":
         wans.append("ppp0")   # ppp0 由 25-ppp0.network 托管，其事件同样触发
@@ -28,10 +28,10 @@ PYEOF
 # 会话健在（ppp0 有 v4）就不折腾
 ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' && exit 0
 
-systemctl is-active --quiet seedrou-pppoe.service 2>/dev/null || {
-    systemctl start seedrou-pppoe.service 2>/dev/null
+systemctl is-active --quiet dert-pppoe.service 2>/dev/null || {
+    systemctl start dert-pppoe.service 2>/dev/null
     exit 0
 }
 # 服务在跑但会话不在：载波刚恢复，轻推一次重新拨号
-systemctl try-restart seedrou-pppoe.service 2>/dev/null
+systemctl try-restart dert-pppoe.service 2>/dev/null
 exit 0

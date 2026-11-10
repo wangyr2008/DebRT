@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SeedRou 面板认证：会话签名（HMAC）、Cookie、CSRF、登录限速。
+"""DebRT 面板认证：会话签名（HMAC）、Cookie、CSRF、登录限速。
 
-- 管理密码的校验在 seedrou-priv（root）内完成，面板只拿 {ok} 结果，不接触哈希。
+- 管理密码的校验在 dert-priv（root）内完成，面板只拿 {ok} 结果，不接触哈希。
 - 会话令牌 = base64url(payload) + "." + HMAC-SHA256(会话密钥)；7 天有效。
-- 会话密钥从 seedrou-priv session-secret 获取（root 属主 secrets.json 内）。
+- 会话密钥从 dert-priv session-secret 获取（root 属主 secrets.json 内）。
 """
 import base64
 import hashlib
@@ -32,7 +32,7 @@ _REVOKE_TTL = SESSION_TTL
 if _REVOKE_TTL < SESSION_TTL:  # 守卫：撤销表短于会话期 = 登出承诺失效（启动即炸，审计四.4）
     raise RuntimeError("_REVOKE_TTL must cover SESSION_TTL")
 _REVOKE_MAX = 4096
-_REVOKE_PATH = "/var/lib/seedrou/revoked.json"   # B-4：撤销表落盘（面板有该目录读写权）
+_REVOKE_PATH = "/var/lib/dert/revoked.json"   # B-4：撤销表落盘（面板有该目录读写权）
 
 
 class AuthError(Exception):
@@ -83,11 +83,11 @@ def _secret():
         return _secret_cache
     import subprocess
     out = subprocess.run(
-        ["sudo", "-n", "/usr/local/lib/seedrou/seedrou-priv", "session-secret"],
+        ["sudo", "-n", "/usr/local/lib/dert/dert-priv", "session-secret"],
         capture_output=True, text=True, timeout=15)
     data = json.loads(out.stdout or "{}")
     if not data.get("ok") or not data.get("secret"):
-        raise AuthError(500, "NO_SECRET", "无法获取会话密钥", "请确认已运行 install.sh；journalctl -u seedrou-panel 查看详情")
+        raise AuthError(500, "NO_SECRET", "无法获取会话密钥", "请确认已运行 install.sh；journalctl -u dert-panel 查看详情")
     _secret_cache = data["secret"].encode()
     _secret_ts = now
     return _secret_cache
@@ -163,7 +163,7 @@ def clear_cookie() -> str:
 
 def csrf_ok(headers) -> bool:
     """变更请求：自定义头必带；Origin 存在时必须同源（防跨站）。"""
-    if headers.get("X-SeedRou") != "1":
+    if headers.get("X-DebRT") != "1":
         return False
     origin = headers.get("Origin")
     if origin:
@@ -210,7 +210,7 @@ def priv_verify_password(password: str):
     import subprocess
     try:
         p = subprocess.run(
-            ["sudo", "-n", "/usr/local/lib/seedrou/seedrou-priv", "auth-verify"],
+            ["sudo", "-n", "/usr/local/lib/dert/dert-priv", "auth-verify"],
             input=password + "\n", capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         raise AuthError(504, "TIMEOUT", "密码校验超时", "请稍后重试")

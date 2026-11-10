@@ -1,6 +1,6 @@
-/* SeedRou 管理后台前端逻辑
+/* DebRT 管理后台前端逻辑
  * - 视觉结构对齐 v5 设计稿；数据全部来自 /api/*（真实模式）或内置 mock（--mock 预览）。
- * - 约定：所有变更请求带 X-SeedRou 头（CSRF）；错误统一 {code,message,hint}。 */
+ * - 约定：所有变更请求带 X-DebRT 头（CSRF）；错误统一 {code,message,hint}。 */
 (function () {
 "use strict";
 
@@ -54,9 +54,9 @@ var API = {
 };
 function request(method, path, body, opts) {
   opts = opts || {};
-  var headers = { "X-SeedRou": "1" };
+  var headers = { "X-DebRT": "1" };
   if (opts.raw) headers["X-Filename"] = opts.filename || "upload.bin";
-  if (opts.confirm) headers["X-SeedRou-Confirm"] = "1";   /* B-06：破坏性上传（恢复备份）API 层校验此头 */
+  if (opts.confirm) headers["X-DebRT-Confirm"] = "1";   /* B-06：破坏性上传（恢复备份）API 层校验此头 */
   var init = { method: method, headers: headers, credentials: "same-origin" };
   if (body !== undefined && body !== null) {
     if (opts.raw) { init.body = body; }
@@ -66,7 +66,7 @@ function request(method, path, body, opts) {
     var ct = res.headers.get("Content-Type") || "";
     if (ct.indexOf("application/json") < 0) {
       if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }
-      if (!res.ok) throw { code: "HTTP_" + res.status, message: "服务器返回异常状态 " + res.status, hint: "请刷新页面重试；若持续出现请查看面板日志 journalctl -u seedrou-panel" };
+      if (!res.ok) throw { code: "HTTP_" + res.status, message: "服务器返回异常状态 " + res.status, hint: "请刷新页面重试；若持续出现请查看面板日志 journalctl -u dert-panel" };
       return res.blob();
     }
     return res.json().then(function (data) {
@@ -1097,7 +1097,7 @@ $id("btn-sb-check").addEventListener("click", function () {
 });
 $id("btn-sb-install").addEventListener("click", function () {
   var btn = this;
-  if (!window.confirm("将从官方源安装 sing-box 内核（gh-proxy 加速回退），不改动 SeedRou 的路由与防火墙配置。安装完成后请填写配置地址并更新配置。继续吗？")) return;
+  if (!window.confirm("将从官方源安装 sing-box 内核（gh-proxy 加速回退），不改动 DebRT 的路由与防火墙配置。安装完成后请填写配置地址并更新配置。继续吗？")) return;
   showBad("msg-sb-install", "");
   btnBusy(btn, true, "安装中…");
   API.post("/api/singbox/install", {}).then(function (r) {
@@ -1187,7 +1187,7 @@ $id("btn-sb-sched").addEventListener("click", function () {
   }).catch(function (e) { btnBusy(btn, false); apiFail(e); });
 });
 $id("btn-sb-uninstall").addEventListener("click", function () {
-  if (!window.confirm("卸载 sing-box 将删除内核、配置与全部节点数据，不可恢复（卸载前自动在 /var/lib/seedrou 留一份配置备份）。确认不再使用时才继续。继续卸载吗？")) return;
+  if (!window.confirm("卸载 sing-box 将删除内核、配置与全部节点数据，不可恢复（卸载前自动在 /var/lib/dert 留一份配置备份）。确认不再使用时才继续。继续卸载吗？")) return;
   if (!window.confirm("最后确认：真的要卸载 sing-box 吗？全部代理节点将立即不可用。")) return;
   API.post("/api/singbox/uninstall", { confirm: true }).then(function (r) {
     toast("ok", r.message || "sing-box 已卸载");
@@ -1260,7 +1260,7 @@ $id("file-upgrade").addEventListener("change", function () {
 $id("btn-backup").addEventListener("click", function () {
   var btn = this;
   btnBusy(btn, true, "打包中…");
-  fetch("/api/backup", { headers: { "X-SeedRou": "1" }, credentials: "same-origin" }).then(function (res) {
+  fetch("/api/backup", { headers: { "X-DebRT": "1" }, credentials: "same-origin" }).then(function (res) {
     btnBusy(btn, false);
     if (res.status === 401) { setLogged(false); throw { code: "UNAUTH", message: "登录已过期", hint: "请重新登录" }; }  // L8
     if (!res.ok) throw { message: "备份失败（HTTP " + res.status + "）" };
@@ -1269,7 +1269,7 @@ $id("btn-backup").addEventListener("click", function () {
     return res.blob().then(function (blob) {
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = m ? m[1] : "seedrou-backup.tar.gz";
+      a.download = m ? m[1] : "dert-backup.tar.gz";
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
       toast("ok", "备份已生成", "请妥善保管备份文件，恢复时需上传同一文件");

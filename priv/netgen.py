@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SeedRou 配置生成器。
+"""DebRT 配置生成器。
 
 用法:
-  netgen.py --check                 仅校验 /etc/seedrou/config.json 并输出结果
+  netgen.py --check                 仅校验 /etc/dert/config.json 并输出结果
   netgen.py --stage STAGE_DIR       校验并生成全部原生配置到 STAGE_DIR（保留相对路径）
 输出（stdout）为 JSON：{ok, files:[{path,mode,content_b64}], restart:[...], pppoe:bool, cake:bool, nft:bool, summary}
-永不写真实路径——写盘由 seedrou-priv 用原子方式完成。
+永不写真实路径——写盘由 dert-priv 用原子方式完成。
 """
 import base64
 import ipaddress
@@ -14,9 +14,9 @@ import os
 import re
 import sys
 
-CONFIG_PATH = "/etc/seedrou/config.json"
-SECRETS_PATH = "/etc/seedrou/secrets.json"
-ULA_PREFIX = "fda1:9e3a:8b7f"   # SeedRou 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
+CONFIG_PATH = "/etc/dert/config.json"
+SECRETS_PATH = "/etc/dert/secrets.json"
+ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
 
@@ -148,7 +148,7 @@ def gen_wan_network(cfg):
     wifs = wan_ifaces(cfg)
     match = " ".join(wifs)
     v6 = cfg.get("ipv6", {})
-    lines = ["# 由 SeedRou 生成 — 请勿手工修改", "[Match]", f"Name={match}", "", "[Network]"]
+    lines = ["# 由 DebRT 生成 — 请勿手工修改", "[Match]", f"Name={match}", "", "[Network]"]
     mode = cfg["wan"]["mode"]
     if mode == "dhcp":
         lines += ["DHCP=yes", "IPv6AcceptRA=yes"]
@@ -194,7 +194,7 @@ def gen_ppp_network(cfg):
     # [Route] ::/0 Scope=link 也是必需的：国内运营商在 PPPoE 链路上不发 RA（真机抓
     # 22 秒 RA 为零），DHCPv6 又不携带默认路由，缺它就只有地址没有出口——表现为
     # "能拿到 IPv6 地址但 ping6 报 Network is unreachable"
-    return ("# 由 SeedRou 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
+    return ("# 由 DebRT 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
             "IPv6AcceptRA=no\n"
             "DHCP=ipv6\n"
             "DHCPPrefixDelegation=yes\n\n"
@@ -204,13 +204,13 @@ def gen_ppp_network(cfg):
 
 
 def gen_lan_netdev(cfg):
-    return "# 由 SeedRou 生成 — 请勿手工修改\n[NetDev]\nName=br-lan\nKind=bridge\n"
+    return "# 由 DebRT 生成 — 请勿手工修改\n[NetDev]\nName=br-lan\nKind=bridge\n"
 
 
 def gen_lan_network(cfg):
     net = lan_net(cfg)
     v6 = cfg.get("ipv6", {})
-    lines = ["# 由 SeedRou 生成 — 请勿手工修改",
+    lines = ["# 由 DebRT 生成 — 请勿手工修改",
              "[Match]", "Name=br-lan", "",
              "[Network]",
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
@@ -258,12 +258,12 @@ def gen_port_networks(cfg):
     for p in cfg.get("ports", []):
         name = p["name"]
         if p.get("lan"):
-            body = ("# 由 SeedRou 生成 — 请勿手工修改\n"
+            body = ("# 由 DebRT 生成 — 请勿手工修改\n"
                     f"[Match]\nName={name}\n\n[Network]\nBridge=br-lan\n")
         elif p.get("wan"):
             continue  # WAN 口由 10-wan.network 管理
         else:
-            body = ("# 由 SeedRou 生成 — 请勿手工修改\n"
+            body = ("# 由 DebRT 生成 — 请勿手工修改\n"
                     f"[Match]\nName={name}\n\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\nDHCP=no\n")
         out.append((f"etc/systemd/network/30-{name}.network", body))
     return out
@@ -275,7 +275,7 @@ def gen_dnsmasq(cfg):
     dh = cfg.get("dhcp", {})
     v6 = cfg.get("ipv6", {})
     wan = cfg.get("wan", {})
-    lines = ["# 由 SeedRou 生成 — 请勿手工修改",
+    lines = ["# 由 DebRT 生成 — 请勿手工修改",
              "interface=br-lan",
              "interface=lo",
              "bind-interfaces",
@@ -325,7 +325,7 @@ def gen_dnsmasq(cfg):
     else:
         # servers-file 会在 SIGHUP 时重读（conf-dir 只在启动时读——dispatcher 钩子写完
         # 上游后 HUP dnsmasq 才能生效，真机首装实测）
-        lines.append("servers-file=/run/seedrou-dns/upstream.conf")
+        lines.append("servers-file=/run/dert-dns/upstream.conf")
         # B-01：WAN DNS 自动时，IPv6 卡片手填的 DNS 也必须落盘（此前被静默丢弃）
         v6d = v6.get("dns") if v6.get("enabled") and v6.get("dns_mode") == "manual" else []
         for d in (v6d or []):
@@ -358,13 +358,13 @@ def gen_nft(cfg):
             dnat_lan.append(f'    iifname $LAN_BR ip daddr @wan_v4 udp dport {r["wport"]} dnat ip to {tgt}')
     lines = [
         "#!/usr/sbin/nft -f",
-        "# SeedRou 基础防火墙 —— 只操作本表 inet seedrou_base，",
+        "# DebRT 基础防火墙 —— 只操作本表 inet dert_base，",
         "# 绝不 flush ruleset / 不触碰 sing-box、podman、tailscale 的表（见 COEXISTENCE.md）。",
         "",
-        "table inet seedrou_base",
-        "flush table inet seedrou_base",
+        "table inet dert_base",
+        "flush table inet dert_base",
         "",
-        "table inet seedrou_base {",
+        "table inet dert_base {",
         f"  define WAN_IFS = {{ {wan_set} }}",
         '  define LAN_BR = "br-lan"',
         f"  define LAN_NET = {net.with_prefixlen}",
@@ -430,7 +430,7 @@ def gen_pppd(cfg, password):
     v6 = cfg.get("ipv6", {})
     wif = wan_ifaces(cfg)[0]
     lines = [
-        "# 由 SeedRou 生成 — 请勿手工修改",
+        "# 由 DebRT 生成 — 请勿手工修改",
         f"user {shell_quote(wan['username'])}",
         f"plugin rp-pppoe.so {wif}",
         "noipdefault",
@@ -447,7 +447,7 @@ def gen_pppd(cfg, password):
         "nopcomp",
         "novj",
         "novjccomp",
-        "linkname seedrou",
+        "linkname dert",
     ]
     if v6.get("enabled") and v6.get("mode") in ("native", "nat6"):
         lines.append("+ipv6")
@@ -457,14 +457,14 @@ def gen_pppd(cfg, password):
 def gen_chap(cfg, password):
     user = shell_quote(cfg["wan"]["username"])
     pwd = shell_quote(password or "x")
-    return f"# 由 SeedRou 生成 — 请勿手工修改\n{user} * {pwd} *\n"
+    return f"# 由 DebRT 生成 — 请勿手工修改\n{user} * {pwd} *\n"
 
 
 def schema_check(cfg):
     """收敛期结构兜底（P3-12）。
 
     validate.py 保证的是"面板写进来的配置"，而收敛路径（开机 / 6h timer / 升级后 /
-    备份恢复）直接读 /etc/seedrou/config.json。结构残缺时下游有两种坏结局：
+    备份恢复）直接读 /etc/dert/config.json。结构残缺时下游有两种坏结局：
       1) 生成阶段 traceback（KeyError 'lan' / AddressValueError）——do_apply_all 曾把
          stderr 丢掉，用户只看到"配置生成失败"，提示里的"上方错误信息"是空的；
       2) 静默生成空转配置——如 wan.mode="" 会落进 pppoe 分支，产出 DHCP=no 且无
@@ -472,13 +472,13 @@ def schema_check(cfg):
     这里在生成前一次性拦住，全部走结构化 JSON 错误。
     """
     hint = ("请在「网络设置」重新保存一次；若已无法进入面板，可从 "
-            "/var/lib/seedrou/lastgood 恢复上一份可用配置")
+            "/var/lib/dert/lastgood 恢复上一份可用配置")
 
     def bad(msg, howto=hint):
         fail("CONFIG_SCHEMA", msg, howto)
 
     if not isinstance(cfg, dict):
-        bad("config.json 顶层不是对象", "请从 /var/lib/seedrou/lastgood 恢复，或重新运行 install.sh")
+        bad("config.json 顶层不是对象", "请从 /var/lib/dert/lastgood 恢复，或重新运行 install.sh")
 
     # 必填段：下游是直接下标访问（cfg["lan"] / cfg["ipv6"]["mode"] / cfg["ports"]）
     for sec in ("ports", "wan", "lan", "ipv6"):
@@ -553,7 +553,7 @@ def main():
     except FileNotFoundError:
         fail("NO_CONFIG", f"未找到 {CONFIG_PATH}", "请先运行 install.sh 完成部署")
     except json.JSONDecodeError as e:
-        fail("CONFIG_CORRUPT", f"config.json 解析失败：{e}", "配置文件可能被意外截断；可从 /var/lib/seedrou/lastgood 恢复上一份可用配置")
+        fail("CONFIG_CORRUPT", f"config.json 解析失败：{e}", "配置文件可能被意外截断；可从 /var/lib/dert/lastgood 恢复上一份可用配置")
 
     # P3-12：先查结构再查语义——缺段/缺键在这里就变成结构化错误，不会等到生成阶段
     # 抛 traceback，也不会静默产出空转配置
@@ -589,10 +589,10 @@ def main():
     files.append(("etc/systemd/network/20-lan.network", 0o644, gen_lan_network(cfg)))
     for rel, body in gen_port_networks(cfg):
         files.append((rel, 0o644, body))
-    files.append(("etc/dnsmasq.d/seedrou.conf", 0o644, gen_dnsmasq(cfg)))
-    files.append(("etc/nftables.d/seedrou-base.nft", 0o644, gen_nft(cfg)))
+    files.append(("etc/dnsmasq.d/dert.conf", 0o644, gen_dnsmasq(cfg)))
+    files.append(("etc/nftables.d/dert-base.nft", 0o644, gen_nft(cfg)))
     if cfg["wan"]["mode"] == "pppoe":
-        files.append(("etc/ppp/peers/seedrou", 0o644, gen_pppd(cfg, password)))
+        files.append(("etc/ppp/peers/dert", 0o644, gen_pppd(cfg, password)))
         files.append(("etc/ppp/chap-secrets", 0o600, gen_chap(cfg, password)))
         files.append(("etc/ppp/pap-secrets", 0o600, gen_chap(cfg, password)))
         # PPPoE 的 IPv6 走 networkd：25-ppp0.network 的 [DHCPPrefixDelegation]

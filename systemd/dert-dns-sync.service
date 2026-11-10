@@ -3,12 +3,12 @@
 # dnsmasq 不等它——先服务 DHCP/LAN，上游由本单元补齐后 HUP 生效
 # 不依赖 network-online（同上）；等待逻辑在 wait-dns-upstream 内部（载波感知 ≤45s）
 After=dnsmasq.service networkd-dispatcher.service
-ConditionPathExists=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
+ConditionPathExists=/etc/networkd-dispatcher/routable.d/70-dert-dns
 
 [Service]
 Type=oneshot
 # 有载波才等（最多 45s）；无线上位机/离线开机直接跳过，不拖慢启动
-ExecStart=/usr/local/lib/seedrou/wait-dns-upstream
+ExecStart=/usr/local/lib/dert/wait-dns-upstream
 TimeoutStartSec=75
 RemainAfterExit=yes
 

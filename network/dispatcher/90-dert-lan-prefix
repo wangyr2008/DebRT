@@ -18,19 +18,19 @@ set -u
 IFACE="${1:-}"
 STATE="${2:-}"
 [ "$STATE" = "routable" ] || exit 0
-[ -f /etc/seedrou/config.json ] || exit 0
+[ -f /etc/dert/config.json ] || exit 0
 
-RUNDIR=/run/seedrou
+RUNDIR=/run/dert
 REC="$RUNDIR/lan-prefix"
 mkdir -p "$RUNDIR" 2>/dev/null || true
 
 # 触发面：WAN 事件（ppp0 / DHCP-静态模式的 WAN 口）与 br-lan 事件。
 # 前者是 PPPoE 重拨的主路径；后者兜住"会话没断但 PD 换前缀"的情形。
-# 判据与 75-seedrou-pppoe-hotplug 同构
+# 判据与 75-dert-pppoe-hotplug 同构
 IS_TRIGGER=$(python3 - "$IFACE" <<'PYEOF'
 import json, sys
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
     ifaces = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
     if cfg.get("wan", {}).get("mode") == "pppoe":
         ifaces.append("ppp0")   # ppp0 由 25-ppp0.network 托管，其事件同样触发
@@ -74,7 +74,7 @@ fi
 [ "$OLD" = "$NEW" ] && exit 0
 
 printf '%s\n' "$NEW" > "$REC"
-logger -t seedrou-lan "LAN IPv6 前缀变更：$OLD -> $NEW"
+logger -t dert-lan "LAN IPv6 前缀变更：$OLD -> $NEW"
 
 # ① 清旧前缀路由：只删 br-lan 上带 expires（RA/地址派生）且不在当前前缀集合里的，
 #    静态路由（无 expires）一律不碰
@@ -82,24 +82,24 @@ for r in $(ip -6 route show dev br-lan 2>/dev/null \
            | awk '/expires/ && $1 ~ /:/ {print $1}'); do
     case " $NEW " in *" $r "*) continue ;; esac
     ip -6 route del "$r" dev br-lan 2>/dev/null \
-        && logger -t seedrou-lan "已清理旧前缀路由 $r"
+        && logger -t dert-lan "已清理旧前缀路由 $r"
 done
 
 # ② 前缀变了，先重新生成 DNS 分流配置：
-#    00-seedrou-dns.json 的 source_ip_cidr 里含旧 v6 前缀，
+#    00-dert-dns.json 的 source_ip_cidr 里含旧 v6 前缀，
 #    nft 表里白名单的 v6 DNS 目标也指向 dnsmasq 的旧全局地址。
 #    必须在重启 sing-box 之前写文件——它只在启动时读配置。
-/usr/local/lib/seedrou/dns-split-prepare 2>/dev/null || true
+/usr/local/lib/dert/dns-split-prepare 2>/dev/null || true
 
 # ③ 重建 sing-box 的本地地址集合。只在它真在用 auto_redirect（nft 表里有
 #    local_address_set）时才重启——没有这套集合时重启只会白断一次代理。
 if systemctl is-active --quiet sing-box.service 2>/dev/null \
    && nft list table inet sing-box 2>/dev/null | grep -q "local_address_set"; then
     systemctl try-restart sing-box.service 2>/dev/null \
-        && logger -t seedrou-lan "sing-box 已重启（重建 local_address_set）"
+        && logger -t dert-lan "sing-box 已重启（重建 local_address_set）"
 else
     # sing-box 没在跑（或没启用 auto_redirect）：重启不会发生，也就不会触发
     # ExecStartPost，这里手动刷新 nft 分流表，让白名单设备的 v6 DNS 目标跟上新前缀
-    /usr/local/lib/seedrou/dns-split-sync 2>/dev/null || true
+    /usr/local/lib/dert/dns-split-sync 2>/dev/null || true
 fi
 exit 0

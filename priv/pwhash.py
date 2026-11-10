@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SeedRou 管理密码哈希 —— 唯一实现（auth-verify / passwd-set / install.sh 共用）。
+"""DebRT 管理密码哈希 —— 唯一实现（auth-verify / passwd-set / install.sh 共用）。
 
 记录格式（admin_pbkdf2 字段）：
   新  pbkdf2$sha256$<iters>$<salt-hex>$<hash-hex>   （算法显式）

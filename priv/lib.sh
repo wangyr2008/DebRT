@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# SeedRou 特权库 —— 仅被 seedrou-priv / 钩子脚本 source。
+# DebRT 特权库 —— 仅被 dert-priv / 钩子脚本 source。
 # 约定：所有用户可见错误一律以 JSON 输出到 stdout（die），可操作（原因 + 下一步）。
 # 原子写：同目录临时文件 → fsync → rename，任何时刻磁盘上都只有完整文件。
 
-SEEDROU_ROOT="/usr/local/lib/seedrou"
-SEEDROU_SHARE="${SEEDROU_ROOT}/share"
-SEEDROU_ETC="/etc/seedrou"
-SEEDROU_VAR="/var/lib/seedrou"
-SEEDROU_RUN="/run/seedrou"
-CONFIG_JSON="${SEEDROU_ETC}/config.json"
-SECRETS_JSON="${SEEDROU_ETC}/secrets.json"
-VERSION_FILE="${SEEDROU_SHARE}/VERSION"
-LOCK_FILE="${SEEDROU_RUN}/apply.lock"
+DERT_ROOT="/usr/local/lib/dert"
+DERT_SHARE="${DERT_ROOT}/share"
+DERT_ETC="/etc/dert"
+DERT_VAR="/var/lib/dert"
+DERT_RUN="/run/dert"
+CONFIG_JSON="${DERT_ETC}/config.json"
+SECRETS_JSON="${DERT_ETC}/secrets.json"
+VERSION_FILE="${DERT_SHARE}/VERSION"
+LOCK_FILE="${DERT_RUN}/apply.lock"
 
-PANEL_UNIT="seedrou-panel.service"
-NFT_TABLE="inet seedrou_base"
+PANEL_UNIT="dert-panel.service"
+NFT_TABLE="inet dert_base"
 
 # ---------------- 错误协议 ----------------
 json_out() { printf '%s\n' "$1"; }
@@ -24,8 +24,8 @@ die() { # die CODE MESSAGE [HINT]
 }
 
 # 收敛失败标记（供面板概览显示"上次收敛失败"提示；仅收敛流程手动调用）
-mark_converge_failed() { mkdir -p "$SEEDROU_RUN"; touch "$SEEDROU_RUN/converge-failed"; }
-clear_converge_failed() { rm -f "$SEEDROU_RUN/converge-failed" 2>/dev/null || true; }
+mark_converge_failed() { mkdir -p "$DERT_RUN"; touch "$DERT_RUN/converge-failed"; }
+clear_converge_failed() { rm -f "$DERT_RUN/converge-failed" 2>/dev/null || true; }
 py_quote() { python3 -c 'import json,sys;print(json.dumps(sys.argv[1],ensure_ascii=False))' "$1"; }
 ok_out() { # ok_out [KEY VAL ...] -> {"ok":true,...}（值尝试按 JSON 解析，true/false/数字为真类型）
   python3 - "$@" <<'PYEOF'
@@ -52,7 +52,7 @@ write_atomic() {
   local path="$1" mode="${2:-644}" tmp dir
   dir="$(dirname "$path")"
   mkdir -p "$dir"
-  tmp="$(mktemp "${dir}/.seedrou-tmp.XXXXXXXX")" || die "IO" "无法创建临时文件" "请检查磁盘空间（df -h）"
+  tmp="$(mktemp "${dir}/.dert-tmp.XXXXXXXX")" || die "IO" "无法创建临时文件" "请检查磁盘空间（df -h）"
   cat > "$tmp" || { rm -f "$tmp"; die "IO" "写入临时文件失败"; }
   chmod "$mode" "$tmp"
   sync -f "$tmp" 2>/dev/null || true
@@ -63,13 +63,13 @@ write_atomic() {
 # ---------------- 锁 ----------------
 # 幂等：已持锁（嵌套调用，如 backup-restore 内部再跑 apply-all）直接返回，避免释放重取的竞态窗口
 acquire_lock() {
-  [ -n "${_SEEDROU_LOCK_HELD:-}" ] && return 0
-  mkdir -p "$SEEDROU_RUN" 2>/dev/null || true
+  [ -n "${_DERT_LOCK_HELD:-}" ] && return 0
+  mkdir -p "$DERT_RUN" 2>/dev/null || true
   exec 9>"$LOCK_FILE" || die "LOCK" "无法打开锁文件 $LOCK_FILE"
   if ! flock -n 9; then
     die "BUSY" "另一项配置变更正在进行中" "请稍等几秒后重试；若频繁出现请检查是否有其他管理员同时在操作"
   fi
-  _SEEDROU_LOCK_HELD=1
+  _DERT_LOCK_HELD=1
 }
 
 # 接管网口时清理 /etc/network/interfaces 里的 ifupdown 残留（真机首装实测：
@@ -79,7 +79,7 @@ cleanup_ifupdown_for_ports() {
     python3 - <<'PYX'
 import json
 try:
-    names = [p["name"] for p in json.load(open("/etc/seedrou/config.json")).get("ports", [])]
+    names = [p["name"] for p in json.load(open("/etc/dert/config.json")).get("ports", [])]
 except Exception:
     raise SystemExit
 try:
@@ -103,7 +103,7 @@ cleanup_stale_port_networks() {
   python3 - <<'PYEOF' | while read -r f; do [ -n "$f" ] && rm -f "$f"; done
 import json, glob, os
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
     names = {p["name"] for p in cfg.get("ports", [])}
     _v6 = cfg.get("ipv6", {})
     need_ppp = (cfg.get("wan", {}).get("mode") == "pppoe"
@@ -119,10 +119,48 @@ if not need_ppp and os.path.exists("/etc/systemd/network/25-ppp0.network"):
 # B-1：非 PPPoE 模式清理拨号残留（peers 里有旧凭据，是热插拔误拨号的放大器；
 # secrets 里的宽带密码保留——切回 PPPoE 不应要求重输密码）
 if cfg.get("wan", {}).get("mode") != "pppoe":
-    for f in ("/etc/ppp/peers/seedrou", "/etc/ppp/chap-secrets", "/etc/ppp/pap-secrets"):
+    for f in ("/etc/ppp/peers/dert", "/etc/ppp/chap-secrets", "/etc/ppp/pap-secrets"):
         if os.path.exists(f):
             print(f)
 PYEOF
+}
+
+# ---------------- 一次性迁移：SeedRou → DebRT（v0.1.50 改名）----------------
+# 把旧布局（/usr/local/lib/seedrou、/etc/seedrou、旧单元名、旧钩子名）无痕搬入
+# 新名字；幂等（新布局已存在时全部 no-op）。install.sh 与 do_upgrade_apply 共用。
+migrate_seedrou_to_dert() {
+  [ -d /usr/local/lib/seedrou ] || [ -d /etc/seedrou ] || return 0
+  echo "[迁移] 检测到旧版 SeedRou 安装，迁移到 DebRT 命名……"
+  systemctl disable --now dert-converge.timer dert-panel.service dert-apply.service \
+    dert-dns-sync.service dert-pppoe.service dert-pppoe-watchdog.timer 2>/dev/null || true
+  systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service \
+    seedrou-dns-sync.service seedrou-pppoe.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
+  mv /usr/local/lib/seedrou /usr/local/lib/dert 2>/dev/null || true
+  [ -d /etc/seedrou ] && [ ! -d /etc/dert ] && mv /etc/seedrou /etc/dert
+  [ -d /var/lib/seedrou ] && [ ! -d /var/lib/dert ] && mv /var/lib/seedrou /var/lib/dert
+  id dert >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin dert 2>/dev/null || true
+  chown -R dert:dert /var/lib/dert 2>/dev/null || true
+  rm -f /etc/systemd/system/seedrou-panel.service /etc/systemd/system/seedrou-apply.service \
+        /etc/systemd/system/seedrou-converge.service /etc/systemd/system/seedrou-converge.timer \
+        /etc/systemd/system/seedrou-dns-sync.service /etc/systemd/system/seedrou-pppoe.service \
+        /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
+        /etc/systemd/system/seedrou-singbox-cleanup.service \
+        /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
+        /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf
+  rm -f /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
+        /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
+        /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug
+  rm -f /etc/sudoers.d/seedrou /etc/logrotate.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf
+  rm -f /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets
+  rm -f /etc/sing-box/00-seedrou-dns.json
+  nft delete table inet seedrou_base 2>/dev/null || true
+  nft delete table inet seedrou_dns 2>/dev/null || true
+  rm -rf /run/seedrou /run/seedrou-dns
+  userdel seedrou 2>/dev/null || true
+  systemctl daemon-reload
+  # sing-box 需重启以拾取新 drop-in 与 00-dert-dns.json（旧 00-seedrou 已删）
+  systemctl try-restart sing-box.service 2>/dev/null || true
+  c_info "迁移完成：配置与数据已迁至 /etc/dert、/var/lib/dert"
 }
 
 # ---------------- 配置读写 ----------------
@@ -133,7 +171,7 @@ secrets_read() { python3 -c 'import json;print(json.dumps(json.load(open("'"$SEC
 # 快照与回滚（只针对 config.json + secrets.json；原生配置全部可再生）
 snapshot_lastgood() {
   local tag="$1" dir
-  dir="${SEEDROU_VAR}/lastgood"
+  dir="${DERT_VAR}/lastgood"
   mkdir -p "$dir"
   cp -a "$CONFIG_JSON" "${dir}/config.json.pre-${tag}" 2>/dev/null || true
   [ -f "$SECRETS_JSON" ] && cp -a "$SECRETS_JSON" "${dir}/secrets.json.pre-${tag}" 2>/dev/null
@@ -143,7 +181,7 @@ snapshot_lastgood() {
   done
 }
 restore_lastgood() {
-  local tag="$1" dir="${SEEDROU_VAR}/lastgood"
+  local tag="$1" dir="${DERT_VAR}/lastgood"
   local c="${dir}/config.json.pre-${tag}" s="${dir}/secrets.json.pre-${tag}"
   [ -f "$c" ] || return 1
   cp -a "$c" "$CONFIG_JSON"
@@ -160,7 +198,7 @@ apply_stage_files() {
     dest="/${rel}"
     dest_dir="$(dirname "$dest")"
     mkdir -p "$dest_dir"
-    tmp="$(mktemp "${dest_dir}/.seedrou-tmp.XXXXXXXX")"
+    tmp="$(mktemp "${dest_dir}/.dert-tmp.XXXXXXXX")"
     cp "${stage}/${rel}" "$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$dest" \
       || { rm -f "$tmp"; die "IO" "部署生成文件失败：$dest"; }
   done < <(python3 - "$manfile" <<'PYEOF'
@@ -176,8 +214,8 @@ PYEOF
 # 失败时向 stdout 输出错误 JSON 并 return 1
 preflight_stage() {
   local stage="$1" nft_file dnsmasq_file err
-  nft_file="${stage}/etc/nftables.d/seedrou-base.nft"
-  dnsmasq_file="${stage}/etc/dnsmasq.d/seedrou.conf"
+  nft_file="${stage}/etc/nftables.d/dert-base.nft"
+  dnsmasq_file="${stage}/etc/dnsmasq.d/dert.conf"
   if command -v nft >/dev/null 2>&1 && [ -f "$nft_file" ]; then
     if ! nft -c -f "$nft_file" >/dev/null 2>&1; then
       err="$(nft -c -f "$nft_file" 2>&1 | tail -n 3 | tr '\n' ' ')"
@@ -200,7 +238,7 @@ wan_route_ok() {
   python3 - <<'PYEOF'
 import json, subprocess, sys
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
 except Exception:
     print("no"); sys.exit()
 wans = {p["name"] for p in cfg.get("ports", []) if p.get("wan")}
@@ -253,27 +291,27 @@ plan_for_section() { # plan_for_section SECTION -> echo "actions"
 }
 
 # sing-box 共存维护：sing-box.service 存在但缺 drop-in 时自动补挂
-# （覆盖"先装 SeedRou 后装 sing-box"的场景；幂等，见 COEXISTENCE.md）
+# （覆盖"先装 DebRT 后装 sing-box"的场景；幂等，见 COEXISTENCE.md）
 #   10-…wait-wan    启动前等 WAN（防 auto_route 死循环）
 #   20-…dns-split   启动前生成 DNS 分流配置、启动后派生 nft 表、停止时删表
 maintain_singbox_dropin() {
   local dir="/etc/systemd/system/sing-box.service.d"
-  local d10="$dir/10-seedrou-wait-wan.conf"
-  local d20="$dir/20-seedrou-dns-split.conf"
+  local d10="$dir/10-dert-wait-wan.conf"
+  local d20="$dir/20-dert-dns-split.conf"
   # A-2：官方 deb 把单元装在 /usr/lib/systemd/system（/etc 下永远没有）——
   # 必须用机制级判断，文件路径检测会让 drop-in 兜底机制在默认安装路径上失效
   systemctl list-unit-files sing-box.service >/dev/null 2>&1 || return 0
   mkdir -p "$dir"
   local changed=0
 
-  if [ ! -f "$d10" ] && [ -f /usr/local/lib/seedrou/wait-wan ]; then
-    # 内容与发行版 systemd/sing-box.service.d/10-seedrou-wait-wan.conf 保持一致
+  if [ ! -f "$d10" ] && [ -f /usr/local/lib/dert/wait-wan ]; then
+    # 内容与发行版 systemd/sing-box.service.d/10-dert-wait-wan.conf 保持一致
     cat > "$d10" <<'DPEOF'
-# 由 SeedRou 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
+# 由 DebRT 安装/收敛自动维护：sing-box 启动前等 WAN 就绪（防 auto_route 死循环）
 [Unit]
-OnFailure=seedrou-singbox-cleanup.service
+OnFailure=dert-singbox-cleanup.service
 [Service]
-ExecStartPre=/usr/local/lib/seedrou/wait-wan
+ExecStartPre=/usr/local/lib/dert/wait-wan
 TimeoutStartSec=210
 Restart=on-failure
 RestartSec=3
@@ -282,15 +320,15 @@ DPEOF
     changed=1
   fi
 
-  if [ ! -f "$d20" ] && [ -f /usr/local/lib/seedrou/dns-split-sync ]; then
-    # 内容与发行版 systemd/sing-box.service.d/20-seedrou-dns-split.conf 保持一致
+  if [ ! -f "$d20" ] && [ -f /usr/local/lib/dert/dns-split-sync ]; then
+    # 内容与发行版 systemd/sing-box.service.d/20-dert-dns-split.conf 保持一致
     cat > "$d20" <<'DPEOF'
-# 由 SeedRou 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
-# 启动前生成 00-seedrou-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
+# 由 DebRT 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）
+# 启动前生成 00-dert-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq
 [Service]
-ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare
-ExecStartPost=+/usr/local/lib/seedrou/dns-split-sync
-ExecStopPost=+/usr/local/lib/seedrou/dns-split-teardown
+ExecStartPre=/usr/local/lib/dert/dns-split-prepare
+ExecStartPost=+/usr/local/lib/dert/dns-split-sync
+ExecStopPost=+/usr/local/lib/dert/dns-split-teardown
 DPEOF
     echo "dns-split: 已为 sing-box 安装 DNS 分流 drop-in"
     changed=1
@@ -302,10 +340,10 @@ DPEOF
 
 # 按 config.json 的 WAN 口重建 DNS 上游（幂等；/run 重启即清，dispatcher 未触发时由此兜底）
 # 按 config.json 的 WAN 口即时重建 DNS 上游（幂等、尽力而为、不等待）。
-# 等待职责在专用单元 seedrou-dns-sync.service（After=network-online，载波感知），
+# 等待职责在专用单元 dert-dns-sync.service（After=network-online，载波感知），
 # dispatcher 负责运行期事件；此处只做收敛时的即时兜底。
 sync_dns_upstream() {
-  local hook=/etc/networkd-dispatcher/routable.d/70-seedrou-dns
+  local hook=/etc/networkd-dispatcher/routable.d/70-dert-dns
   [ -x "$hook" ] || return 0
   local wan_if if
   # R-02：PPPoE 的承载口是 ppp0（IPv4 由 ip-up.d 写、IPv6 由 networkd DHCPv6 学），
@@ -337,21 +375,21 @@ svc_restart_networkd() {
 svc_nft() {
   local rc=0
   # nft 失败不能被后面的 wan-addr-sync 掩盖（复审 R-02）
-  [ -f /etc/nftables.d/seedrou-base.nft ] && { nft -f /etc/nftables.d/seedrou-base.nft || rc=$?; }
-  [ -x "${SEEDROU_ROOT}/wan-addr-sync" ] && "${SEEDROU_ROOT}/wan-addr-sync"
+  [ -f /etc/nftables.d/dert-base.nft ] && { nft -f /etc/nftables.d/dert-base.nft || rc=$?; }
+  [ -x "${DERT_ROOT}/wan-addr-sync" ] && "${DERT_ROOT}/wan-addr-sync"
   return $rc
 }
 svc_cake() {
-  [ -x "${SEEDROU_ROOT}/qdisc-apply" ] && "${SEEDROU_ROOT}/qdisc-apply"
+  [ -x "${DERT_ROOT}/qdisc-apply" ] && "${DERT_ROOT}/qdisc-apply"
 }
 svc_pppoe() { # enable|disable|restart 依据当前配置
   local mode; mode="$(python3 -c 'import json;print(json.load(open("'"$CONFIG_JSON"'")).get("wan",{}).get("mode",""))' 2>/dev/null || echo "")"
   if [ "$mode" = "pppoe" ]; then
-    systemctl enable --quiet seedrou-pppoe.service 2>/dev/null || true
-    systemctl restart seedrou-pppoe.service
+    systemctl enable --quiet dert-pppoe.service 2>/dev/null || true
+    systemctl restart dert-pppoe.service
   else
-    systemctl disable --quiet seedrou-pppoe.service 2>/dev/null || true
-    systemctl stop seedrou-pppoe.service 2>/dev/null || true
+    systemctl disable --quiet dert-pppoe.service 2>/dev/null || true
+    systemctl stop dert-pppoe.service 2>/dev/null || true
   fi
 }
 run_actions() { # run_actions "action ..." -> 输出失败动作名；全成功输出空
@@ -361,8 +399,8 @@ run_actions() { # run_actions "action ..." -> 输出失败动作名；全成功�
       networkd) svc_restart_networkd || out="$out networkd" ;;
       dnsmasq)  # servers-file 对 dnsmasq 是启动期 fatal：确保文件存在（空文件合法），
                 # 上游由钩子/ip-up 稍后写入并 HUP（P1-3 保险，兼消 PPPoE 首拨竞态）
-                mkdir -p /run/seedrou-dns
-                [ -f /run/seedrou-dns/upstream.conf ] || : > /run/seedrou-dns/upstream.conf
+                mkdir -p /run/dert-dns
+                [ -f /run/dert-dns/upstream.conf ] || : > /run/dert-dns/upstream.conf
                 systemctl restart dnsmasq.service || out="$out dnsmasq" ;;
       nft)      svc_nft || out="$out nft" ;;
       cake)     svc_cake || true ;;

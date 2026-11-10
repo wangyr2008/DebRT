@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dns-split-prepare —— sing-box 启动前生成 00-seedrou-dns.json
+# dns-split-prepare —— sing-box 启动前生成 00-dert-dns.json
 #
 # 为什么必须在启动前：sing-box 用 -C /etc/sing-box 做目录合并，配置只在启动时读取。
 # 启动后再写这个文件不会生效，所以本脚本挂在 ExecStartPre（wait-wan 之后）。
@@ -13,7 +13,7 @@
 set -u
 
 CONF=/etc/sing-box/config.json
-DNSJSON=/etc/sing-box/00-seedrou-dns.json
+DNSJSON=/etc/sing-box/00-dert-dns.json
 [ -f "$CONF" ] || exit 0
 
 # br-lan 的 v4 地址（dnsmasq 的监听地址，也是客户端 DNS 指向）
@@ -46,9 +46,9 @@ if s:
 # 运营商 DNS：用 dispatcher 已经算好的上游文件里的 v4 服务器，
 # 保证「非白名单设备的解析结果」和「dnsmasq 的上游」是同一家，CDN 调度一致
 CARRIER=""
-if [ -f /run/seedrou-dns/upstream.conf ]; then
+if [ -f /run/dert-dns/upstream.conf ]; then
     CARRIER=$(sed -n 's/^server=\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' \
-              /run/seedrou-dns/upstream.conf 2>/dev/null | head -1)
+              /run/dert-dns/upstream.conf 2>/dev/null | head -1)
 fi
 [ -n "$CARRIER" ] || CARRIER="211.138.164.6"
 

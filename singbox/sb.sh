@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
-#  sing-box 简易管理脚本（Debian 13）—— SeedRou 下发增强版
+#  sing-box 简易管理脚本（Debian 13）—— DebRT 下发增强版
 #
-#  相对原版的变化（SeedRou v0.1.32 起）：
+#  相对原版的变化（DebRT v0.1.32 起）：
 #  - update 结果原子写入 /var/lib/sing-box/update-state.json（面板读它显示
 #    "上次成功更新时长"与持久失败原因；cron 与手动共用同一状态源）
 #  - sb auto on [HH:MM] 可指定每日更新时间（原版固定 04:00）
 #  - sb seturl <URL> 支持非交互传参（面板/脚本用）
-#  - 新增 sb uninstall（卸载内核+订阅数据，/var/lib/seedrou 留一份备份）
+#  - 新增 sb uninstall（卸载内核+订阅数据，/var/lib/dert 留一份备份）
 #  - install 补 IPv6 转发；cron 写入改原子替换
 #
 #  第一次使用（会自动装成 /usr/local/bin/sb）：
@@ -125,13 +125,13 @@ sb_ensure_user() {
 sb_record_update() {
     local ok="$1" err="$2"
     mkdir -p /var/lib/sing-box
-    SEEDROU_SB_OK="$ok" SEEDROU_SB_ERR="$err" SEEDROU_SB_TRIGGER="${SB_UPDATE_TRIGGER:-auto}" \
+    DERT_SB_OK="$ok" DERT_SB_ERR="$err" DERT_SB_TRIGGER="${SB_UPDATE_TRIGGER:-auto}" \
     python3 - <<'PYEOF'
 import json, os
-state = {"ok": os.environ["SEEDROU_SB_OK"] == "1",
+state = {"ok": os.environ["DERT_SB_OK"] == "1",
          "ts": int(__import__("time").time()),
-         "error": os.environ["SEEDROU_SB_ERR"],
-         "trigger": os.environ["SEEDROU_SB_TRIGGER"]}
+         "error": os.environ["DERT_SB_ERR"],
+         "trigger": os.environ["DERT_SB_TRIGGER"]}
 path = "/var/lib/sing-box/update-state.json"
 with open(path + ".tmp", "w") as f:
     json.dump(state, f, ensure_ascii=False)
@@ -264,7 +264,7 @@ sb_do_install() {
         sb_info "重启服务以加载新版本..."
         sb_restart_service || rc=1
     elif [[ "$did_install" -eq 1 ]] && [[ -s "$CONF_FILE" ]]; then
-        # 首次安装且已有配置（SeedRou 一键安装路径）：直接拉起
+        # 首次安装且已有配置（DebRT 一键安装路径）：直接拉起
         sb_restart_service || rc=1
     elif [[ "$did_install" -eq 1 ]]; then
         sb_info "内核已就绪但还没有配置（${CONF_FILE} 不存在）"
@@ -487,7 +487,7 @@ sb_do_uninstall() {
     local sure="${1:-}"
     if [[ "$sure" != "--yes" ]]; then
         sb_info "将要卸载 sing-box：停止并禁用服务、删除每日自动更新、删除 ${SB_BIN} 与 ${CONF_DIR}（内核、订阅与全部节点数据）。"
-        sb_info "卸载前会在 /var/lib/seedrou/ 留一份 ${CONF_DIR} 的 tar 备份。"
+        sb_info "卸载前会在 /var/lib/dert/ 留一份 ${CONF_DIR} 的 tar 备份。"
         if [[ ! -t 0 ]]; then
             sb_warn "非交互环境：请带 --yes 明确执行（sb uninstall --yes）"
             return 1
@@ -500,16 +500,16 @@ sb_do_uninstall() {
     systemctl disable --now "$SVC_NAME" 2>/dev/null || true
     rm -f "$CRON_FILE"
     if [[ -d "$CONF_DIR" ]]; then
-        mkdir -p /var/lib/seedrou
-        local bak="/var/lib/seedrou/singbox-uninstall-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+        mkdir -p /var/lib/dert
+        local bak="/var/lib/dert/singbox-uninstall-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
         tar -czf "$bak" -C / etc/sing-box 2>/dev/null && chmod 600 "$bak" \
             && sb_info "原配置已备份：${bak}"
         rm -rf "$CONF_DIR"
     fi
     rm -f /etc/sysctl.d/99-sing-box.conf
-    # A-05：不删 $SB_BIN——它是 SeedRou 下发的管理入口，不属于"内核+订阅数据"；
+    # A-05：不删 $SB_BIN——它是 DebRT 下发的管理入口，不属于"内核+订阅数据"；
     # 删掉它面板就永远无法重装（全新安装机器点一次卸载即永久卡死）
-    sb_info "sing-box 已卸载（SeedRou 面板将回到「未安装」状态，可随时一键重装）"
+    sb_info "sing-box 已卸载（DebRT 面板将回到「未安装」状态，可随时一键重装）"
 }
 
 # ---------------- 状态面板 ----------------

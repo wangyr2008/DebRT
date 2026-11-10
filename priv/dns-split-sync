@@ -75,8 +75,8 @@ TUN6=$(printf '%s' "$PARSED" | cut -d'|' -f3)
 # 白名单为空：不建表。此时 include_mac_address 空 = 不限 MAC = 全部流量进 tun，
 # 全部 DNS 走 dnsmasq 拿 fakeip，两者一致，不会出现黑洞
 if [ -z "$WLS" ]; then
-    nft delete table inet seedrou_dns 2>/dev/null
-    logger -t seedrou-dns-split "include_mac_address 为空，不建分流表（全部走代理）"
+    nft delete table inet dert_dns 2>/dev/null
+    logger -t dert-dns-split "include_mac_address 为空，不建分流表（全部走代理）"
     exit 0
 fi
 
@@ -96,7 +96,7 @@ SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd
 
 # 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表
 if ! nft -f - <<EOF 2>/dev/null
-table inet seedrou_dns {
+table inet dert_dns {
     chain pre {
         type nat hook prerouting priority dstnat - 2; policy accept;
 
@@ -109,12 +109,12 @@ table inet seedrou_dns {
 EOF
 then
     # 建表失败：删掉可能的残留，让所有 DNS 回落到 dnsmasq（安全方向）
-    nft delete table inet seedrou_dns 2>/dev/null
-    logger -t seedrou-dns-split "建表失败，已回落 dnsmasq"
+    nft delete table inet dert_dns 2>/dev/null
+    logger -t dert-dns-split "建表失败，已回落 dnsmasq"
     exit 0
 fi
 
 # 用 awk 数字段：tr | wc -l 数的是换行符，最后一项没有换行会少算一台（真机首测踩到）
 COUNT=$(printf '%s' "$WLS" | awk -F, '{print NF}')
-logger -t seedrou-dns-split "DNS 分流表已重建：白名单 $COUNT 台"
+logger -t dert-dns-split "DNS 分流表已重建：白名单 $COUNT 台"
 exit 0

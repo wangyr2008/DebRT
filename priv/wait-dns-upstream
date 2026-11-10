@@ -2,8 +2,8 @@
 # 等 WAN 口拿到 IPv4（载波感知，最多 45s）→ 写上游 → HUP dnsmasq。
 # 载波不存在（离线开机）立即退出；运行期变化由 dispatcher 钩子负责。
 set -u
-CFG="/etc/seedrou/config.json"
-HOOK="/etc/networkd-dispatcher/routable.d/70-seedrou-dns"
+CFG="/etc/dert/config.json"
+HOOK="/etc/networkd-dispatcher/routable.d/70-dert-dns"
 [ -x "$HOOK" ] || exit 0
 
 read -r MODE WANIFS <<<"$(python3 - "$CFG" <<'PY'

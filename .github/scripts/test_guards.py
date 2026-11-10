@@ -62,7 +62,7 @@ for mode in ("dhcp", "pppoe", "static"):
 
 # ---- 2) 自动 DNS：dhcp/pppoe 引用 servers-file；static+auto 被拒绝；static 存量兜底 ----
 for mode in ("dhcp", "pppoe"):
-    assert "servers-file=/run/seedrou-dns/upstream.conf" in netgen.gen_dnsmasq(base_cfg(mode, "auto")), \
+    assert "servers-file=/run/dert-dns/upstream.conf" in netgen.gen_dnsmasq(base_cfg(mode, "auto")), \
         f"{mode}+auto 缺 servers-file"
 
 try:
@@ -118,18 +118,18 @@ assert "DHCPPrefixDelegation=yes" in ppp_net and "WithoutRA=solicit" in ppp_net,
 assert "DHCP=ipv6" in ppp_net, "PPPoE ppp0 缺 DHCP=ipv6（DHCPv6 客户端不会启动，真机 546/547 为零）"
 assert "Scope=link" in ppp_net, "PPPoE ppp0 缺 ::/0 默认路由（运营商不发 RA，只有地址没有出口）"
 # R-02：ppp0 必须被 DNS 钩子认作 WAN，且与 ip-up.d 写入的 IPv4 上游合并而非覆盖
-_hook = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
+_hook = open(os.path.join(ROOT, "network", "dispatcher", "70-dert-dns"), encoding="utf-8").read()
 assert 'wans.append("ppp0")' in _hook, "R-02 回归：DNS 钩子不认 ppp0（PPPoE 的 IPv6 上游进不来）"
 assert "ppp*)" in _hook, "R-02 回归：ppp0 缺少 v4/v6 合并分支"
 # R-01：升级同步块必须覆盖所有 /etc 钩子（曾漏 v0.1.43 新增的热插拔钩子，
 # 导致"插网线自愈"只对全新安装生效）
-_priv_src = open(os.path.join(ROOT, "priv", "seedrou-priv"), encoding="utf-8").read()
-assert "75-seedrou-pppoe-hotplug" in _priv_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
+_priv_src = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+assert "75-dert-pppoe-hotplug" in _priv_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
 # PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时必须能自愈
 _wd = open(os.path.join(ROOT, "priv", "pppoe-watchdog"), encoding="utf-8").read()
 assert "ppp0" in _wd and "systemctl restart" in _wd, "看门狗缺少 ppp0 探测或重启逻辑"
-assert os.path.exists(os.path.join(ROOT, "systemd", "seedrou-pppoe-watchdog.timer")), "看门狗 timer 缺失"
-assert "seedrou-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门狗 timer"
+assert os.path.exists(os.path.join(ROOT, "systemd", "dert-pppoe-watchdog.timer")), "看门狗 timer 缺失"
+assert "dert-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门狗 timer"
 # 看门狗健康判据必须同时认 IPv4 与全局 IPv6（只认 v4 会误杀 IPv6-only 链路，
 # 每 3 分钟重启一次拨号，比卡死更糟）
 assert "scope global" in _wd, "B-01 回归：看门狗只认 IPv4"
@@ -139,7 +139,7 @@ assert "carrier" in _wd, "C-6 回归：看门狗缺载波探测（无线缆时�
 # A-1：热插拔钩子必须有 WAN 模式守卫——DHCP/静态模式下载波事件绝不能拉起
 # 拨号服务（pppd 会用残留 peers 真实拨号，双默认路由劫持 DHCP 模式）。
 # watchdog 与 hotplug 是同一逻辑两处存放，守卫必须两侧断言（"改一半"第八次的教训）
-_hot = open(os.path.join(ROOT, "network", "dispatcher", "75-seedrou-pppoe-hotplug"), encoding="utf-8").read()
+_hot = open(os.path.join(ROOT, "network", "dispatcher", "75-dert-pppoe-hotplug"), encoding="utf-8").read()
 assert '[ "$MODE" = "pppoe" ] || exit 0' in _hot, "A-1 回归：热插拔缺 WAN 模式守卫"
 assert '[ "$MODE" != "pppoe" ]' in _wd, "A-1 回归：看门狗缺 WAN 模式守卫（同一逻辑两处）"
 # B-2：DHCP 关闭态必须保留表单数值——此前 disabled 分支返回出厂默认，
@@ -189,10 +189,10 @@ assert "for d in $CLEAN_DEVS" in _qa and '"ppp0","ifb0"' in _qa, \
     "P2-01 回归：qdisc 清扫未按全部网口+ppp0 遍历"
 # P3-01：升级内联收敛必须带锁标记——子进程 acquire_lock 重开 fd9 必 BUSY，
 # 无标记时该调用 100% 失败（死代码），收敛全靠 3s 后的 converge.service 兜底
-assert "_SEEDROU_LOCK_HELD=1 /usr/local/lib/seedrou/seedrou-priv apply-all --convergent" in _priv_src, \
+assert "_DERT_LOCK_HELD=1 /usr/local/lib/dert/dert-priv apply-all --convergent" in _priv_src, \
     "P3-01 回归：升级内联收敛缺锁标记（子进程必 BUSY）"
-# P3-02：升级通道必须同步 network/systemd/seedrou-pppoe.service（A-04/R-01 同族第三处）
-assert "network/systemd/seedrou-pppoe.service" in _priv_src, \
+# P3-02：升级通道必须同步 network/systemd/dert-pppoe.service（A-04/R-01 同族第三处）
+assert "network/systemd/dert-pppoe.service" in _priv_src, \
     "P3-02 回归：升级通道漏同步 PPPoE 单元"
 # P3-06：三处 WAN 就绪判据必须同时认 IPv4 与全局 IPv6——同一逻辑三处存放，
 # 只改看门狗漏掉 wait-wan 会让 sing-box 在 IPv6-only 链路上永远起不来
@@ -263,8 +263,8 @@ assert "chap-secrets" in _un and "pap-secrets" in _un and "25-ppp0.network" in _
 _si = open(os.path.join(ROOT, "panel", "sysinfo.py"), encoding="utf-8").read()
 assert "time.time_ns()" in _si, "P3-08 回归：save_notes 仍用固定 .tmp（并发保存写坏 JSON）"
 # 观察②：upstream.conf 双写者的 tmp 必须唯一，ip-up 必须保留 v6 上游（合并而非覆盖）
-_ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "seedrou"), encoding="utf-8").read()
-_hook2 = open(os.path.join(ROOT, "network", "dispatcher", "70-seedrou-dns"), encoding="utf-8").read()
+_ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "dert"), encoding="utf-8").read()
+_hook2 = open(os.path.join(ROOT, "network", "dispatcher", "70-dert-dns"), encoding="utf-8").read()
 assert "$$.tmp" in _ipup and "$$.tmp" in _hook2, "观察② 回归：upstream.conf 双写者仍共用固定 .tmp"
 assert "grep ':'" in _ipup, "观察② 回归：ip-up 仍全量覆盖（会冲掉 dispatcher 写入的 v6 上游）"
 # P3-15：dispatcher 的 ppp* 分支必须同时读 /etc/ppp/resolv.conf——只从 CONF 保留 v4，
@@ -292,7 +292,7 @@ assert re.search(r'\[ -n "\$V6" \] \|\| V6=\$\(grep', _hook2), \
 #     "非本地"被劫持进 tun（真机 2026-11-09 17:35：白名单设备"代理全挂"，手动重启
 #     sing-box 才恢复）；
 #   ② br-lan 上旧前缀的 RA 路由（proto kernel + expires ≈60h）不会被自动清掉。
-_hook3 = open(os.path.join(ROOT, "network", "dispatcher", "90-seedrou-lan-prefix"),
+_hook3 = open(os.path.join(ROOT, "network", "dispatcher", "90-dert-lan-prefix"),
               encoding="utf-8").read()
 assert re.search(r'^ +systemctl try-restart sing-box\.service', _hook3, re.M), \
     "P3-18 回归：前缀变更钩子不再重启 sing-box（本地地址集合停在旧前缀）"
@@ -309,17 +309,17 @@ assert not re.search(r'^exec 9>.*2>/dev/null', _hook3, re.M), \
     "P3-18 回归：锁文件的 exec 重定向吞掉了脚本 stderr"
 # 三处通道必须同步（A-04/R-01/P3-02 同族：升级用户拿不到新钩子，面板版本号却是最新）
 _inst = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
-assert '90-seedrou-lan-prefix" /etc/networkd-dispatcher/routable.d/' in _inst, \
-    "P3-18 回归：install.sh 未安装 90-seedrou-lan-prefix"
-assert "90-seedrou-lan-prefix /etc/networkd-dispatcher/routable.d/" in _priv_src, \
-    "P3-18 回归：升级通道未同步 90-seedrou-lan-prefix（升级用户永远拿不到）"
-assert "routable.d/90-seedrou-lan-prefix" in _un, \
-    "P3-18 回归：卸载清单缺 90-seedrou-lan-prefix"
+assert '90-dert-lan-prefix" /etc/networkd-dispatcher/routable.d/' in _inst, \
+    "P3-18 回归：install.sh 未安装 90-dert-lan-prefix"
+assert "90-dert-lan-prefix /etc/networkd-dispatcher/routable.d/" in _priv_src, \
+    "P3-18 回归：升级通道未同步 90-dert-lan-prefix（升级用户永远拿不到）"
+assert "routable.d/90-dert-lan-prefix" in _un, \
+    "P3-18 回归：卸载清单缺 90-dert-lan-prefix"
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
 assert 'temps.get("current")' in _priv_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
-# CI 冒烟网关：升级通道的内联收敛与延迟收敛重启必须按 /run/seedrou/smoke-mode 跳过
+# CI 冒烟网关：升级通道的内联收敛与延迟收敛重启必须按 /run/dert/smoke-mode 跳过
 # （runner 的网络不能动——CI 实测步骤全绿但 agent 收尾信号传不回，job 被超时标 cancelled）
 assert "smoke-mode" in _priv_src \
     and "smoke-mode" in open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read(), \
@@ -367,7 +367,7 @@ _pf = re.findall(r'if ! pf_out="\$\(preflight_stage "\$stage"\)"; then(.*?)\n  f
 assert _pf and all("printf" in g for g in _pf), "P3-12b 回归：预检失败又吞掉了具体原因"
 
 # P3-13：收敛"无漂移"分支必须清理 stage——它在全量路径的 rm -rf 之前就 exit 0，
-# 漏了就是每次开机 / 6h 收敛 / 每次升级在 /run/seedrou 留一份完整生成物，其中
+# 漏了就是每次开机 / 6h 收敛 / 每次升级在 /run/dert 留一份完整生成物，其中
 # etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 开机后实测到 stage.XXXXXX）
 # 注意：必须按"整行命令"匹配——块里的注释也提到过这条命令，子串匹配会假绿
 # （本守卫第一版就是这么写错的，变异测试当场抓到）
@@ -376,8 +376,8 @@ assert _nodrift, "P3-13 回归：找不到无漂移分支（源码结构变了�
 assert re.search(r'^ +rm -rf "\$stage" *$', _nodrift.group(1), re.M), \
     "P3-13 回归：无漂移分支未清理 stage（每次收敛泄漏一份含凭据的生成物）"
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
-# 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/seedrou-dns/upstream.conf"
-_dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-seedrou-restart.conf"),
+# 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"
+_dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-dert-restart.conf"),
            encoding="utf-8").read()
 assert "ExecStartPre" in _dd and "upstream.conf" in _dd and "|| : >" in _dd, \
     "P3-14 回归：dnsmasq 缺 servers-file 预建（开机报 cannot read upstream.conf）"
@@ -392,7 +392,7 @@ assert 'href="/static/favicon-32.png"' in _idx and 'href="/static/favicon-16.png
 assert 'rel="apple-touch-icon"' in _idx, "P3-16 回归：index.html 缺 apple-touch-icon"
 for _ico in ("favicon.ico", "favicon-32.png", "apple-touch-icon.png"):
     assert os.path.exists(os.path.join(ROOT, "panel", "static", _ico)), f"P3-16 回归：缺 {_ico}"
-_panel = open(os.path.join(ROOT, "panel", "seedrou_panel.py"), encoding="utf-8").read()
+_panel = open(os.path.join(ROOT, "panel", "dert_panel.py"), encoding="utf-8").read()
 assert '"/favicon.ico"' in _panel, "P3-16 回归：面板未直接响应 /favicon.ico（会 302 成 HTML）"
 
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
@@ -431,8 +431,8 @@ assert "systemctl is-active sing-box.service" in _dss, \
 assert "activating" in _dss, \
     "P3-19 回归：sync 不接受 activating 状态（ExecStartPost 时表建不起来）"
 
-assert "nft delete table inet seedrou_dns" in _dst, "P3-19 回归：teardown 没删表"
-# grep 不能带 "table " 前缀：nft list tables 输出是 "table inet seedrou_dns"，
+assert "nft delete table inet dert_dns" in _dst, "P3-19 回归：teardown 没删表"
+# grep 不能带 "table " 前缀：nft list tables 输出是 "table inet dert_dns"，
 # 带前缀永远匹配不到，表会残留导致 DNS 无法回落（真机首测踩到）
 assert not re.search(r'grep -q "table ', _dst), \
     "P3-19 回归：teardown 用 'table xxx' 匹配 nft list tables（永远命中不了）"
@@ -446,31 +446,31 @@ assert "awk -F, '{print NF}'" in _dss, \
 # drop-in：ExecStartPost 建表、ExecStopPost 删表。用 ExecStopPost 而不是只靠
 # OnFailure——手动 systemctl stop 不触发 OnFailure，表会残留
 _d20 = open(os.path.join(ROOT, "systemd", "sing-box.service.d",
-                         "20-seedrou-dns-split.conf"), encoding="utf-8").read()
-assert re.search(r'^ExecStartPre=/usr/local/lib/seedrou/dns-split-prepare', _d20, re.M), \
+                         "20-dert-dns-split.conf"), encoding="utf-8").read()
+assert re.search(r'^ExecStartPre=/usr/local/lib/dert/dns-split-prepare', _d20, re.M), \
     "P3-19 回归：drop-in 缺 ExecStartPre（配置在启动后才写，不生效）"
-assert re.search(r'^ExecStartPost=\+/usr/local/lib/seedrou/dns-split-sync', _d20, re.M), \
+assert re.search(r'^ExecStartPost=\+/usr/local/lib/dert/dns-split-sync', _d20, re.M), \
     "P3-19 回归：ExecStartPost 缺 + 前缀（sing-box 用户无权限写 nft）"
-assert re.search(r'^ExecStopPost=\+/usr/local/lib/seedrou/dns-split-teardown', _d20, re.M), \
+assert re.search(r'^ExecStopPost=\+/usr/local/lib/dert/dns-split-teardown', _d20, re.M), \
     "P3-19 回归：drop-in 缺 ExecStopPost（手动 stop 后表残留 → 全网断 DNS）"
 
 # cleanup：OnFailure 路径的双保险
 _cu = open(os.path.join(ROOT, "priv", "singbox-cleanup"), encoding="utf-8").read()
-assert "seedrou_dns" in _cu, "P3-19 回归：singbox-cleanup 没删 DNS 分流表（崩溃后断 DNS）"
+assert "dert_dns" in _cu, "P3-19 回归：singbox-cleanup 没删 DNS 分流表（崩溃后断 DNS）"
 
 # 安装 / 卸载 / 升级通道三处必须同步（A-04 同族，已经踩过四次）
 _inst = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
 for _f in ("dns-split-prepare", "dns-split-sync", "dns-split-teardown"):
     assert f'priv/{_f}"' in _inst, f"P3-19 回归：install.sh 没安装 {_f}"
-assert "20-seedrou-dns-split.conf" in _inst, "P3-19 回归：install.sh 没装 DNS 分流 drop-in"
+assert "20-dert-dns-split.conf" in _inst, "P3-19 回归：install.sh 没装 DNS 分流 drop-in"
 
 _un = open(os.path.join(ROOT, "uninstall.sh"), encoding="utf-8").read()
-assert "20-seedrou-dns-split.conf" in _un, "P3-19 回归：uninstall.sh 没清 drop-in"
-assert "nft delete table inet seedrou_dns" in _un, "P3-19 回归：uninstall.sh 没清 nft 表"
+assert "20-dert-dns-split.conf" in _un, "P3-19 回归：uninstall.sh 没清 drop-in"
+assert "nft delete table inet dert_dns" in _un, "P3-19 回归：uninstall.sh 没清 nft 表"
 for _f in ("dns-split-prepare", "dns-split-sync", "dns-split-teardown"):
-    assert f"/usr/local/lib/seedrou/{_f}" in _un, f"P3-19 回归：uninstall.sh 没清 {_f}"
+    assert f"/usr/local/lib/dert/{_f}" in _un, f"P3-19 回归：uninstall.sh 没清 {_f}"
 
-assert "20-seedrou-dns-split.conf" in _priv_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
+assert "20-dert-dns-split.conf" in _priv_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
 assert "dns-split-prepare" in _priv_src, "P3-19 回归：升级通道没同步 dns-split-prepare"
 
 # 前缀变更钩子必须重新生成配置：source_ip_cidr 里含旧 v6 前缀，

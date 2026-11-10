@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SeedRou 配置校验与规范化。
+"""DebRT 配置校验与规范化。
 
 用法: validate.py SECTION   （JSON 从 stdin 读入，规范化结果输出到 stdout；失败时输出 JSON 错误并 exit 1）
 所有面板写入的配置都必须经过这里；错误信息必须可直接指导用户操作。
@@ -377,7 +377,7 @@ def norm_upgrade(section, data):
         if "://" in src:
             need(src.startswith("https://"), "UPG_SOURCE_BAD",
                  "升级源 URL 仅支持 https://",
-                 "示例：https://example.com/seedrou-manifest.json；或直接填 GitHub 仓库名")
+                 "示例：https://example.com/dert-manifest.json；或直接填 GitHub 仓库名")
             from urllib.parse import urlsplit
             host = urlsplit(src).hostname or ""   # B-04：https://example.com 曾切出空 host""
             need(bool(re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{2,5})?", host)), "UPG_SOURCE_BAD",
@@ -386,7 +386,7 @@ def norm_upgrade(section, data):
                  "升级源不能指向内网地址", "请使用公网 https 地址")
         else:
             need(re.fullmatch(r"[\w.\-]+/[\w.\-]{1,100}", src), "UPG_SOURCE_BAD",
-                 f"升级源 {src!r} 格式不正确", "填 GitHub 仓库（如 wangyr2008/SeedRou）或完整 https 清单 URL")
+                 f"升级源 {src!r} 格式不正确", "填 GitHub 仓库（如 wangyr2008/DebRT）或完整 https 清单 URL")
     return {"source": src}
 
 
@@ -448,7 +448,7 @@ def main():
     try:
         # B-09：mock 交叉校验可达——面板 mock 把当前配置写到临时文件并经此变量传入
         import os
-        with open(os.environ.get("SEEDROU_VALIDATE_CONFIG", "/etc/seedrou/config.json"), "r", encoding="utf-8") as f:
+        with open(os.environ.get("DERT_VALIDATE_CONFIG", "/etc/dert/config.json"), "r", encoding="utf-8") as f:
             cur = json.load(f)
     except Exception:
         cur = None

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""SeedRou 本机信息采集（面板用户即可读：/proc、/sys、租约文件、ARP 表）。
+"""DebRT 本机信息采集（面板用户即可读：/proc、/sys、租约文件、ARP 表）。
 
-特权/聚合数据走 seedrou-priv status；本模块只做无特权读取 + mock 数据。
+特权/聚合数据走 dert-priv status；本模块只做无特权读取 + mock 数据。
 """
 import json
 import os
@@ -10,7 +10,7 @@ import time
 
 MOCK = False
 _lease_file = "/var/lib/misc/dnsmasq.leases"   # Debian dnsmasq 默认租约路径（审计 B-04）
-_notes_file = "/var/lib/seedrou/notes.json"
+_notes_file = "/var/lib/dert/notes.json"
 
 _cpu_prev = None  # (ts, idle, total)
 _cpu_last = None  # 上一次成功计算的占用率（采样间隔过短时复用）
@@ -63,7 +63,7 @@ _MOCK_CONFIG = {
     "firewall": {"wan_input_drop": True, "portfw": [
         {"id": "r1", "name": "NAS 外网访问", "proto": "tcp", "wport": "443", "ip": "192.168.10.10", "lport": "443", "enabled": True},
     ]},
-    "upgrade": {"source": "yourname/seedrou"},
+    "upgrade": {"source": "yourname/dert"},
 }
 
 _MOCK_LEASES = [

@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25    # 防止挂死拖到默认 6 小时；15 曾两次撞上 runner 拥塞（排队5分+慢跑15分被取消）
     env:
-      SEEDROU_ADMIN_PW: "SmokeTest-PW-123"
+      DERT_ADMIN_PW: "SmokeTest-PW-123"
     steps:
       - uses: actions/checkout@v5
 
@@ -28,12 +28,12 @@ jobs:
             nftables dnsmasq ppp pppoe python3 curl ca-certificates sudo ethtool \
             networkd-dispatcher iproute2
 
-      - name: 安装 SeedRou（--smoke：不碰网络服务）
+      - name: 安装 DebRT（--smoke：不碰网络服务）
         run: |
           visudo --version | head -1    # 留底：确认 runner 的 sudo 实现
           set -o pipefail    # 关键：默认 run shell 只有 -e 没有 pipefail，tee 会掩盖 install.sh 的失败（六审）
           code=0
-          sudo env SEEDROU_ADMIN_PW="$SEEDROU_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
+          sudo env DERT_ADMIN_PW="$DERT_ADMIN_PW" bash -x install.sh --no-podman --smoke 2>&1 | tee /tmp/install.log || code=$?
           if [ "$code" -ne 0 ]; then
             echo "::error::install.sh 失败（exit $code）"
             tail -30 /tmp/install.log | tac | sed 's/^/::error::/'   # 倒序：死点排在注解第一条（上限 10 条）
@@ -43,57 +43,57 @@ jobs:
 
       - name: 断言安装产物（把"产物缺失"与"密码校验失败"分开）
         run: |
-          sudo test -f /etc/seedrou/secrets.json       || { echo "::error::secrets.json 未生成，install.sh 提前退出了"; exit 1; }
-          sudo test -f /etc/seedrou/config.json        || { echo "::error::config.json 未生成"; exit 1; }
-          sudo test -f /usr/local/lib/seedrou/pwhash.py || { echo "::error::pwhash.py 未部署"; exit 1; }
-          sudo python3 -c 'import sys;sys.path.insert(0,"/usr/local/lib/seedrou");import pwhash;print("pwhash 可导入")'
-          sudo python3 -c 'import json;d=json.load(open("/etc/seedrou/secrets.json"));print("secrets 段数:", len(d["admin_pbkdf2"].split("$")))' 
+          sudo test -f /etc/dert/secrets.json       || { echo "::error::secrets.json 未生成，install.sh 提前退出了"; exit 1; }
+          sudo test -f /etc/dert/config.json        || { echo "::error::config.json 未生成"; exit 1; }
+          sudo test -f /usr/local/lib/dert/pwhash.py || { echo "::error::pwhash.py 未部署"; exit 1; }
+          sudo python3 -c 'import sys;sys.path.insert(0,"/usr/local/lib/dert");import pwhash;print("pwhash 可导入")'
+          sudo python3 -c 'import json;d=json.load(open("/etc/dert/secrets.json"));print("secrets 段数:", len(d["admin_pbkdf2"].split("$")))' 
 
       - name: 自检（配置损坏时也不许崩，五审 P-08）
-        run: sudo /usr/local/lib/seedrou/seedrou-priv selftest
+        run: sudo /usr/local/lib/dert/dert-priv selftest
 
       - name: P-02 登录冒烟——正确密码必须通过
         run: |
-          sudo python3 -c 'import json;d=json.load(open("/etc/seedrou/secrets.json"));rec=d.get("admin_pbkdf2","");print("::error::secrets keys:", sorted(d.keys()), "| rec 段数:", len(rec.split("$")))'
-          sudo ls -la /usr/local/lib/seedrou/ | sed 's/^/::error::FILES /'
-          OUT=$(printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify) || true
+          sudo python3 -c 'import json;d=json.load(open("/etc/dert/secrets.json"));rec=d.get("admin_pbkdf2","");print("::error::secrets keys:", sorted(d.keys()), "| rec 段数:", len(rec.split("$")))'
+          sudo ls -la /usr/local/lib/dert/ | sed 's/^/::error::FILES /'
+          OUT=$(printf '%s' "$DERT_ADMIN_PW" | sudo /usr/local/lib/dert/dert-priv auth-verify) || true
           echo "auth-verify 输出: $OUT"
           echo "$OUT" | sed 's/^/::error::AUTH /'
           echo "$OUT" | grep -q '"ok": true' || { echo "::error::正确密码被拒绝（P-02）"; exit 1; }
 
       - name: P-02 错误密码必须拒绝
         run: |
-          if printf 'wrong-password' | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify; then
+          if printf 'wrong-password' | sudo /usr/local/lib/dert/dert-priv auth-verify; then
             echo "::error::错误密码被放行"; exit 1
           fi
           echo "错误密码正确拒绝"
 
       - name: 改密码后旧密码失效、新密码可用
         run: |
-          printf '{"old":"%s","new":"NewPW-456789"}' "$SEEDROU_ADMIN_PW" \
-            | sudo /usr/local/lib/seedrou/seedrou-priv passwd-set | grep -q '"ok": true'
-          if printf '%s' "$SEEDROU_ADMIN_PW" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify; then
+          printf '{"old":"%s","new":"NewPW-456789"}' "$DERT_ADMIN_PW" \
+            | sudo /usr/local/lib/dert/dert-priv passwd-set | grep -q '"ok": true'
+          if printf '%s' "$DERT_ADMIN_PW" | sudo /usr/local/lib/dert/dert-priv auth-verify; then
             echo "::error::改密后旧密码仍可用"; exit 1
           fi
-          printf 'NewPW-456789' | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify | grep -q '"ok": true'
+          printf 'NewPW-456789' | sudo /usr/local/lib/dert/dert-priv auth-verify | grep -q '"ok": true'
 
       - name: config-get 返回结构
         run: |
-          OUT=$(sudo /usr/local/lib/seedrou/seedrou-priv config-get) || true
+          OUT=$(sudo /usr/local/lib/dert/dert-priv config-get) || true
           echo "$OUT" | head -c 300; echo
           echo "$OUT" | python3 .github/scripts/check_config.py \
             || { echo "$OUT" | sed 's/^/::error::CFG /'; exit 1; }
 
       - name: HTTP 登录 + /api/status 真实链路（2026-11 首装揭出 status 缺 ok 字段）
         run: |
-          echo "::error::PANEL $(systemctl is-active seedrou-panel) $(curl -s http://127.0.0.1/api/session)"
+          echo "::error::PANEL $(systemctl is-active dert-panel) $(curl -s http://127.0.0.1/api/session)"
           # 改密码步骤已把管理密码改为 NewPW-456789，此处用新密码（顺带验证改密→登录闭环）
           CK=$(mktemp)
-          OUT=$(curl -s --max-time 15 -X POST -H 'X-SeedRou: 1' -H 'Content-Type: application/json' \
+          OUT=$(curl -s --max-time 15 -X POST -H 'X-DebRT: 1' -H 'Content-Type: application/json' \
             -d '{"password":"NewPW-456789"}' -c "$CK" http://127.0.0.1/api/login) || true
           echo "$OUT" | sed 's/^/::error::LOGIN /'
           echo "$OUT" | grep -q '"ok": true' || {
-            sudo journalctl -u seedrou-panel -n 8 --no-pager | sed 's/^/::error::PJ /'
+            sudo journalctl -u dert-panel -n 8 --no-pager | sed 's/^/::error::PJ /'
             exit 1
           }
           ST=$(curl -s --max-time 15 -b "$CK" http://127.0.0.1/api/status)
@@ -102,9 +102,9 @@ jobs:
 
       - name: dnsmasq servers-file 运行期校验（语法 + HUP 重读，复审 3.3）
         run: |
-          sudo install -d /run/seedrou-dns-test
-          printf 'server=223.5.5.5\n' | sudo tee /run/seedrou-dns-test/upstream.conf > /dev/null
-          printf 'servers-file=/run/seedrou-dns-test/upstream.conf\ninterface=lo\nbind-interfaces\npid-file=/tmp/dnsmasq-test.pid\n' \
+          sudo install -d /run/dert-dns-test
+          printf 'server=223.5.5.5\n' | sudo tee /run/dert-dns-test/upstream.conf > /dev/null
+          printf 'servers-file=/run/dert-dns-test/upstream.conf\ninterface=lo\nbind-interfaces\npid-file=/tmp/dnsmasq-test.pid\n' \
             | sudo tee /tmp/dnsmasq-test.conf > /dev/null
           sudo dnsmasq --test -C /tmp/dnsmasq-test.conf
           sudo dnsmasq -C /tmp/dnsmasq-test.conf --no-daemon & DPID=$!
@@ -115,11 +115,11 @@ jobs:
 
       - name: mock 冒烟——保存必须成功（十审 P1-1 回归守卫）
         run: |
-          python3 panel/seedrou_panel.py --mock --port 18131 &
+          python3 panel/dert_panel.py --mock --port 18131 &
           sleep 2
-          curl -sf -c /tmp/mc -X POST -H 'X-SeedRou: 1' -d '{"password":"admin"}' \
+          curl -sf -c /tmp/mc -X POST -H 'X-DebRT: 1' -d '{"password":"admin"}' \
             http://127.0.0.1:18131/api/login > /dev/null
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/mc -H 'X-SeedRou: 1' \
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/mc -H 'X-DebRT: 1' \
             -X POST -d '{"ip":"192.168.10.1","mask":"255.255.255.0"}' \
             http://127.0.0.1:18131/api/config/lan)
           [ "$CODE" = "200" ] && echo "mock 保存 OK" || { echo "::error::mock 保存失败 HTTP $CODE"; exit 1; }
@@ -130,7 +130,7 @@ jobs:
         run: python3 .github/scripts/test_guards.py
       - name: /api/singbox 状态断言（mock：已装、运行中、配置与计划字段齐）
         run: |
-          ST=$(curl -s --max-time 15 -b /tmp/mc -H 'X-SeedRou: 1' http://127.0.0.1:18131/api/singbox)
+          ST=$(curl -s --max-time 15 -b /tmp/mc -H 'X-DebRT: 1' http://127.0.0.1:18131/api/singbox)
           echo "$ST" | python3 .github/scripts/check_singbox.py
 
       - name: 内嵌 Python 编译检查（十一审 P1 回归守卫）
@@ -139,23 +139,23 @@ jobs:
       - name: P-03 升级冒烟——用官方打包流程构建升级包并真实 upgrade-apply
         run: |
           VER=$(tr -d '[:space:]' < VERSION)
-          tar -czf "/tmp/seedrou-${VER}.tar.gz" --exclude='__pycache__' --exclude='*.pyc' \
+          tar -czf "/tmp/dert-${VER}.tar.gz" --exclude='__pycache__' --exclude='*.pyc' \
             panel priv config systemd network singbox sudoers install.sh uninstall.sh VERSION README.md
-          sha256sum "/tmp/seedrou-${VER}.tar.gz" > "/tmp/pkg.sha256"
+          sha256sum "/tmp/dert-${VER}.tar.gz" > "/tmp/pkg.sha256"
           # 同版本重装是允许路径；这一步会真实执行"解压→自检→换目录→延迟重启面板"
-          sudo /usr/local/lib/seedrou/seedrou-priv upgrade-apply "/tmp/seedrou-${VER}.tar.gz" | tee /tmp/upg.json
+          sudo /usr/local/lib/dert/dert-priv upgrade-apply "/tmp/dert-${VER}.tar.gz" | tee /tmp/upg.json
           grep -q '"ok": true' /tmp/upg.json || { echo "::error::upgrade-apply 失败（P-03 回归）"; exit 1; }
 
       - name: 升级后 VERSION 与登录仍正常（B-02 + 会话密钥未丢）
         run: |
           sleep 1
-          sudo test -x /usr/local/lib/seedrou/seedrou-priv \
-            || { echo "::error::seedrou-priv 丢失执行位（扁平化回归）"; exit 1; }
-          ls -la /usr/local/lib/seedrou/share/ /usr/local/lib/seedrou/VERSION 2>&1 | sed 's/^/::error::VDIR /'
+          sudo test -x /usr/local/lib/dert/dert-priv \
+            || { echo "::error::dert-priv 丢失执行位（扁平化回归）"; exit 1; }
+          ls -la /usr/local/lib/dert/share/ /usr/local/lib/dert/VERSION 2>&1 | sed 's/^/::error::VDIR /'
           VER_LOCAL="$(tr -d '[:space:]' < VERSION)"
-          VER_INSTALLED="$(cat /usr/local/lib/seedrou/share/VERSION 2>/dev/null || echo MISSING)"
+          VER_INSTALLED="$(cat /usr/local/lib/dert/share/VERSION 2>/dev/null || echo MISSING)"
           echo "checkout=$VER_LOCAL installed=$VER_INSTALLED"
           [ "$VER_LOCAL" = "$VER_INSTALLED" ] || { echo "::error::升级后 share/VERSION 不一致（B-02 回归）"; exit 1; }
-          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/seedrou/seedrou-priv auth-verify 2>&1) || true
+          OUT=$(printf '%s' "NewPW-456789" | sudo /usr/local/lib/dert/dert-priv auth-verify 2>&1) || true
           echo "$OUT" | sed 's/^/::error::AUTHPW /'
           echo "$OUT" | grep -q '"ok": true' || { echo "::error::升级后登录失效"; exit 1; }

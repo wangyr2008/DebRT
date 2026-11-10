@@ -1,5 +1,5 @@
 [Unit]
-Description=SeedRou 开机配置收敛（幂等重放 desired state）
+Description=DebRT 开机配置收敛（幂等重放 desired state）
 # 不设 Before=dnsmasq：收敛/全量路径里对 dnsmasq 的 restart 会与该排序形成
 # 启动任务死锁（真机实测）；dnsmasq 若早于配置启动，路径内的 restart 会纠正它
 After=systemd-networkd.service
@@ -9,7 +9,7 @@ Wants=systemd-networkd.service
 Type=oneshot
 # 开机用收敛模式：配置文件跨重启持久化，无漂移时不重启 networkd/dnsmasq
 # （全量重启会导致 LAN 客户端开机闪断——真机实测），仅在 nft 表缺失时重建防火墙
-ExecStart=/usr/local/lib/seedrou/seedrou-priv apply-all --convergent
+ExecStart=/usr/local/lib/dert/dert-priv apply-all --convergent
 TimeoutStartSec=180
 
 [Install]

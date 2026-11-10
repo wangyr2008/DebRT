@@ -1,7 +1,0 @@
-[Unit]
-Description=SeedRou: sing-box 失败残留清理（恢复直连）
-BindsTo=sing-box.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/lib/seedrou/singbox-cleanup

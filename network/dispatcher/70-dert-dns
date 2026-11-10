@@ -1,16 +1,16 @@
 #!/bin/sh
 # networkd-dispatcher 钩子（routable.d / no-carrier.d）
-# 仅当事件接口是 WAN 口时：把 networkd 学到的上游 DNS 写入 /run/seedrou-dns/，
-# dnsmasq 以 conf-dir=/run/seedrou-dns 动态读取。
+# 仅当事件接口是 WAN 口时：把 networkd 学到的上游 DNS 写入 /run/dert-dns/，
+# dnsmasq 以 conf-dir=/run/dert-dns 动态读取。
 IFACE="$1"
 STATE="$2"
-RUNDIR="/run/seedrou-dns"
+RUNDIR="/run/dert-dns"
 CONF="${RUNDIR}/upstream.conf"
 
 IS_WAN=$(python3 - "$IFACE" <<'PYEOF'
 import json, sys
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
     wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
     # R-02：PPPoE 下 ppp0 才是真正的 WAN 承载口，物理口只是二层链路
     # （v0.1.41 起 IPv6 也走 ppp0 的 DHCPv6，其 DNS 必须能被这里认到）

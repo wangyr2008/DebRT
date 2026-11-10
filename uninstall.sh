@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# SeedRou 卸载脚本 —— 停服务、摘除组件。默认保留 /etc/seedrou 配置（--purge 连配置一起删）。
+# DebRT 卸载脚本 —— 停服务、摘除组件。默认保留 /etc/dert 配置（--purge 连配置一起删）。
 # 注意：卸载会移除生成的网络配置（网桥/DHCP/防火墙），机器将回到未配置状态，请准备好控制台访问。
 set -uo pipefail
 PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
-LIB_DIR="/usr/local/lib/seedrou"
-ETC_DIR="/etc/seedrou"
-VAR_DIR="/var/lib/seedrou"
+LIB_DIR="/usr/local/lib/dert"
+ETC_DIR="/etc/dert"
+VAR_DIR="/var/lib/dert"
 
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 
 echo "[卸载] 停止服务..."
-systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service seedrou-pppoe.service seedrou-dns-sync.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
+systemctl disable --now dert-converge.timer dert-panel.service dert-apply.service dert-pppoe.service dert-dns-sync.service dert-pppoe-watchdog.timer 2>/dev/null || true
 systemctl stop dnsmasq.service 2>/dev/null || true
-nft delete table inet seedrou_base 2>/dev/null || true
+nft delete table inet dert_base 2>/dev/null || true
 # B-3：WAN 口上的 cake/ingress 残留——不清理则运行中的机器继续被限速直到重启
-if [ -f /etc/seedrou/config.json ]; then
-  for WANP in $(python3 -c "import json;print(' '.join(p['name'] for p in json.load(open('/etc/seedrou/config.json')).get('ports',[]) if p.get('wan')))" 2>/dev/null); do
+if [ -f /etc/dert/config.json ]; then
+  for WANP in $(python3 -c "import json;print(' '.join(p['name'] for p in json.load(open('/etc/dert/config.json')).get('ports',[]) if p.get('wan')))" 2>/dev/null); do
     tc qdisc del dev "$WANP" root 2>/dev/null || true
     tc qdisc del dev "$WANP" ingress 2>/dev/null || true
   done
@@ -26,36 +26,45 @@ tc qdisc del dev ifb0 root 2>/dev/null || true
 
 echo "[卸载] 移除文件..."
 rm -rf "$LIB_DIR"
-rm -f /etc/sudoers.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf \
-      /etc/systemd/system/seedrou-panel.service /etc/systemd/system/seedrou-apply.service \
-      /etc/systemd/system/seedrou-converge.service /etc/systemd/system/seedrou-converge.timer \
-      /etc/systemd/system/seedrou-pppoe.service \
-      /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
+rm -f /etc/sudoers.d/dert /etc/sysctl.d/70-dert.conf /etc/modules-load.d/dert.conf \
+      /etc/systemd/system/dert-panel.service /etc/systemd/system/dert-apply.service \
+      /etc/systemd/system/dert-converge.service /etc/systemd/system/dert-converge.timer \
+      /etc/systemd/system/dert-pppoe.service \
+      /etc/systemd/system/dert-pppoe-watchdog.service /etc/systemd/system/dert-pppoe-watchdog.timer \
+      /etc/networkd-dispatcher/routable.d/70-dert-dns /etc/networkd-dispatcher/routable.d/80-dert-cake \
+      /etc/networkd-dispatcher/routable.d/90-dert-lan-prefix \
+      /etc/networkd-dispatcher/no-carrier.d/70-dert-dns /etc/ppp/ip-up.d/dert \
       /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
-      /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
-      /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/ppp/ip-up.d/seedrou \
-      /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
-      /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug \
-      /etc/ppp/ip-down.d/seedrou /etc/logrotate.d/seedrou \
-      /etc/systemd/system/seedrou-dns-sync.service /usr/local/lib/seedrou/wait-dns-upstream \
-      /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf \
+      /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
+      /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
+      /etc/sudoers.d/seedrou /etc/logrotate.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf \
+      /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets /etc/sing-box/00-seedrou-dns.json \
       /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
       /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf \
       /etc/systemd/system/seedrou-singbox-cleanup.service \
-      /usr/local/lib/seedrou/wait-wan /usr/local/lib/seedrou/singbox-cleanup \
-      /usr/local/lib/seedrou/dns-split-prepare /usr/local/lib/seedrou/dns-split-sync \
-      /usr/local/lib/seedrou/dns-split-teardown \
-      /etc/dnsmasq.d/seedrou.conf /etc/nftables.d/seedrou-base.nft \
+      /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf
+      /etc/networkd-dispatcher/carrier.d/75-dert-pppoe-hotplug \
+      /etc/networkd-dispatcher/routable.d/75-dert-pppoe-hotplug \
+      /etc/ppp/ip-down.d/dert /etc/logrotate.d/dert \
+      /etc/systemd/system/dert-dns-sync.service /usr/local/lib/dert/wait-dns-upstream \
+      /etc/systemd/system/dnsmasq.service.d/10-dert-restart.conf \
+      /etc/systemd/system/sing-box.service.d/10-dert-wait-wan.conf \
+      /etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf \
+      /etc/systemd/system/dert-singbox-cleanup.service \
+      /usr/local/lib/dert/wait-wan /usr/local/lib/dert/singbox-cleanup \
+      /usr/local/lib/dert/dns-split-prepare /usr/local/lib/dert/dns-split-sync \
+      /usr/local/lib/dert/dns-split-teardown \
+      /etc/dnsmasq.d/dert.conf /etc/nftables.d/dert-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
       /etc/systemd/network/25-ppp0.network \
-      /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets
+      /etc/ppp/peers/dert /etc/ppp/chap-secrets /etc/ppp/pap-secrets
       # P3-07：chap/pap-secrets 含运营商宽带账号与明文密码（netgen 生成，0600）——
       # 卸载不清则转手/回收机器时是凭据泄漏点；25-ppp0.network 不清则 networkd
-      # 继续尝试在 ppp0 上跑 DHCPv6。均为 SeedRou 生成物（原文件内容已被覆盖）
+      # 继续尝试在 ppp0 上跑 DHCPv6。均为 DebRT 生成物（原文件内容已被覆盖）
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
 # DNS 分流表：把客户端 DNS DNAT 到 tun 的地址，卸载后没人监听，必须清掉
-nft delete table inet seedrou_dns 2>/dev/null || true
-# sb.sh 与其 cron 由 SeedRou 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
+nft delete table inet dert_dns 2>/dev/null || true
+# sb.sh 与其 cron 由 DebRT 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
 if [ -f /usr/local/bin/sb ]; then rm -f /usr/local/bin/sb; echo "[卸载] 已移除 /usr/local/bin/sb"; fi
 if [ -f /etc/cron.d/sing-box ]; then rm -f /etc/cron.d/sing-box; echo "[卸载] 已移除 sing-box 每日更新 cron"; fi
 if systemctl list-unit-files sing-box.service >/dev/null 2>&1; then
@@ -69,8 +78,14 @@ else
   echo "[卸载] 保留配置：$ETC_DIR、$VAR_DIR（如需彻底删除请加 --purge）"
 fi
 
-[ -f /etc/resolv.conf.seedrou.bak ] && { cp -a /etc/resolv.conf.seedrou.bak /etc/resolv.conf; echo "[卸载] 已还原 /etc/resolv.conf"; }
+[ -f /etc/resolv.conf.dert.bak ] && { cp -a /etc/resolv.conf.dert.bak /etc/resolv.conf; echo "[卸载] 已还原 /etc/resolv.conf"; }
 
+userdel dert 2>/dev/null || true
+# 改名迁移残留（v0.1.49 及以前的 seedrou 布局）一并清理
+rm -rf /usr/local/lib/seedrou /etc/seedrou /var/lib/seedrou /run/seedrou /run/seedrou-dns
+rm -f /etc/systemd/system/seedrou-*.service /etc/systemd/system/seedrou-*.timer
+nft delete table inet seedrou_base 2>/dev/null || true
+nft delete table inet seedrou_dns 2>/dev/null || true
 userdel seedrou 2>/dev/null || true  # L10：卸载后移除专用用户
 systemctl daemon-reload
 echo "[卸载] 完成。网络配置文件已移除，重启后网口将回到未配置状态；如需恢复出厂前的网络，请使用安装包内备份或控制台重新配置。"

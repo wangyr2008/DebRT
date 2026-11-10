@@ -1,5 +1,5 @@
 [Unit]
-Description=SeedRou PPPoE 宽带拨号
+Description=DebRT PPPoE 宽带拨号
 Documentation=man:pppd(8)
 After=systemd-networkd.service network-online.target
 Wants=network-online.target
@@ -8,8 +8,8 @@ Before=dnsmasq.service
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/pppd call seedrou
-ExecStop=/usr/bin/poff seedrou
+ExecStart=/usr/sbin/pppd call dert
+ExecStop=/usr/bin/poff dert
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=90

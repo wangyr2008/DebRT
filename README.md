@@ -1,4 +1,4 @@
-# SeedRou —— Debian 13 有线路由器系统
+# DebRT —— Debian 13 有线路由器系统
 
 把 x86 工控机上的 **Debian 13 minimal（CD 最小化安装）** 变成有线路由器，并附带
 Apple 风格的 Web 管理后台（登录页 + 7 页：系统概览 / 网络设置 / 设备列表 /
@@ -26,21 +26,21 @@ Apple 风格的 Web 管理后台（登录页 + 7 页：系统概览 / 网络设�
 ## 2. 安装
 
 ```bash
-# 把 seedrou 目录拷到目标机后：
+# 把 dert 目录拷到目标机后：
 sudo bash install.sh            # 含 Podman
 sudo bash install.sh --no-podman # 不装 Podman（面板容器页会提示未安装）
 ```
 
 安装脚本会：
 1. 安装 `nftables dnsmasq ppp pppoe python3 networkd-dispatcher` 等（可选 podman/podman-compose）；
-2. 创建无 shell 的系统用户 `seedrou`，面板以其身份运行，特权操作经
-   **sudo 白名单唯一入口** `seedrou-priv`；
+2. 创建无 shell 的系统用户 `dert`，面板以其身份运行，特权操作经
+   **sudo 白名单唯一入口** `dert-priv`；
 3. 自动发现网口：**第 1 个口 = WAN，其余 = LAN**；LAN IP `192.168.10.1`，
    DHCP 池 `.100–.200`（可在面板修改）；
 4. 生成随机管理密码（只打印一次），或安装时交互输入；
 5. 禁用 Debian 自带 `nftables.service`（它开机 `flush ruleset`，会杀掉 sing-box 的表——
-   我们改用只管理自己表的 `seedrou-apply`）；
-6. 首次收敛 + 自检（`seedrou-priv selftest`）。
+   我们改用只管理自己表的 `dert-apply`）；
+6. 首次收敛 + 自检（`dert-priv selftest`）。
 
 接线：**上级网络（光猫桥接 / 上级路由 LAN）→ 第 1 个网口（WAN）**，电脑接其余口，
 浏览器打开 `http://192.168.10.1/` 登录。
@@ -48,25 +48,25 @@ sudo bash install.sh --no-podman # 不装 Podman（面板容器页会提示未�
 ### 卸载
 
 ```bash
-sudo bash uninstall.sh          # 保留 /etc/seedrou 配置
+sudo bash uninstall.sh          # 保留 /etc/dert 配置
 sudo bash uninstall.sh --purge  # 连配置一起删
 ```
 
 ## 3. 架构速览
 
 ```
-浏览器 ──HTTP:80──▶ seedrou-panel (用户 seedrou, Python3 标准库)
-                        │  sudo 白名单（/etc/sudoers.d/seedrou）
+浏览器 ──HTTP:80──▶ dert-panel (用户 dert, Python3 标准库)
+                        │  sudo 白名单（/etc/sudoers.d/dert）
                         ▼
-                   seedrou-priv (root, 子命令白名单)
+                   dert-priv (root, 子命令白名单)
                         │  flock 串行 + 原子写 + lastgood 回滚
-                        ├──▶ /etc/seedrou/config.json   ← 唯一事实源（无明文密码）
-                        ├──▶ /etc/seedrou/secrets.json  ← 管理密码 pbkdf2 / PPPoE 密码 (root 0600)
+                        ├──▶ /etc/dert/config.json   ← 唯一事实源（无明文密码）
+                        ├──▶ /etc/dert/secrets.json  ← 管理密码 pbkdf2 / PPPoE 密码 (root 0600)
                         └──▶ netgen.py 生成原生配置并原子落盘：
                               /etc/systemd/network/*.network (WAN + br-lan 桥)
-                              /etc/dnsmasq.d/seedrou.conf    (LAN DHCP/DNS)
-                              /etc/nftables.d/seedrou-base.nft (自有表)
-                              /etc/ppp/peers/seedrou + chap/pap-secrets (PPPoE)
+                              /etc/dnsmasq.d/dert.conf    (LAN DHCP/DNS)
+                              /etc/nftables.d/dert-base.nft (自有表)
+                              /etc/ppp/peers/dert + chap/pap-secrets (PPPoE)
 ```
 
 **关键机制（对应工程要求）：**
@@ -74,10 +74,10 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 | 要求 | 实现 |
 |---|---|
 | 配置写入原子性 | 所有 /etc 写入经 `write_atomic`（同目录 mktemp → fsync → rename）；应用前 `nft -c` / `dnsmasq --test` 预检；失败自动回滚 lastgood（保留 5 份） |
-| root/面板属主交接 | 面板无 root；唯一 sudo 入口 `seedrou-priv`（内部再校验子命令与参数）；secrets 面板读不到，验密/改密经 stdin |
+| root/面板属主交接 | 面板无 root；唯一 sudo 入口 `dert-priv`（内部再校验子命令与参数）；secrets 面板读不到，验密/改密经 stdin |
 | 错误可操作 | 全链路 `{code, message, hint}` 中文错误（原因 + 下一步），如 PPPoE 区分认证失败/无响应/占用 |
-| 敏感信息不回显 | GET 永不返回密码/哈希/密钥；UI 显示"已保存，留空保持不变"；Cookie HttpOnly+SameSite=Strict，登录 5 次失败锁 60 秒；变更请求校验 X-SeedRou 头 + Origin |
-| 重启后状态收敛 | `seedrou-apply.service` 开机幂等重放 + `seedrou-converge.timer` 开机 15 分钟后首跑、之后每 6 小时防漂移；一切原生配置都是 config.json 的生成物 |
+| 敏感信息不回显 | GET 永不返回密码/哈希/密钥；UI 显示"已保存，留空保持不变"；Cookie HttpOnly+SameSite=Strict，登录 5 次失败锁 60 秒；变更请求校验 X-DebRT 头 + Origin |
+| 重启后状态收敛 | `dert-apply.service` 开机幂等重放 + `dert-converge.timer` 开机 15 分钟后首跑、之后每 6 小时防漂移；一切原生配置都是 config.json 的生成物 |
 
 ## 4. 功能页 ↔ 实现映射
 
@@ -87,39 +87,39 @@ sudo bash uninstall.sh --purge  # 连配置一起删
 | 网络设置 | 网口绑定按真实 NIC 动态渲染；**仅支持单 WAN**（demo 提示的多 WAN 负载均衡未实现，多勾会明确报错）；IPv6 四模式：Native-PD / NAT6（自动 ULA）/ 静态 / 关；改 LAN IP 有二次确认，生效过程中管理连接会随网络重启中断，保存成功后请用新地址重新登录 |
 | 设备列表 | dnsmasq 租约 + 静态绑定合并，在线状态来自 ARP 表；备注按 MAC 存储并与静态分配同步 |
 | 安全中心 | demo 的"防火墙放行规则"实为**端口转发（DNAT）**，已正名并补齐增删改/启停/冲突校验；"防火墙总开关"= WAN 入站默认拦截（关闭时红色警示） |
-| 容器管理 | rootful Podman：容器启停/重启/删除/更新（拉最新镜像后按原端口、卷、环境变量重建）；镜像引用检查后删除；Compose 保存到 /etc/seedrou/compose.yaml，`podman-compose` 部署，失败日志可见 |
+| 容器管理 | rootful Podman：容器启停/重启/删除/更新（拉最新镜像后按原端口、卷、环境变量重建）；镜像引用检查后删除；Compose 保存到 /etc/dert/compose.yaml，`podman-compose` 部署，失败日志可见 |
 | 其他工具 | sing-box 服务卡（状态/开机自启/重启/停止/打开 Dashboard/检查更新/一键安装/卸载）；订阅卡（地址保存、更新订阅、每日自动更新时间可设定、成功显示时长、失败原因持久显示）；Tailscale 只读卡（sing-box endpoint 托管，未配置自动隐藏） |
-| 备份与升级 | 在线检查更新走 GitHub **releases/latest 302 解析**（不碰 api.github.com，规避限流，与 sb.sh 同思路，带 gh-proxy 镜像回退）；升级包 `.tar.gz`（sha256 校验 → 暂存自检 → 原子换目录 → 延迟重启面板 → 失败回滚）；备份/恢复 /etc/seedrou；恢复出厂只重置路由配置（LAN 恢复 192.168.10.1，管理密码与升级源保留） |
+| 备份与升级 | 在线检查更新走 GitHub **releases/latest 302 解析**（不碰 api.github.com，规避限流，与 sb.sh 同思路，带 gh-proxy 镜像回退）；升级包 `.tar.gz`（sha256 校验 → 暂存自检 → 原子换目录 → 延迟重启面板 → 失败回滚）；备份/恢复 /etc/dert；恢复出厂只重置路由配置（LAN 恢复 192.168.10.1，管理密码与升级源保留） |
 
 ## 5. 发布与自动升级（GitHub）
 
 仓库自带 `.github/workflows/release.yml`：推送 `v*` tag 即自动打包
-`seedrou-<ver>.tar.gz` + `.sha256` 并发到 Release。然后在面板
-「备份与升级 → 升级源」填 `wangyr2008/SeedRou`（本仓库），「检查更新」即可在线升级。
+`dert-<ver>.tar.gz` + `.sha256` 并发到 Release。然后在面板
+「备份与升级 → 升级源」填 `wangyr2008/DebRT`（本仓库），「检查更新」即可在线升级。
 
-手动升级：Releases 页下载 `seedrou-x.y.z.tar.gz`，面板上传即可（仅支持 .tar.gz；
+手动升级：Releases 页下载 `dert-x.y.z.tar.gz`，面板上传即可（仅支持 .tar.gz；
 Debian 没有 .bin/.img 固件的概念）。
 
 ## 6. 升级与回滚
 
 - **在线升级**：面板「备份与升级」→ 检查更新 → 一键升级；或上传 `.tar.gz`。
-  升级只替换 `/usr/local/lib/seedrou`（面板+特权脚本），配置 `/etc/seedrou` 不动。
+  升级只替换 `/usr/local/lib/dert`（面板+特权脚本），配置 `/etc/dert` 不动。
 - **自动回滚**：升级包校验失败/解压失败/自检失败均不会落盘，原版本原地保留；
-  每次升级前还会把当前版本备份到 `/var/lib/seedrou/lastgood/app-<版本>`。
+  每次升级前还会把当前版本备份到 `/var/lib/dert/lastgood/app-<版本>`。
 - **手动回退旧版本**：从 Releases 下载旧版 `.tar.gz` 走手动升级即可（系统拒绝降级时，
-  用 `lastgood/app-旧版本` 目录手工替换后 `systemctl restart seedrou-panel`）。
-- sudo 审计双重记录（journal + `/var/log/seedrou-sudo.log`，weekly 轮转），介意 journal
+  用 `lastgood/app-旧版本` 目录手工替换后 `systemctl restart dert-panel`）。
+- sudo 审计双重记录（journal + `/var/log/dert-sudo.log`，weekly 轮转），介意 journal
   噪音可在 `journald.conf` 按 `SYSLOG_IDENTIFIER=sudo` 过滤。
 
 ## 7. 目标机冒烟清单
 
 ```bash
-seedrou-priv selftest                       # 组件自检
-systemctl status seedrou-panel seedrou-apply dnsmasq
-nft list tables                             # 应看到 seedrou_base；开 sing-box 后还有 sing-box 表
-nft list table inet seedrou_base            # NAT / 转发规则
+dert-priv selftest                       # 组件自检
+systemctl status dert-panel dert-apply dnsmasq
+nft list tables                             # 应看到 dert_base；开 sing-box 后还有 sing-box 表
+nft list table inet dert_base            # NAT / 转发规则
 ip route show default                       # 主表默认路由应在 WAN 口（sing-box 的默认路由在 table 2022）
-cat /var/lib/seedrou/dnsmasq.leases         # 租约
+cat /var/lib/dert/dnsmasq.leases         # 租约
 # 重启收敛对比：
 nft list ruleset > /tmp/before && reboot
 nft list ruleset > /tmp/after && diff /tmp/before /tmp/after
@@ -132,14 +132,14 @@ systemctl stop sing-box && ping 223.5.5.5   # 直连自动恢复
 ## 8. 目录结构
 
 ```
-seedrou/
+dert/
 ├── install.sh / uninstall.sh     # 目标机部署
 ├── VERSION                       # 当前版本号（beta 从 0.1 起版）
 ├── panel/                        # 管理面板（Python3 标准库 + 静态前端）
-│   ├── seedrou_panel.py api.py auth.py sysinfo.py
+│   ├── dert_panel.py api.py auth.py sysinfo.py
 │   └── static/ index.html app.css app.js icons.js
 ├── priv/                         # 特权层（root）
-│   ├── seedrou-priv              # sudo 唯一入口（子命令白名单）
+│   ├── dert-priv              # sudo 唯一入口（子命令白名单）
 │   ├── lib.sh                    # 原子写 / lastgood / flock / JSON 错误协议
 │   ├── validate.py               # 配置校验与规范化
 │   ├── netgen.py                 # 由 config.json 生成全部原生配置
@@ -148,14 +148,14 @@ seedrou/
 ├── systemd/                      # 面板 / 开机收敛 / 防漂移定时器
 ├── network/                      # sysctl、模块加载、dispatcher/pppd 钩子、PPPoE 单元
 ├── singbox/COEXISTENCE.md        # 共存契约（必读）
-├── sudoers/seedrou
+├── sudoers/dert
 └── .github/workflows/release.yml # tag → tar.gz + sha256 → Release
 ```
 
 ## 9. 开发预览（无目标机也能看 UI）
 
 ```bash
-python3 panel/seedrou_panel.py --mock --port 8080
+python3 panel/dert_panel.py --mock --port 8080
 # 浏览器打开 http://127.0.0.1:8080  （mock 密码：admin）
 ```
 

@@ -1,4 +1,4 @@
-/* SeedRou 内置图标：仅包含界面用到的 lucide 图标节点，与设计稿渲染完全一致。 */
+/* DebRT 内置图标：仅包含界面用到的 lucide 图标节点，与设计稿渲染完全一致。 */
 "use strict";
 var SR_ICONS = {
   "battery-full": "<path d=\"M10 10v4\"/><path d=\"M14 10v4\"/><path d=\"M22 14v-4\"/><path d=\"M6 10v4\"/><rect x=\"2\" y=\"6\" width=\"16\" height=\"12\" rx=\"2\"/>",

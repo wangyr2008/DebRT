@@ -1,0 +1,11 @@
+[Unit]
+Description=DebRT PPPoE 看门狗定时器（每分钟探测 ppp0）
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=dert-pppoe-watchdog.service
+
+[Install]
+WantedBy=timers.target

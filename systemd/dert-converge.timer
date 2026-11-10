@@ -1,12 +1,12 @@
 [Unit]
-Description=SeedRou 定时防漂移收敛定时器
+Description=DebRT 定时防漂移收敛定时器
 
 [Timer]
 # 定位是慢速卫生检查（手改文件/enable 漂移），不是故障修复——
 # 紧急故障由 systemd Restart 策略与 dispatcher 钩子即时处理
 OnBootSec=15min
 OnUnitActiveSec=6h
-Unit=seedrou-converge.service
+Unit=dert-converge.service
 
 [Install]
 WantedBy=timers.target

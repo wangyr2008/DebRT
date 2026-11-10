@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SeedRou 面板 API 路由。
+"""DebRT 面板 API 路由。
 
 安全模型：
 - 除 /api/session、/api/login 外全部要求有效会话（HttpOnly HMAC cookie）。
-- 特权动作全部经 `sudo -n seedrou-priv <白名单子命令>`，面板永不直接写 /etc。
+- 特权动作全部经 `sudo -n dert-priv <白名单子命令>`，面板永不直接写 /etc。
 - 错误统一 {ok:false, code, message, hint}，message=原因、hint=下一步，中文可操作。
 """
 import io
@@ -20,11 +20,11 @@ import auth
 import sysinfo
 
 MOCK = False
-PRIV = "/usr/local/lib/seedrou/seedrou-priv"
-UPLOAD_DIR = "/var/lib/seedrou/uploads"
-BACKUP_DIR = "/var/lib/seedrou/backups"
-CONFIG_FILE = "/etc/seedrou/config.json"
-VERSION_FILE = "/usr/local/lib/seedrou/share/VERSION"
+PRIV = "/usr/local/lib/dert/dert-priv"
+UPLOAD_DIR = "/var/lib/dert/uploads"
+BACKUP_DIR = "/var/lib/dert/backups"
+CONFIG_FILE = "/etc/dert/config.json"
+VERSION_FILE = "/usr/local/lib/dert/share/VERSION"
 
 STATUS_MAP = {"BUSY": 409, "UNAUTH": 401, "AUTH_LOCKED": 423, "AUTH_BAD": 401,
               "TOO_LARGE": 413, "UPG_NO_SOURCE": 400, "CSRF": 403}
@@ -44,7 +44,7 @@ def init(mock=False):
     if mock:
         # mock 模式运行在开发机（无 /var/lib 写权限），用临时目录
         import tempfile
-        base = os.path.join(tempfile.gettempdir(), "seedrou-mock")
+        base = os.path.join(tempfile.gettempdir(), "dert-mock")
         UPLOAD_DIR = os.path.join(base, "uploads")
         BACKUP_DIR = os.path.join(base, "backups")
     for d in (UPLOAD_DIR, BACKUP_DIR):
@@ -53,7 +53,7 @@ def init(mock=False):
 
 # ---------------- priv 调用 ----------------
 def priv(*args, input_text=None, timeout=90):
-    """执行 seedrou-priv 子命令；返回解析后的 JSON dict；{ok:false} 抛 ApiError。"""
+    """执行 dert-priv 子命令；返回解析后的 JSON dict；{ok:false} 抛 ApiError。"""
     if MOCK:
         return mock_priv(args, input_text)
     try:
@@ -242,7 +242,7 @@ def _wan_dns():
         return wan["dns"]
     dns = []
     try:
-        with open("/run/seedrou-dns/upstream.conf") as f:
+        with open("/run/dert-dns/upstream.conf") as f:
             for line in f:
                 if line.startswith("server="):
                     dns.append(line.strip()[len("server="):])
@@ -344,7 +344,7 @@ def post_password(body, headers):
             # P2-1：AUTH_BAD 全局映射 401 会把改密页用户踢出会话（401 触发前端登出）。
             # 原密码错误是表单校验级错误，用 400 表达
             raise ApiError(400, "PW_OLD_BAD", "原密码不正确",
-                           "请输入当前使用的管理密码；忘记密码请在控制台执行 seedrou-priv factory-reset")
+                           "请输入当前使用的管理密码；忘记密码请在控制台执行 dert-priv factory-reset")
         raise
     return 200, {"ok": True, "message": out.get("message", "密码已修改")}, None
 
@@ -497,7 +497,7 @@ def post_upgrade_upload(body, headers):
 
 
 def post_restore(body, headers):
-    if (headers.get("X-SeedRou-Confirm") or "") != "1":
+    if (headers.get("X-DebRT-Confirm") or "") != "1":
         # B-06：恢复会整体覆盖配置，API 层要求确认头（前端上传时携带）
         raise ApiError(400, "CONFIRM", "缺少二次确认", "恢复将覆盖当前配置，请先在弹窗确认")
     if not body:
@@ -515,14 +515,14 @@ def post_restore(body, headers):
 
 def get_backup(body, headers):
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    name = "seedrou-backup-" + time.strftime("%Y%m%d-%H%M%S") + ".tar.gz"
+    name = "dert-backup-" + time.strftime("%Y%m%d-%H%M%S") + ".tar.gz"
     out_path = os.path.join(BACKUP_DIR, name)
     if MOCK:
         # mock 也要产出真 tar.gz：前端按 .tar.gz 落盘，假 gzip 会得到损坏文件（2026-11 自测）
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-            payload = b"SeedRou mock backup (preview build)\n"
-            info = tarfile.TarInfo("seedrou-backup.txt")
+            payload = b"DebRT mock backup (preview build)\n"
+            info = tarfile.TarInfo("dert-backup.txt")
             info.size = len(payload)
             info.mtime = int(time.time())
             tf.addfile(info, io.BytesIO(payload))
@@ -557,7 +557,7 @@ _SBOX = {
     "url": "https://sub.example.com/link/9f3c8d2e", "url_set": True,
     "auto_on": True, "auto_time": "04:00",
     "update": {"ok": True, "ts": int(time.time()) - 180, "error": "", "trigger": "auto"},
-    "endpoint": {"present": True, "hostname": "seedrou"},
+    "endpoint": {"present": True, "hostname": "dert"},
     "dashboard": {"controller": "0.0.0.0:9090", "ui": True},
     "dash_url": "",
 }
@@ -582,7 +582,7 @@ def mock_priv(args, input_text):
         cfg = sysinfo._MOCK_CONFIG  # 直接改模块态：mock 保存可持久（审计 C-09）
         data = json.loads(input_text or "{}")
         # mock 也过一遍真实校验（审计 6：此前 mock 下校验分支全部不可达）；
-        # validate.py 读 /etc/seedrou/config.json 取 cur，缺失时以 None 安全跳过交叉校验
+        # validate.py 读 /etc/dert/config.json 取 cur，缺失时以 None 安全跳过交叉校验
         import copy as _copy
         import os as _os
         import tempfile as _tempfile
@@ -594,7 +594,7 @@ def mock_priv(args, input_text):
             _tmp.close()
             p = subprocess.run([sys.executable, vpy, section], input=json.dumps(data, ensure_ascii=False),
                                capture_output=True, text=True, timeout=20,
-                               env={**_os.environ, "SEEDROU_VALIDATE_CONFIG": _tmp.name})
+                               env={**_os.environ, "DERT_VALIDATE_CONFIG": _tmp.name})
             try:
                 _os.unlink(_tmp.name)
             except OSError:

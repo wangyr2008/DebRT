@@ -1,0 +1,7 @@
+[Unit]
+Description=DebRT 定时防漂移收敛
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/dert/dert-priv apply-all --convergent
+TimeoutStartSec=120

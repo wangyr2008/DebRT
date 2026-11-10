@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SeedRou QoS（cake）：读 config.json，在 WAN 口做 egress cake + ifb 入向整形。
+# DebRT QoS（cake）：读 config.json，在 WAN 口做 egress cake + ifb 入向整形。
 # 由 apply 流水线、networkd-dispatcher 钩子与 ppp ip-up.d 调用；幂等。
 set -u
 PRIV_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -10,7 +10,7 @@ read -r WAN_DEV ENABLED DOWN UP <<EOF
 $(python3 - <<'PYEOF'
 import json
 try:
-    cfg = json.load(open("/etc/seedrou/config.json"))
+    cfg = json.load(open("/etc/dert/config.json"))
 except Exception:
     print(" off 0 0"); raise SystemExit
 if cfg.get("wan", {}).get("mode") == "pppoe":
@@ -30,7 +30,7 @@ ip link set ifb0 up 2>/dev/null || true
 # P2-01：清扫按「全部配置网口 + ppp0 + ifb0」遍历，而不是只清当前 WAN_DEV——
 # 换口（DHCP↔PPPoE）后旧口上的 cake/ingress 会留在原地：同一份流量被双重整形、
 # 关闭 QoS 后旧口仍被旧速率限着而面板显示"已关闭"（真机 2026-11-06 实录）
-CLEAN_DEVS="$(python3 -c 'import json;c=json.load(open("/etc/seedrou/config.json"));print(" ".join([p["name"] for p in c.get("ports",[])]+["ppp0","ifb0"]))' 2>/dev/null || echo "ifb0")"
+CLEAN_DEVS="$(python3 -c 'import json;c=json.load(open("/etc/dert/config.json"));print(" ".join([p["name"] for p in c.get("ports",[])]+["ppp0","ifb0"]))' 2>/dev/null || echo "ifb0")"
 for d in $CLEAN_DEVS; do
   tc qdisc del dev "$d" root 2>/dev/null || true
   tc qdisc del dev "$d" ingress 2>/dev/null || true
