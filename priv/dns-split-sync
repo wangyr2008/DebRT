@@ -10,10 +10,14 @@
 # 数据源只有一个：/etc/sing-box/config.json 里 tun.include_mac_address
 # （由 sub-store 模板维护）。本脚本只读不写，加设备只改那一处。
 #
-# 行为矩阵：
-#   include_mac_address 为空/缺失 → 不建表（全部走 dnsmasq → 全部 fakeip → 全部走代理）
-#   include_mac_address 有值      → 建表，白名单走 dnsmasq、其余走 sing-box 真实解析
-#                                   （写 ["00:00:00:00:00:00"] 这种哨兵即为「全部直连」）
+# 行为矩阵（v0.1.64 起方向与旧版相反，勿按旧记忆理解）：
+#   include_mac_address 为空/缺失 → 不建表：所有 DNS 都到 dnsmasq:53 拿真实 IP，
+#     但 tun 的 include_mac_address 为空又意味着「不限 MAC」= 全部流量仍进 tun。
+#     这是个退化组合（没有 fakeip 就反查不出域名，只能靠 IP 规则路由），实际不会这么配。
+#   include_mac_address 有值      → 建表：
+#       白名单   → DNAT 到 br-lan:5353（sing-box direct inbound → hijack-dns → fakeip）
+#       非白名单 → DNAT 到 br-lan:53  （dnsmasq → 运营商 → 真实 IP，完全不进 sing-box）
+#     写 ["00:00:00:00:00:00"] 这种哨兵 = 所有真实设备都落在「非白名单」= 全部直连。
 set -u
 
 CONF=/etc/sing-box/config.json
@@ -36,51 +40,36 @@ while [ "$i" -lt 20 ]; do
 done
 ip link show tun0 >/dev/null 2>&1 || exit 0
 
-# 从 config.json 读：白名单列表、tun 的 v4/v6 地址
-PARSED=$(python3 - "$CONF" <<'PYEOF'
-import ipaddress, json, sys
+# 从 config.json 读白名单列表（sub-store 维护的唯一数据源）
+#
+# v0.1.65 起不再读 tun 的 DNS 地址：白名单的 DNS 目标是 br-lan 的 53 端口 + :5353，
+# 与非白名单的 dnsmasq:53 同在一台机器上，跟 tun 的内部地址无关。
+WLS=$(python3 - "$CONF" <<'PYEOF'
+import json, sys
 
 try:
     c = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(0)
 
-macs, v4, v6 = [], "", ""
 for ib in c.get("inbounds", []):
-    if ib.get("type") != "tun":
-        continue
-    macs = ib.get("include_mac_address") or []
-    for a in ib.get("address", []):
-        try:
-            net = ipaddress.ip_interface(a)
-        except Exception:
-            continue
-        if net.version == 4 and not v4:
-            v4 = str(net.network.network_address + 2)   # /30 里 .1 是 tun 自己，.2 是 DNS
-        elif net.version == 6 and not v6:
-            v6 = str(net.network.network_address + 2)   # /126 同理
-    break
-
-print("|".join([",".join(macs), v4, v6]))
+    if ib.get("type") == "tun":
+        print(",".join(ib.get("include_mac_address") or []))
+        break
 PYEOF
 )
 
-WLS=$(printf '%s' "$PARSED" | cut -d'|' -f1)
-TUN4=$(printf '%s' "$PARSED" | cut -d'|' -f2)
-TUN6=$(printf '%s' "$PARSED" | cut -d'|' -f3)
-
-# 拿不到 tun 地址就没法建表（订阅配置结构变了？），保持不建表 = 回落 dnsmasq
-[ -n "$TUN4" ] || exit 0
-
-# 白名单为空：不建表。此时 include_mac_address 空 = 不限 MAC = 全部流量进 tun，
-# 全部 DNS 走 dnsmasq 拿 fakeip，两者一致，不会出现黑洞
+# 白名单为空：不建表。所有 DNS 走 dnsmasq:53（真实 IP）。
+# 注意此时 tun 的 include_mac_address 也为空 = 不限 MAC = 流量仍全部进 tun，
+# 但没有 fakeip 就反查不出域名，只能靠 IP 规则——属退化组合，保持现状不特殊处理。
 if [ -z "$WLS" ]; then
     nft delete table inet dert_dns 2>/dev/null
-    logger -t dert-dns-split "include_mac_address 为空，不建分流表（全部走代理）"
+    logger -t dert-dns-split "include_mac_address 为空，不建分流表（DNS 全部走 dnsmasq）"
     exit 0
 fi
 
-# dnsmasq 的地址（白名单设备的 DNS 回导目标）
+# DNAT 的目标地址都在 br-lan 上：白名单用 LAN4/LAN6 的 5353（sing-box），
+# 非白名单用 LAN4/LAN6 的 53（dnsmasq）。两者同机不同端口，靠 MAC 决定去向。
 # 同时兼容多行与 ip -o 单行输出：单行格式下 inet 在第 3 列
 LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
        | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }

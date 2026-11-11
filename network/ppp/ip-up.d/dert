@@ -24,4 +24,16 @@ systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 [ -x /usr/local/lib/dert/qdisc-apply ] && /usr/local/lib/dert/qdisc-apply
 [ -x /usr/local/lib/dert/wan-addr-sync ] && /usr/local/lib/dert/wan-addr-sync
 
+# WAN 重拨后 PD 前缀可能变化，但 networkd-dispatcher 的 routable 事件不会因此触发
+# （真机 2026-11-12 复现：ppp0 重拨后 br-lan 前缀从 a50:3d81 变成 a53:bf71，钩子零日志，
+#  nft 的 v6 dnat 目标停在旧前缀，白名单设备的 v6 DNS 全部打向不存在的地址，437 个包落空）。
+# 这里主动延迟 20 秒调一次——ppp0 ip-up 时 PD 还没委派到 br-lan，需要等它落地。
+# 用 systemd-run 而不是后台 &：pppd 退出时会连带杀掉子进程。
+# --collect：unit 执行完自动清理，避免每次重拨堆积一个 failed unit。
+if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run --on-active=20s --collect \
+        /etc/networkd-dispatcher/routable.d/90-dert-lan-prefix br-lan routable \
+        >/dev/null 2>&1 || true
+fi
+
 exit 0

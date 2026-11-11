@@ -15,7 +15,7 @@
 #   3. xxx.lan → dnsmasq（landns）—— 保住本地主机名与 PTR 反查。
 #
 # 非白名单设备由 nft 直接 DNAT 到 dnsmasq:53，完全不进 sing-box，因此这里不需要
-# 任何「按源 IP 分流」的规则（v0.1.57~v0.1.63 的 source_ip_cidr / carrier 已移除）。
+# 任何「按源 IP 分流」的规则（v0.1.57~v0.1.64 的 source_ip_cidr / carrier 已移除）。
 # dnsmasq 的上游查询由 dert_base 的 dns_bypass 链打标绕过 sing-box（见 netgen.py）。
 #
 # 写文件用 tmp + rename，避免 sing-box 读到半个 JSON。
@@ -33,43 +33,15 @@ LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
               $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
 [ -n "$LAN4" ] || LAN4="192.168.10.1"
 
-# br-lan 的全局 v6 前缀，统一成 x:x:x:x::/64
-# 用 ipaddress 而不是 awk 拼 hextet：地址带 :: 压缩时（如 fd00:1234::1/64）
-# awk 的 split 会分出错位的空字段，拼出 fd00:1234::1::/64 这种非法前缀
-LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null \
-       | awk '$1 == "inet6" { print $2; exit } $3 == "inet6" { print $4; exit }' \
-       | python3 -c '
-import sys, ipaddress
-s = sys.stdin.read().strip()
-if s:
-    try:
-        net = ipaddress.ip_interface(s).network
-        if net.prefixlen == 64:
-            # 必须打印整个网络（含 /64）——只打印 network_address 会得到裸地址，
-            # sing-box 的 source_ip_cidr 不接受不带前缀长度的 IPv6
-            print(net)
-    except Exception:
-        pass
-' 2>/dev/null)
+# v0.1.65 起不再需要 br-lan 的 v6 前缀和运营商 DNS 地址：
+#   - direct inbound 监听 "::" 双栈，不绑定具体 v6 地址
+#   - 非白名单设备的 DNS 由 nft 直接 DNAT 到 dnsmasq，不经 sing-box，所以这里
+#     也不需要「按源 IP 分流到运营商」的规则（v0.1.57~v0.1.64 的 carrier 已移除）
 
-# 运营商 DNS：用 dispatcher 已经算好的上游文件里的 v4 服务器，
-# 保证「非白名单设备的解析结果」和「dnsmasq 的上游」是同一家，CDN 调度一致
-CARRIER=""
-if [ -f /run/dert-dns/upstream.conf ]; then
-    CARRIER=$(sed -n 's/^server=\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' \
-              /run/dert-dns/upstream.conf 2>/dev/null | head -1)
-fi
-[ -n "$CARRIER" ] || CARRIER="211.138.164.6"
-
-python3 - "$DNSJSON" "$LAN4" "$LAN6" "$CARRIER" <<'PYEOF'
+python3 - "$DNSJSON" "$LAN4" <<'PYEOF'
 import json, os, sys
 
-path, lan4, lan6, carrier = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-
-# 局域网网段：v4 取 /24（与 br-lan 的地址同网段），v6 用 PD 前缀
-cidrs = [lan4.rsplit(".", 1)[0] + ".0/24"]
-if lan6:
-    cidrs.append(lan6)
+path, lan4 = sys.argv[1], sys.argv[2]
 
 cfg = {
     # 白名单专用 DNS 入口：nft 把白名单设备的 53 端口 DNAT 到这里。

@@ -446,6 +446,20 @@ assert "dns_bypass" in _ng_src, \
     "P3-19 回归：netgen 没生成 dns_bypass 链（dnsmasq 上游会被 mark 0x2023 送进 tun → fakeip → 断网）"
 assert "meta mark set 0x00002024" in _ng_src, \
     "P3-19 回归：dns_bypass 没打 0x2024（这是唯一能完全绕过 auto_redirect 的标记）"
+
+# v0.1.65：WAN 重拨不产生 networkd-dispatcher 的 routable 事件，前缀检查必须在
+# ppp ip-up 里主动触发。真机 2026-11-12 复现：重拨后前缀从 a50:3d81 变成 a53:bf71，
+# 钩子零日志，nft 的 v6 dnat 目标停在旧前缀，白名单 v6 DNS 437 个包全部落空。
+_ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "dert"), encoding="utf-8").read()
+assert "90-dert-lan-prefix" in _ipup, \
+    "P3-19 回归：ip-up 钩子没触发前缀检查（重拨换前缀后 nft v6 目标会停在旧前缀）"
+assert "systemd-run" in _ipup and "--on-active" in _ipup, \
+    "P3-19 回归：ip-up 里没用 systemd-run 延迟调用（pppd 退出会杀掉后台子进程）"
+# v0.1.65 死代码清理后不应再出现
+assert "TUN4" not in _dss and "TUN6" not in _dss, \
+    "P3-19 回归：sync 又读了 tun DNS 地址（新架构白名单走 LAN4:5353，与 tun 无关）"
+assert "CARRIER" not in _dsp, \
+    "P3-19 回归：prepare 又读了运营商 DNS（非白名单已改为 nft 直连 dnsmasq，不经 sing-box）"
 # sync 必须写 lan-prefix 基线：dispatcher 的 routable 事件常早于 PD 委派，
 # 钩子的 lan_prefix() 只取 scope global，此刻为空 → 15 秒等待超时后静默 exit 0，
 # 基线永久缺失 → 下次换前缀时 OLD 为空，被误判成"首次记录"→ 只写记录就退出，

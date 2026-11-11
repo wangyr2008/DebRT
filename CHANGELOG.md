@@ -7,6 +7,39 @@
 
 ## [Unreleased]
 
+## [0.1.65] - 2026-11-12
+
+### Fixed
+
+- **PPPoE 重拨换前缀后 nft 的 v6 DNAT 目标停在旧前缀**（真机 2026-11-12 复现）：
+  `90-dert-lan-prefix` 钩子依赖 networkd-dispatcher 的 `routable` 事件，但 ppp0
+  重拨并不产生该事件（24 小时内只执行过 2 次，都在上一次开机）。重拨后 br-lan
+  前缀从 `a50:3d81` 变为 `a53:bf71`，nft 表里的 `dnat ip6 to` 仍是旧前缀，白名单
+  设备的 v6 DNS 全部打向不存在的地址，实测 437 个包落空。
+  修法：在 `network/ppp/ip-up.d/dert` 里用 `systemd-run --on-active=20s` 主动调用
+  一次前缀检查。延迟 20 秒是因为 ip-up 时 PD 还没委派到 br-lan；用 `systemd-run`
+  而不是 `&` 是因为 pppd 退出会连带杀掉子进程；`--collect` 让 unit 跑完自动清理，
+  避免每次重拨堆积一个 unit。
+
+### Changed
+
+- `priv/dns-split-sync` 不再读 tun 的 DNS 地址（`TUN4`/`TUN6` 死代码）。v0.1.64 起
+  白名单的 DNS 目标是 `br-lan:5353`，与非白名单的 `br-lan:53` 同机不同端口，与 tun
+  内部地址无关。原来那句 `[ -n "$TUN4" ] || exit 0` 只在订阅结构异常时才会误退出，
+  属逻辑过时而非功能缺陷。
+- `priv/dns-split-prepare` 移除 `LAN6`、`CARRIER` 及相关参数。`direct` inbound 监听
+  `::` 双栈，不绑具体 v6 地址；非白名单已改为 nft 直连 dnsmasq，不再需要
+  「按源 IP 分流到运营商」的规则。
+- 修正两处过时注释：`dns-split-sync` 头部的「行为矩阵」在 v0.1.64 反转方向后仍写着
+  旧语义（白名单走 dnsmasq、其余走 sing-box），与实际相反；`dns-split-prepare` 的
+  版本区间标注不一致。
+
+### Notes
+
+- 守卫 P3-19 新增 4 条断言：`ip-up` 必须引用 `90-dert-lan-prefix` 且用
+  `systemd-run --on-active`；`dns-split-sync` 不得再出现 `TUN4`/`TUN6`；
+  `dns-split-prepare` 不得再出现 `CARRIER`。四项变异测试全部捕获。
+
 ## [0.1.64] - 2026-11-12
 
 ### Changed
