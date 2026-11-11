@@ -172,3 +172,12 @@ python3 panel/dert_panel.py --mock --port 8080
 - 面板为 HTTP 明文（局域网惯例）；如需 HTTPS 可自行在前置反代加 TLS。
 - 备份包不含 secrets（管理密码/宽带密码），恢复后如需 PPPoE 拨号需重新输入密码。
 - LAN 子网掩码仅支持 /24（255.255.255.0）——地址池按「IP 末段」配置的语义决定；存量更细/更宽掩码会在收敛时自动迁移为 /24。
+
+## 11. 许可证与相关文档
+
+本项目采用 [MIT 许可证](LICENSE) © 2026 wangyr2008。
+
+- 版本变更记录：[CHANGELOG.md](CHANGELOG.md)
+- 参与开发 / 提交问题：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全问题报告方式：[SECURITY.md](SECURITY.md)
+- 与 sing-box 共存说明：[singbox/COEXISTENCE.md](singbox/COEXISTENCE.md)
