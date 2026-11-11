@@ -412,6 +412,20 @@ def gen_nft(cfg):
         "    oifname $WAN_IFS tcp flags syn tcp option maxseg size set rt mtu",
         "  }",
         "",
+        "  # dnsmasq 的上游 DNS 查询必须绕过 sing-box 的 auto_redirect。",
+        "  # 原因：sing-box 的 output 链末尾会给「未被识别的本机出站流量」打 0x2023，",
+        "  # 再经 ip rule 9001 送进 tun0，被 hijack-dns 拦截后返回 fakeip —— 非白名单",
+        "  # 设备拿到假地址就断了（真机 2026-11-11 复现，dnsmasq 日志显示它以为在问运营商）。",
+        "  # dns_mode: disabled 只关掉 dport 53 的 dnat，管不到这条 mark + 路由链路。",
+        "  #",
+        "  # 标记借用 sing-box 自己的 0x2024（语义=「本进程发出的流量，走 main 表」）：",
+        "  # 它是唯一在 output / output_prematch / prerouting 各链都无条件 return 的值，",
+        "  # 也是 ip rule 9000 唯一放行到 main 表的值。升级 sing-box 大版本时需复核该含义。",
+        "  chain dns_bypass {",
+        "    type filter hook output priority mangle - 5; policy accept;",
+        "    meta l4proto { tcp, udp } th dport 53 counter meta mark set 0x00002024",
+        "  }",
+        "",
     ]
     # hairpin：LAN 内用公网 IP 访问自己 —— LAN 侧也要做 DNAT（审计 C-20）
     lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] + dnat + dnat_lan + ["  }", ""]

@@ -7,6 +7,46 @@
 
 ## [Unreleased]
 
+## [0.1.64] - 2026-11-12
+
+### Changed
+
+- **DNS 按 MAC 分流改为完全在 nft 层完成**。白名单设备的 53 端口由 nft 的
+  `ether saddr` 匹配后 DNAT 到 `192.168.10.1:5353`（sing-box 的 direct inbound），
+  非白名单 DNAT 到 `dnsmasq:53`。`00-dert-dns.json` 随之简化到只剩
+  `hijack-dns` 和 `.lan → landns` 两条，`source_ip_cidr` 与 `carrier` 全部移除。
+  判定依据从「源 IP」换成「二层 MAC」，不受 DHCP 换 IP、邻居表过期影响。
+  真机验证：停掉 sing-box 后非白名单设备 DNS 与出网全部正常（`dert_dns` 表由
+  teardown 自动删除，DNS 回落 dnsmasq）。
+
+### Added
+
+- `priv/netgen.py` 生成 `dns_bypass` 链：给 dnsmasq 的上游 DNS 查询打 `0x2024`。
+  不加这条的话，dnsmasq 的查询会被 sing-box 的 `output` 链末尾打上 `0x2023`，
+  再经 `ip rule 9001 → table 2022 → tun0` 送进 tun，被 `hijack-dns` 拦截后返回
+  fakeip —— 非白名单设备拿到假地址直接断网（真机复现，dnsmasq 日志显示它以为
+  自己在问运营商）。
+
+### Fixed
+
+- **5353 只监听 IPv4**：nft 把白名单设备的 v6 DNS DNAT 到 `[br-lan GUA]:5353`，
+  但 inbound 只绑了 `192.168.10.1`，v6 查询全部 `connection refused`
+  （真机实测 437 个包落空）。改为 `listen: "::"` 双栈监听。
+- **`hijack-dns` 带 `protocol` 条件导致无限自环**：`direct` inbound 不做 sniff，
+  `protocol: "dns"` 永远识别不出来，规则静默不匹配后走默认 `direct` outbound，
+  把查询原样转发回 `192.168.10.1:5353`（它自己）——真机实测 CPU 130%、
+  2 分钟 7414 次查询、持续上传。去掉 `protocol`，只匹配 `inbound`。
+
+### Notes
+
+- **需要手动改 substore 模板**：tun inbound 需加 `"dns_mode": "disabled"`。
+  它关掉的是 `auto_redirect` 自动安装的 `ip saddr @local_address_set dport 53
+  dnat`（prerouting 和 output 链各一条），不影响 TCP redirect 与流量代理。
+  不改的话 substore 同步后白名单 DNS 会被 `auto_redirect` 抢走。
+- 守卫 P3-19 同步更新：断言双栈监听、`hijack-dns` 不带 `protocol`、
+  `source_ip_cidr`/`carrier` 已移除、`dns_bypass` 存在且打 `0x2024`
+  （三项变异测试全部捕获）。
+
 ## [0.1.63] - 2026-11-11
 
 ### Fixed
@@ -159,7 +199,8 @@
 
 ---
 
-[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.63...HEAD
+[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.64...HEAD
+[0.1.64]: https://github.com/wangyr2008/DebRT/compare/v0.1.63...v0.1.64
 [0.1.63]: https://github.com/wangyr2008/DebRT/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/wangyr2008/DebRT/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...v0.1.61

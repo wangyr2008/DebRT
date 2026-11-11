@@ -417,15 +417,35 @@ _dst = open(os.path.join(ROOT, "priv", "dns-split-teardown"), encoding="utf-8").
 
 # prepare：必须在 sing-box 启动前生成配置（它只在启动时读），且原子写
 assert "os.replace" in _dsp, "P3-19 回归：prepare 不是原子写（sing-box 可能读到半个 JSON）"
-assert "source_ip_cidr" in _dsp, "P3-19 回归：prepare 生成的规则缺 source_ip_cidr"
-assert "upstream.conf" in _dsp, "P3-19 回归：prepare 没复用 dispatcher 算好的运营商 DNS"
 assert "domain_suffix" in _dsp and "landns" in _dsp, "P3-19 回归：prepare 丢了 .lan 本地解析"
-# v6 前缀必须带 /nn：只 print(network_address) 会输出裸地址，sing-box 的
-# source_ip_cidr 不接受不带前缀长度的 IPv6（真机首装就踩到，v6 规则整条失效）
-assert "print(net)" in _dsp, "P3-19 回归：prepare 输出的 v6 前缀丢了 /nn"
+
+# v0.1.64：分流完全移到 nft 层，sing-box 只保留「白名单专用 DNS 入口 + hijack-dns」。
+# 判定依据从源 IP 换成 nft 的二层 ether saddr —— 不受 DHCP 换 IP、邻居表过期影响。
+assert '"listen": "::"' in _dsp, \
+    "P3-19 回归：5353 未监听双栈（nft 把 v6 DNS DNAT 到 [GUA]:5353，v6 会 connection refused）"
+assert "5353" in _dsp, "P3-19 回归：prepare 没生成白名单专用 DNS 入口端口"
+assert "hijack-dns" in _dsp, \
+    "P3-19 回归：prepare 丢了 hijack-dns（5353 收到的查询不会交给内部 DNS 模块）"
+# 带引号才匹配代码里的 JSON 键，注释里是裸词 source_ip_cidr / carrier，不会误判
+assert '"protocol": "dns"' not in _dsp, \
+    "P3-19 回归：hijack-dns 带了 protocol 条件（direct inbound 不 sniff → 规则静默不匹配 → " \
+    "走默认 direct outbound 转发回 5353 自己，无限循环，真机实测 CPU 130%）"
+assert '"source_ip_cidr"' not in _dsp, \
+    "P3-19 回归：prepare 又生成了 source_ip_cidr 规则（分流应在 nft 层按 MAC 完成）"
+assert '"carrier"' not in _dsp, \
+    "P3-19 回归：prepare 又生成了 carrier 上游（非白名单已改为直连 dnsmasq，不再进 sing-box）"
 
 # sync：数据源必须是 config.json 的 include_mac_address（sub-store 维护的唯一来源）
 assert "include_mac_address" in _dss, "P3-19 回归：sync 没读 include_mac_address（数据源分裂）"
+# 白名单的 DNS 必须 DNAT 到 5353（sing-box 入口），非白名单留在 53（dnsmasq）
+assert "5353" in _dss, "P3-19 回归：sync 没把白名单 DNS 指向 5353（会退回进 tun 再分流）"
+
+# netgen：dnsmasq 的上游查询必须绕过 sing-box 的 auto_redirect
+_ng_src = open(os.path.join(ROOT, "priv", "netgen.py"), encoding="utf-8").read()
+assert "dns_bypass" in _ng_src, \
+    "P3-19 回归：netgen 没生成 dns_bypass 链（dnsmasq 上游会被 mark 0x2023 送进 tun → fakeip → 断网）"
+assert "meta mark set 0x00002024" in _ng_src, \
+    "P3-19 回归：dns_bypass 没打 0x2024（这是唯一能完全绕过 auto_redirect 的标记）"
 # sync 必须写 lan-prefix 基线：dispatcher 的 routable 事件常早于 PD 委派，
 # 钩子的 lan_prefix() 只取 scope global，此刻为空 → 15 秒等待超时后静默 exit 0，
 # 基线永久缺失 → 下次换前缀时 OLD 为空，被误判成"首次记录"→ 只写记录就退出，

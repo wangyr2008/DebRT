@@ -131,10 +131,10 @@ table inet dert_dns {
     chain pre {
         type nat hook prerouting priority dstnat - 2; policy accept;
 
-        iifname "br-lan" ether saddr $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4
-        iifname "br-lan" ether saddr $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to $LAN6
-        iifname "br-lan" ether saddr != $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $TUN4
-        iifname "br-lan" ether saddr != $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to ${TUN6:-::1}
+        iifname "br-lan" ether saddr $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4:5353
+        iifname "br-lan" ether saddr $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to [$LAN6]:5353
+        iifname "br-lan" ether saddr != $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4
+        iifname "br-lan" ether saddr != $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to $LAN6
     }
 }
 EOF

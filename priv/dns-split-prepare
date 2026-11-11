@@ -5,10 +5,19 @@
 # 启动后再写这个文件不会生效，所以本脚本挂在 ExecStartPre（wait-wan 之后）。
 #
 # 生成内容（只含「设备维度」的规则，域名维度的分流归 sub-store 的 config.json）：
-#   1. xxx.lan          → dnsmasq（landns），保住本地主机名与 PTR 反查
-#   2. 局域网来源 A/AAAA → 运营商 DNS（carrier），拿到真实 IP
+#   1. direct inbound 监听 5353 —— 白名单设备专用 DNS 入口，nft 按 MAC 把 53 端口
+#      DNAT 到这里。用独立端口而不是 tun DNS，是为了让「按 MAC 分流」完全落在
+#      nft 的二层匹配（ether saddr）上，不依赖源 IP，也不依赖邻居表。
+#   2. route.rules hijack-dns —— 把 5353 收到的查询交给 sing-box 内部 DNS 模块。
+#      不能带 protocol: "dns"：direct inbound 不做 sniff，protocol 识别不出来，
+#      规则会静默不匹配、退回默认 direct outbound，把查询转发回 5353 自己形成
+#      无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。
+#   3. xxx.lan → dnsmasq（landns）—— 保住本地主机名与 PTR 反查。
 #
-# source_ip_cidr 里的 IPv6 前缀是 PD 委派的、会变，所以每次启动都重新生成。
+# 非白名单设备由 nft 直接 DNAT 到 dnsmasq:53，完全不进 sing-box，因此这里不需要
+# 任何「按源 IP 分流」的规则（v0.1.57~v0.1.63 的 source_ip_cidr / carrier 已移除）。
+# dnsmasq 的上游查询由 dert_base 的 dns_bypass 链打标绕过 sing-box（见 netgen.py）。
+#
 # 写文件用 tmp + rename，避免 sing-box 读到半个 JSON。
 set -u
 
@@ -63,17 +72,37 @@ if lan6:
     cidrs.append(lan6)
 
 cfg = {
+    # 白名单专用 DNS 入口：nft 把白名单设备的 53 端口 DNAT 到这里。
+    # 用独立端口而不是 tun DNS，是为了让「按 MAC 分流」在 nft 层完成，
+    # sing-box 只负责把进来的 DNS 交给内部 DNS 模块（hijack-dns）。
+    "inbounds": [
+        {
+            "type": "direct",
+            "tag": "dns-in",
+            # 必须监听双栈：nft 把白名单设备的 v6 DNS DNAT 到 [br-lan GUA]:5353，
+            # 只绑 v4 地址的话 v6 查询会 connection refused（真机 2026-11-12 实测，
+            # 白名单设备已发 437 个 v6 DNS 包全部落空）。
+            "listen": "::",
+            "listen_port": 5353,
+            "network": "udp",
+        }
+    ],
+    "route": {
+        "rules": [
+            # 不能带 protocol: "dns" —— direct inbound 不做 sniff，protocol 识别不出来，
+            # 规则不匹配就会走默认 direct outbound，把查询转发回 5353 自己，
+            # 形成无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。
+            # nft 已经保证只有 53 端口的 DNS 会进这个 inbound，只匹配 inbound 就够。
+            {"inbound": "dns-in", "action": "hijack-dns"},
+        ]
+    },
     "dns": {
         "servers": [
-            {"type": "udp", "server": lan4,    "tag": "landns"},
-            {"type": "udp", "server": carrier, "tag": "carrier"},
+            {"type": "udp", "server": lan4, "tag": "landns"},
         ],
         "rules": [
-            # 本地主机名优先，且必须在 carrier 规则之前
+            # .lan 走 dnsmasq，保住本地主机名与 PTR
             {"domain_suffix": ["lan"], "server": "landns"},
-            # 非白名单设备的查询落到这里 → 真实 IP；白名单设备的查询在 nft 层
-            # 就被导回 dnsmasq 了，走不到这条
-            {"source_ip_cidr": cidrs, "query_type": ["A", "AAAA"], "server": "carrier"},
         ],
     }
 }
