@@ -7,6 +7,26 @@
 
 ## [Unreleased]
 
+## [0.1.60] - 2026-11-11
+
+### Changed
+
+- 移除改名迁移遗留代码：`migrate_seedrou_to_dert()` 及其调用（`install.sh`、`priv/lib.sh`、
+  `priv/dert-priv`），以及 `uninstall.sh` 末尾的 seedrou 旧布局清理段。
+  新装机器不存在旧布局，这些逻辑已是死代码；`priv/lib.sh` 里那份还引用了未定义的
+  `c_info`，本身就有隐患。
+
+### Fixed
+
+- `uninstall.sh` 的 `rm -f` 清单缺续行符，导致命令提前结束——其后以 `\` 结尾的行被当成
+  独立命令执行，报错且**后续文件删不掉**。同时清理了与 `rm -rf "$LIB_DIR"` 重复的条目、
+  合并了重复出现的 `chap-secrets`。
+
+### Docs
+
+- 新增 `LICENSE`（MIT）、`CHANGELOG.md`、`CONTRIBUTING.md`、`SECURITY.md`、`.editorconfig`。
+- `README.md` 增加「许可证与相关文档」章节。
+
 ## [0.1.59] - 2026-11-11
 
 ### Fixed
@@ -107,7 +127,8 @@
 
 ---
 
-[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.59...HEAD
+[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...HEAD
+[0.1.60]: https://github.com/wangyr2008/DebRT/compare/v0.1.59...v0.1.60
 [0.1.59]: https://github.com/wangyr2008/DebRT/compare/v0.1.58...v0.1.59
 [0.1.58]: https://github.com/wangyr2008/DebRT/compare/v0.1.57...v0.1.58
 [0.1.57]: https://github.com/wangyr2008/DebRT/compare/v0.1.56...v0.1.57
