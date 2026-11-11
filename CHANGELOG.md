@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+## [0.1.63] - 2026-11-11
+
+### Fixed
+
+- **dnsmasq 在 PD 委派的 GUA 上不监听 53 端口**（真机 2026-11-11 复现）：`bind-interfaces`
+  只在启动瞬间静态绑定当时的地址，而开机时序是 dnsmasq 先起（br-lan 仅有 `fe80::`）、
+  4 秒后 PD 委派的 GUA 才出现，GUA 上的 53 永久缺失。dns-split 的 nft 表恰好把白名单
+  设备的 v6 DNS DNAT 到该 GUA，实测 6281 个包全部 `connection refused` —— iPhone 每次
+  新域名先撞一次 v6 失败再回落 v4，表现为「境外站和公众号初次打开偏慢」。
+  改为 `bind-dynamic`：跟踪接口地址变化，GUA 出现或 PPPoE 换前缀后自动补绑。
+  守卫补 P3-21（含变异测试）。
+
 ## [0.1.62] - 2026-11-11
 
 ### Fixed
@@ -147,7 +159,8 @@
 
 ---
 
-[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.62...HEAD
+[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.63...HEAD
+[0.1.63]: https://github.com/wangyr2008/DebRT/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/wangyr2008/DebRT/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/wangyr2008/DebRT/compare/v0.1.59...v0.1.60

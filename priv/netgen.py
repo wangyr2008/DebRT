@@ -278,7 +278,14 @@ def gen_dnsmasq(cfg):
     lines = ["# 由 DebRT 生成 — 请勿手工修改",
              "interface=br-lan",
              "interface=lo",
-             "bind-interfaces",
+             # 必须是 bind-dynamic 而不是 bind-interfaces：
+             # bind-interfaces 只在启动瞬间静态绑定当时的地址，之后不再跟踪。
+             # 开机时序是 dnsmasq 先起（此时 br-lan 只有 fe80::），4 秒后 PD 委派
+             # 的 GUA 才出现——GUA 上的 53 端口永远不会被监听。而 dns-split 的 nft
+             # 表把白名单设备的 v6 DNS DNAT 到该 GUA，于是全部 connection refused，
+             # iPhone 每次新域名先撞一次 v6 失败再回落 v4（真机 2026-11-11 复现）。
+             # bind-dynamic 会跟踪接口地址变化，GUA 出现/换前缀后自动补绑。
+             "bind-dynamic",
              "dhcp-authoritative",
              "domain=lan",
              "local=/lan/",

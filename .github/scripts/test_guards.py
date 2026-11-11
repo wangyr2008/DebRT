@@ -513,7 +513,19 @@ assert 'if "/" not in p: continue' in _priv_src, \
 assert "ALLOW_FILE" not in _priv_src, \
     "P3-20 回归：白名单退化为顶层文件允许清单（新增文档即自我阻塞）"
 
+# P3-21：dnsmasq 必须用 bind-dynamic，不能用 bind-interfaces。
+# 开机时序：dnsmasq 先起（br-lan 只有 fe80::），4 秒后 PD 委派的 GUA 才出现。
+# bind-interfaces 是启动瞬间的静态绑定，不会补绑 GUA —— 而 dns-split 的 nft 表把
+# 白名单设备的 v6 DNS DNAT 到该 GUA，结果全部 connection refused，iPhone 每次新
+# 域名先撞一次 v6 失败再回落 v4（真机 2026-11-11 复现，6281 个包全部落空）。
+_ng = open(os.path.join(ROOT, "priv", "netgen.py"), encoding="utf-8").read()
+assert '"bind-dynamic"' in _ng, \
+    "P3-21 回归：netgen.py 未使用 bind-dynamic（PD 委派的 GUA 上 53 端口不会被监听）"
+# 注释里会提到 bind-interfaces 作为反面说明，这里只断言它不是实际输出项
+assert '\n             "bind-interfaces"' not in _ng and "\"bind-interfaces\"," not in _ng, \
+    "P3-21 回归：netgen.py 仍在生成 bind-interfaces"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
-      "P3-19DNS按MAC分流/P3-20发布包含规/观察②③ 全部通过")
+      "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/观察②③ 全部通过")
