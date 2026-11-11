@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-11-11
+
+### Fixed
+
+- **发布包不含许可证与文档**：`dert-<ver>.tar.gz` 里没有 `LICENSE` / `CHANGELOG.md` /
+  `CONTRIBUTING.md` / `SECURITY.md`，下载源码包的人无从得知授权条款。已加入 release
+  打包清单，并同步放行升级包白名单（`ALLOW_FILE`）——否则 `upgrade-apply` 会以
+  「包内含未知文件」整包拒绝。
+- 守卫补 P3-20：打包清单与白名单任一处漏掉上述文件即失败。
+
 ## [0.1.60] - 2026-11-11
 
 ### Changed
@@ -127,7 +137,8 @@
 
 ---
 
-[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...HEAD
+[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.61...HEAD
+[0.1.61]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/wangyr2008/DebRT/compare/v0.1.59...v0.1.60
 [0.1.59]: https://github.com/wangyr2008/DebRT/compare/v0.1.58...v0.1.59
 [0.1.58]: https://github.com/wangyr2008/DebRT/compare/v0.1.57...v0.1.58

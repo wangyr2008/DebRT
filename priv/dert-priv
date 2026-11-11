@@ -1234,7 +1234,8 @@ do_upgrade_apply() {
   if ! tar -tzf "$pkg" 2>/dev/null | python3 -c '
 import sys
 ALLOW_PREFIX = ("panel/", "priv/", "config/", "systemd/", "network/", "singbox/", "sudoers/", ".github/")
-ALLOW_FILE = {"VERSION", "install.sh", "uninstall.sh", "README.md"}
+ALLOW_FILE = {"VERSION", "install.sh", "uninstall.sh", "README.md",
+              "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"}
 ok = True
 for line in sys.stdin:
     p = line.rstrip("\n")

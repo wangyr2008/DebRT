@@ -500,7 +500,17 @@ assert "dns-split-prepare" in _priv_src, "P3-19 回归：升级通道没同步 d
 assert "dns-split-prepare" in _hook3, \
     "P3-19 回归：前缀变更后没重新生成 DNS 配置（v6 网段停在旧前缀）"
 
+# P3-20：发布包必须带许可证与变更记录。
+# LICENSE 缺失在法律上等于「保留所有权利」，下载源码包的人无从得知授权条款；
+# 同时升级包白名单（dert-priv 的 ALLOW_FILE）必须同步放行——否则 upgrade-apply
+# 会以「包内含未知文件」整包拒绝，升级直接失败。
+_rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8").read()
+for _f in ("LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
+    assert _f in _rel, f"P3-20 回归：release 打包清单缺 {_f}（源码包不含该文件）"
+    assert f'"{_f}"' in _priv_src, \
+        f"P3-20 回归：升级包白名单 ALLOW_FILE 未放行 {_f}（升级会被整包拒绝）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
-      "P3-19DNS按MAC分流/观察②③ 全部通过")
+      "P3-19DNS按MAC分流/P3-20发布包含规/观察②③ 全部通过")
