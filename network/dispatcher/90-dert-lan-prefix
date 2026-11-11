@@ -55,29 +55,12 @@ lan_prefix() {
       | sort -u | tr '\n' ' ' | sed 's/ *$//'
 }
 
-# 00-dert-dns.json 的 v6 source_ip_cidr 是否已覆盖指定前缀。
-# 用于「首次记录」时判断配置是否真的正确——基线存在不等于配置正确。
-cfg_covers() {
-    [ -f /etc/sing-box/00-dert-dns.json ] || return 1
-    python3 - "$1" <<'PYEOF' 2>/dev/null
-import json, sys
-# lan_prefix() 可能返回多个前缀（空格分隔），任意一个命中即算覆盖
-wants = [w for w in sys.argv[1].split() if ":" in w]
-if not wants:
-    sys.exit(1)
-try:
-    d = json.load(open("/etc/sing-box/00-dert-dns.json"))
-except Exception:
-    sys.exit(1)
-got = set()
-for r in d.get("dns", {}).get("rules", []):
-    for c in (r.get("source_ip_cidr") or []):
-        if ":" in str(c):
-            got.add(str(c))
-sys.exit(0 if any(w in got for w in wants) else 1)
-PYEOF
-}
-
+# v0.1.66 移除了「首次记录时比对配置里的 v6 前缀」那段逻辑。
+# 它读的是 00-dert-dns.json 里「按源 IP 分流」那条规则的 v6 网段字段，
+# 而 v0.1.64 已把整条规则删掉（白名单 DNS 改由 nft 按 MAC 分流，不再靠源 IP）→ 判断恒为失败
+# → 每次「基线缺失」都会无谓地重启一次 sing-box。
+# 现在配置里已无任何前缀相关字段，唯一可能过期的是 nft 表里的 v6 DNAT 目标，
+# 由 dns-split-sync 按当时地址重算即可——调它，不重启。
 # 重启 sing-box 让 prepare 新写的 00-dert-dns.json 生效（在跑时顺带重建 local_address_set）
 restart_singbox() {
     if systemctl is-active --quiet sing-box.service 2>/dev/null; then
@@ -103,18 +86,18 @@ done
 
 if [ -z "$OLD" ]; then
     printf '%s\n' "$NEW" > "$REC"
-    # 首次记录 ≠ 配置正确：开机时 sing-box 常早于 PD 委派启动，
-    # dns-split-prepare 取到空 LAN6 → 00-dert-dns.json 只有 v4 cidr
-    # → 非白名单设备的 AAAA 源地址是 GUA、不匹配 → 落 fakeip → v6 黑洞
-    #   （设备靠 happy-eyeballs 回落 v4，表现为"偶发变慢"，极难发现；
-    #    真机 2026-11-11 09:19 重启复现，cidr 只剩 192.168.10.0/24）。
-    # 基线可能是 dns-split-sync 写的（此时配置本就正确），也可能缺失（上面那种情况），
-    # 所以这里不靠 OLD 判断，直接比对配置内容。
-    if ! cfg_covers "$NEW"; then
-        logger -t dert-lan "配置缺当前 v6 前缀（$NEW），重新生成 DNS 分流配置"
-        /usr/local/lib/dert/dns-split-prepare 2>/dev/null || true
-        restart_singbox "sing-box 已重启（补齐 v6 分流前缀）"
-    fi
+    # 基线缺失（/run 是 tmpfs，重启后本应由 dns-split-sync 在 ExecStartPost 里重建；
+    # 钩子抢先于它运行时就会走到这里）。
+    #
+    # v0.1.64 之前这里要重生成 00-dert-dns.json 并重启 sing-box，因为配置里带着
+    # 那条按源 IP 分流的规则，取不到前缀就会漏 v6 → 非白名单 AAAA 落 fakeip → v6 黑洞。
+    # v0.1.64 起配置里已无任何前缀相关字段（direct inbound 监听 "::"，非白名单
+    # 根本不进 sing-box），所以既不 prepare 也不重启。
+    #
+    # 唯一可能过期的是 nft 表里白名单的 v6 DNAT 目标（按建表那一刻的 GUA 写死）。
+    # dns-split-sync 每次都按当时的 br-lan 地址重算，调它即可；它自己会判 sing-box
+    # 是否在跑（没跑就直接退出），并发调也安全（nft -f 原子加载）。
+    /usr/local/lib/dert/dns-split-sync 2>/dev/null || true
     exit 0
 fi
 [ "$OLD" = "$NEW" ] && exit 0
@@ -131,14 +114,15 @@ for r in $(ip -6 route show dev br-lan 2>/dev/null \
         && logger -t dert-lan "已清理旧前缀路由 $r"
 done
 
-# ② 前缀变了，先重新生成 DNS 分流配置：
-#    00-dert-dns.json 的 source_ip_cidr 里含旧 v6 前缀，
-#    nft 表里白名单的 v6 DNS 目标也指向 dnsmasq 的旧全局地址。
-#    必须在重启 sing-box 之前写文件——它只在启动时读配置。
+# ② 前缀变了，先重新生成 DNS 分流配置。
+#    v0.1.64 起 00-dert-dns.json 里已没有前缀相关字段，prepare 本身与前缀无关；
+#    这里仍然调用一次，是为了让「配置由本钩子重建」的语义保持完整（幂等、代价极低），
+#    万一将来配置里又引入前缀相关的键，不会漏掉这一步。
 /usr/local/lib/dert/dns-split-prepare 2>/dev/null || true
 
-# ③ 重启 sing-box：既重建 local_address_set，也让 ② 写的新配置被读取。
-#    v0.1.59 起不再以 local_address_set 存在为前提——即使没启用 auto_redirect，
-#    不重启就永远读不到新的 v6 source_ip_cidr（真机 2026-11-11 复现）。
+# ③ 重启 sing-box：主要目的是重建 local_address_set（auto_redirect 只在启动时构建，
+#    换前缀后集合里仍是旧 /64，发往新 LAN 前缀的 v6 会被当成代理流量劫持进 tun）。
+#    同时让 ② 写的新配置被读取——它只在启动时读配置。
+#    v0.1.59 起不再以 local_address_set 存在为前提。
 restart_singbox "sing-box 已重启（重建 local_address_set + 重载 DNS 分流配置）"
 exit 0

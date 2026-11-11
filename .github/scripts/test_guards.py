@@ -296,19 +296,25 @@ _hook3 = open(os.path.join(ROOT, "network", "dispatcher", "90-dert-lan-prefix"),
               encoding="utf-8").read()
 assert re.search(r'^ +systemctl try-restart sing-box\.service', _hook3, re.M), \
     "P3-18 回归：前缀变更钩子不再重启 sing-box（本地地址集合停在旧前缀）"
-# v0.1.59：重启条件从"auto_redirect 在用"改为"sing-box 在运行"——
-# 即使没启用 auto_redirect，prepare 重写的 00-dert-dns.json 也必须重启才被读取，
-# 否则 v6 source_ip_cidr 停在旧前缀（真机 2026-11-11 重启复现：cidr 只剩 v4，
-# 非白名单设备的 AAAA 落到 fakeip → v6 黑洞）
+# v0.1.59：重启条件从"auto_redirect 在用"改为"sing-box 在运行"。
+# v0.1.64 起 00-dert-dns.json 已无前缀相关字段，但重启仍是必需的——
+# auto_redirect 只在启动时构建 nft 集合 inet6_local_address_set，换前缀后集合里
+# 仍是旧 /64，发往新 LAN 前缀的 v6 会被当成代理流量劫持进 tun（真机 2026-11-09 复现）。
 assert re.search(r'systemctl is-active --quiet sing-box\.service', _hook3), \
     "P3-18 回归：重启 sing-box 前未确认它在运行"
-# 首次记录分支必须比对配置里的 v6 前缀：开机时 sing-box 常早于 PD 委派启动，
-# prepare 取到空 LAN6 → cidr 只剩 v4。基线缺失时钩子走"首次记录"分支，
-# 若只写记录不校验配置，就永远补不上 v6（真机 2026-11-11 09:19 重启复现）
-assert "cfg_covers" in _hook3, \
-    "P3-19 回归：首次记录未比对 v6 前缀（重启后 cidr 缺 v6 → 非白名单 v6 黑洞）"
-assert re.search(r'if ! cfg_covers "\$NEW"', _hook3), \
-    "P3-19 回归：首次记录分支未调用 cfg_covers"
+# v0.1.66：首次记录分支不再比对 v6 前缀。
+# v0.1.59 引入的 cfg_covers() 读的是 00-dert-dns.json 的 dns.rules[].source_ip_cidr，
+# 而 v0.1.64 把该字段整个删掉了（白名单 DNS 改由 nft 按 MAC 分流，不再靠源 IP 判断）
+# → 该函数恒返回失败 → 「基线缺失」分支每次都无谓地重启一次 sing-box。
+# 现在配置里已无任何前缀相关字段，唯一可能过期的是 nft 表里的 v6 DNAT 目标，
+# 由 dns-split-sync 按当时地址重算即可。
+assert "cfg_covers" not in _hook3, \
+    "P3-19 回归：钩子又用 cfg_covers 比对 v6 前缀（v0.1.64 起配置里已无 source_ip_cidr，" \
+    "该判断恒失败 → 基线缺失时无谓重启 sing-box）"
+assert "source_ip_cidr" not in _hook3, \
+    "P3-19 回归：钩子又引用 source_ip_cidr（v0.1.64 起 00-dert-dns.json 不再含该字段）"
+assert re.search(r'^    /usr/local/lib/dert/dns-split-sync', _hook3, re.M), \
+    "P3-19 回归：首次记录分支没刷新 nft 分流表（v6 DNAT 目标可能停在建表时的旧 GUA）"
 # 旧前缀清理只碰带 expires 的 RA 路由，且必须跳过当前前缀（静态/当前前缀路由不能动）
 assert re.search(r"awk '/expires/ && \$1 ~ /:/", _hook3), \
     "P3-18 回归：旧前缀路由清理未限定 RA 路由（会误删静态路由）"

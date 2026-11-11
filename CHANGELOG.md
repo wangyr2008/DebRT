@@ -7,6 +7,29 @@
 
 ## [Unreleased]
 
+## [0.1.66] - 2026-11-12
+
+### Fixed
+
+- **`90-dert-lan-prefix` 的 `cfg_covers()` 恒为假**（v0.1.64 重构遗留）：它比对的是
+  `00-dert-dns.json` 里 `dns.rules[].source_ip_cidr`，而 v0.1.64 已把该字段整个删除
+  （白名单 DNS 改由 nft 按 MAC 分流，不再靠源 IP 判断）。结果是「基线缺失」分支
+  **每次都会无谓地重启一次 sing-box**——`/run` 是 tmpfs，重启后基线由
+  `dns-split-sync` 在 ExecStartPost 重建，钩子抢先运行时就会走到该分支。
+  改为：写入基线后只调 `dns-split-sync` 刷新 nft 表（它按当时的 br-lan 地址重算
+  v6 DNAT 目标），既不 `prepare` 也不重启。配置里已无任何前缀相关字段，
+  重启的唯一必要理由是重建 `local_address_set`，那只在**前缀真的变了**时才需要。
+
+### Changed
+
+- 清理 `90-dert-lan-prefix` 里两处过时注释：仍写着「`source_ip_cidr` 里含旧前缀，
+  所以要在重启前重写配置」，与实际不符。
+
+### Notes
+
+- 守卫 P3-19 的三条断言反转：`cfg_covers` 与 `source_ip_cidr` 必须**不出现**在钩子里，
+  且首次记录分支必须调用 `dns-split-sync`。两项变异测试全部捕获。
+
 ## [0.1.65] - 2026-11-12
 
 ### Fixed
