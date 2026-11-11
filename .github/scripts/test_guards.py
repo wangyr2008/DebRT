@@ -296,9 +296,19 @@ _hook3 = open(os.path.join(ROOT, "network", "dispatcher", "90-dert-lan-prefix"),
               encoding="utf-8").read()
 assert re.search(r'^ +systemctl try-restart sing-box\.service', _hook3, re.M), \
     "P3-18 回归：前缀变更钩子不再重启 sing-box（本地地址集合停在旧前缀）"
-# 重启必须以"确实在用 auto_redirect"为条件，否则每次换前缀都白断一次代理
-assert re.search(r'nft list table inet sing-box.*local_address_set', _hook3), \
-    "P3-18 回归：重启 sing-box 前未确认 auto_redirect 在用"
+# v0.1.59：重启条件从"auto_redirect 在用"改为"sing-box 在运行"——
+# 即使没启用 auto_redirect，prepare 重写的 00-dert-dns.json 也必须重启才被读取，
+# 否则 v6 source_ip_cidr 停在旧前缀（真机 2026-11-11 重启复现：cidr 只剩 v4，
+# 非白名单设备的 AAAA 落到 fakeip → v6 黑洞）
+assert re.search(r'systemctl is-active --quiet sing-box\.service', _hook3), \
+    "P3-18 回归：重启 sing-box 前未确认它在运行"
+# 首次记录分支必须比对配置里的 v6 前缀：开机时 sing-box 常早于 PD 委派启动，
+# prepare 取到空 LAN6 → cidr 只剩 v4。基线缺失时钩子走"首次记录"分支，
+# 若只写记录不校验配置，就永远补不上 v6（真机 2026-11-11 09:19 重启复现）
+assert "cfg_covers" in _hook3, \
+    "P3-19 回归：首次记录未比对 v6 前缀（重启后 cidr 缺 v6 → 非白名单 v6 黑洞）"
+assert re.search(r'if ! cfg_covers "\$NEW"', _hook3), \
+    "P3-19 回归：首次记录分支未调用 cfg_covers"
 # 旧前缀清理只碰带 expires 的 RA 路由，且必须跳过当前前缀（静态/当前前缀路由不能动）
 assert re.search(r"awk '/expires/ && \$1 ~ /:/", _hook3), \
     "P3-18 回归：旧前缀路由清理未限定 RA 路由（会误删静态路由）"
@@ -416,6 +426,15 @@ assert "print(net)" in _dsp, "P3-19 回归：prepare 输出的 v6 前缀丢了 /
 
 # sync：数据源必须是 config.json 的 include_mac_address（sub-store 维护的唯一来源）
 assert "include_mac_address" in _dss, "P3-19 回归：sync 没读 include_mac_address（数据源分裂）"
+# sync 必须写 lan-prefix 基线：dispatcher 的 routable 事件常早于 PD 委派，
+# 钩子的 lan_prefix() 只取 scope global，此刻为空 → 15 秒等待超时后静默 exit 0，
+# 基线永久缺失 → 下次换前缀时 OLD 为空，被误判成"首次记录"→ 只写记录就退出，
+# 既不 prepare 也不重启 sing-box → 00-dert-dns.json 停在旧前缀
+# （真机 2026-11-11 09:19 重启复现：cidr 只剩 192.168.10.0/24）
+assert "/run/dert/lan-prefix" in _dss, \
+    "P3-19 回归：sync 未写 lan-prefix 基线（基线缺失会导致换前缀后不重启）"
+assert "lan-prefix.tmp" in _dss, \
+    "P3-19 回归：sync 写基线不是原子写（钩子可能读到半个前缀）"
 # 空白名单必须不建表：空 = 不限 MAC = 全部流量进 tun，此时全部 DNS 该走 fakeip；
 # 若仍建表会让所有 DNS 走 carrier，而流量走 fakeip → 有地址但连不上
 assert re.search(r'if \[ -z "\$WLS" \]; then.*?exit 0', _dss, re.S), \

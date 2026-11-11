@@ -91,6 +91,37 @@ LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null \
               $3 == "inet6" { split($4, a, "/"); print a[1]; exit }')
 [ -n "$LAN6" ] || LAN6="::1"
 
+# 记录前缀基线 /run/dert/lan-prefix，供 90-dert-lan-prefix 判断"前缀是否变了"。
+#
+# 为什么必须在这里写（ExecStartPost，root），而不是等 dispatcher 钩子写：
+#   开机时 routable 事件常早于 PD 委派——钩子的 lan_prefix() 只取 scope global，
+#   此刻为空，15 秒等待超时后静默 exit 0，基线从此缺失。下次换前缀时 OLD 为空，
+#   被误判成"首次记录"→ 只写记录就退出 → 既不 prepare 也不重启 sing-box →
+#   00-dert-dns.json 停在旧前缀（真机 2026-11-11 重启复现：cidr 只剩 v4，
+#   非白名单设备的 AAAA 落到 fakeip → v6 黑洞）。
+#   此处 br-lan 的前缀正是 dns-split-prepare 生成 00-dert-dns.json 时用的那个前缀，
+#   语义上就是"本次 sing-box 启动所用的前缀"，作为基线最准确。
+if [ -n "$LAN6" ] && [ "$LAN6" != "::1" ]; then
+    PREFIX6=$(printf '%s' "$LAN6" | python3 -c '
+import sys, ipaddress
+s = sys.stdin.read().strip()
+if s:
+    try:
+        net = ipaddress.ip_interface(s + "/64").network
+        if net.prefixlen == 64:
+            print(net)      # 必须带 /64：裸地址不能与钩子的 lan_prefix() 输出比对
+    except Exception:
+        pass
+' 2>/dev/null)
+    if [ -n "$PREFIX6" ]; then
+        mkdir -p /run/dert 2>/dev/null
+        # 原子写：钩子可能并发读，不能让它读到半个前缀
+        if printf '%s\n' "$PREFIX6" > /run/dert/lan-prefix.tmp 2>/dev/null; then
+            mv -f /run/dert/lan-prefix.tmp /run/dert/lan-prefix 2>/dev/null
+        fi
+    fi
+fi
+
 # 拼 MAC 集合：0c:19:...,44:59:...
 SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
 
