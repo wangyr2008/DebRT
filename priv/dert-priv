@@ -1231,18 +1231,21 @@ do_upgrade_apply() {
   local pkg="${1:?缺少升级包路径}"
   [ -f "$pkg" ] || die "NO_FILE" "升级包不存在"
   # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越
+  #    判据只针对「危险路径」：绝对路径、含 ..、以及未知目录。
+  #    顶层文件（不含 /）一律放行——它们只能落在包根，无法穿越，也不会被部署到
+  #    系统路径（后续只 cp priv/* 到 LIB_DIR）。这条很重要：若用「允许清单」逐个
+  #    列顶层文件，新版本一旦新增文档（LICENSE/CHANGELOG…）就会被旧版白名单拒掉，
+  #    而执行校验的恰是旧版代码——升级包自我阻塞，无法自愈。
   if ! tar -tzf "$pkg" 2>/dev/null | python3 -c '
 import sys
 ALLOW_PREFIX = ("panel/", "priv/", "config/", "systemd/", "network/", "singbox/", "sudoers/", ".github/")
-ALLOW_FILE = {"VERSION", "install.sh", "uninstall.sh", "README.md",
-              "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"}
 ok = True
 for line in sys.stdin:
     p = line.rstrip("\n")
     if not p: continue
     if p.startswith("/") or ".." in p.split("/"): ok = False; break
-    if p in ALLOW_FILE: continue
     if p.endswith("/"): continue
+    if "/" not in p: continue          # 顶层文件：落在包根，安全
     if p.startswith(ALLOW_PREFIX): continue
     ok = False; break
 sys.exit(0 if ok else 1)

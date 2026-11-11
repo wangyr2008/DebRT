@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [0.1.62] - 2026-11-11
+
+### Fixed
+
+- **升级包自我阻塞**：`do_upgrade_apply` 的成员白名单是「允许清单」，新版本一旦新增顶层
+  文档（`LICENSE` / `CHANGELOG.md` 等），旧版代码就会以「包内含不认识的条目」拒绝整包
+  ——而执行校验的恰是旧版代码，无法自愈（v0.1.61 真机实测踩到）。
+  改为只拦危险路径（绝对路径 / 含 `..` / 未知目录），顶层文件一律放行：
+  它们只能落在包根，无法路径穿越，后续也只会 `cp priv/*` 到程序目录，不会被部署到系统路径。
+
 ## [0.1.61] - 2026-11-11
 
 ### Fixed
@@ -137,7 +147,8 @@
 
 ---
 
-[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.61...HEAD
+[Unreleased]: https://github.com/wangyr2008/DebRT/compare/v0.1.62...HEAD
+[0.1.62]: https://github.com/wangyr2008/DebRT/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/wangyr2008/DebRT/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/wangyr2008/DebRT/compare/v0.1.59...v0.1.60
 [0.1.59]: https://github.com/wangyr2008/DebRT/compare/v0.1.58...v0.1.59
