@@ -486,8 +486,11 @@ assert "20-dert-dns-split.conf" in _inst, "P3-19 回归：install.sh 没装 DNS 
 _un = open(os.path.join(ROOT, "uninstall.sh"), encoding="utf-8").read()
 assert "20-dert-dns-split.conf" in _un, "P3-19 回归：uninstall.sh 没清 drop-in"
 assert "nft delete table inet dert_dns" in _un, "P3-19 回归：uninstall.sh 没清 nft 表"
-for _f in ("dns-split-prepare", "dns-split-sync", "dns-split-teardown"):
-    assert f"/usr/local/lib/dert/{_f}" in _un, f"P3-19 回归：uninstall.sh 没清 {_f}"
+# 程序目录用 rm -rf "$LIB_DIR" 整体删除（dns-split-*、wait-wan、singbox-cleanup 等都在其下）。
+# 逐文件列举在整目录删除之后是冗余的，改为断言整目录删除本身存在——
+# 一旦有人把这条删掉改成部分清理，守卫会立刻失败。
+assert re.search(r'rm -rf "\$LIB_DIR"', _un), \
+    "P3-19 回归：uninstall.sh 没整体删程序目录（dns-split-* 等会残留）"
 
 assert "20-dert-dns-split.conf" in _priv_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
 assert "dns-split-prepare" in _priv_src, "P3-19 回归：升级通道没同步 dns-split-prepare"

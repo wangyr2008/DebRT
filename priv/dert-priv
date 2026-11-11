@@ -1228,9 +1228,6 @@ print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/n
 do_upgrade_apply() {
   require_root
   acquire_lock
-  # DebRT 改名迁移（v0.1.50）：必须在任何 dert 路径引用之前执行——
-  # 此刻机器上还是 seedrou 布局（旧单元活跃、/etc/seedrou 在），搬完才能继续
-  migrate_seedrou_to_dert
   local pkg="${1:?缺少升级包路径}"
   [ -f "$pkg" ] || die "NO_FILE" "升级包不存在"
   # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越

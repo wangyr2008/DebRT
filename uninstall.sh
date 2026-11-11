@@ -25,42 +25,31 @@ fi
 tc qdisc del dev ifb0 root 2>/dev/null || true
 
 echo "[卸载] 移除文件..."
+# 程序目录整体移除（其下的 wait-wan / singbox-cleanup / dns-split-* 等都在里面）
 rm -rf "$LIB_DIR"
 rm -f /etc/sudoers.d/dert /etc/sysctl.d/70-dert.conf /etc/modules-load.d/dert.conf \
+      /etc/logrotate.d/dert \
       /etc/systemd/system/dert-panel.service /etc/systemd/system/dert-apply.service \
       /etc/systemd/system/dert-converge.service /etc/systemd/system/dert-converge.timer \
       /etc/systemd/system/dert-pppoe.service \
       /etc/systemd/system/dert-pppoe-watchdog.service /etc/systemd/system/dert-pppoe-watchdog.timer \
-      /etc/networkd-dispatcher/routable.d/70-dert-dns /etc/networkd-dispatcher/routable.d/80-dert-cake \
-      /etc/networkd-dispatcher/routable.d/90-dert-lan-prefix \
-      /etc/networkd-dispatcher/no-carrier.d/70-dert-dns /etc/ppp/ip-up.d/dert \
-      /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
-      /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug \
-      /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
-      /etc/sudoers.d/seedrou /etc/logrotate.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf \
-      /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets /etc/sing-box/00-seedrou-dns.json \
-      /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
-      /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf \
-      /etc/systemd/system/seedrou-singbox-cleanup.service \
-      /etc/systemd/system/dnsmasq.service.d/10-seedrou-restart.conf
-      /etc/networkd-dispatcher/carrier.d/75-dert-pppoe-hotplug \
-      /etc/networkd-dispatcher/routable.d/75-dert-pppoe-hotplug \
-      /etc/ppp/ip-down.d/dert /etc/logrotate.d/dert \
-      /etc/systemd/system/dert-dns-sync.service /usr/local/lib/dert/wait-dns-upstream \
+      /etc/systemd/system/dert-dns-sync.service /etc/systemd/system/dert-singbox-cleanup.service \
       /etc/systemd/system/dnsmasq.service.d/10-dert-restart.conf \
       /etc/systemd/system/sing-box.service.d/10-dert-wait-wan.conf \
       /etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf \
-      /etc/systemd/system/dert-singbox-cleanup.service \
-      /usr/local/lib/dert/wait-wan /usr/local/lib/dert/singbox-cleanup \
-      /usr/local/lib/dert/dns-split-prepare /usr/local/lib/dert/dns-split-sync \
-      /usr/local/lib/dert/dns-split-teardown \
+      /etc/networkd-dispatcher/routable.d/70-dert-dns /etc/networkd-dispatcher/routable.d/80-dert-cake \
+      /etc/networkd-dispatcher/routable.d/75-dert-pppoe-hotplug \
+      /etc/networkd-dispatcher/routable.d/90-dert-lan-prefix \
+      /etc/networkd-dispatcher/no-carrier.d/70-dert-dns \
+      /etc/networkd-dispatcher/carrier.d/75-dert-pppoe-hotplug \
+      /etc/ppp/ip-up.d/dert /etc/ppp/ip-down.d/dert \
       /etc/dnsmasq.d/dert.conf /etc/nftables.d/dert-base.nft \
       /etc/systemd/network/10-wan.network /etc/systemd/network/20-lan.netdev /etc/systemd/network/20-lan.network \
-      /etc/systemd/network/25-ppp0.network \
-      /etc/ppp/peers/dert /etc/ppp/chap-secrets /etc/ppp/pap-secrets
-      # P3-07：chap/pap-secrets 含运营商宽带账号与明文密码（netgen 生成，0600）——
-      # 卸载不清则转手/回收机器时是凭据泄漏点；25-ppp0.network 不清则 networkd
-      # 继续尝试在 ppp0 上跑 DHCPv6。均为 DebRT 生成物（原文件内容已被覆盖）
+      /etc/systemd/network/25-ppp0.network
+# P3-07：chap/pap-secrets 含运营商宽带账号与明文密码（netgen 生成，0600）——
+# 卸载不清则转手/回收机器时是凭据泄漏点；25-ppp0.network 不清则 networkd
+# 继续尝试在 ppp0 上跑 DHCPv6。均为 DebRT 生成物（原文件内容已被覆盖）
+rm -f /etc/ppp/peers/dert /etc/ppp/chap-secrets /etc/ppp/pap-secrets
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
 # DNS 分流表：把客户端 DNS DNAT 到 tun 的地址，卸载后没人监听，必须清掉
 nft delete table inet dert_dns 2>/dev/null || true
@@ -81,11 +70,5 @@ fi
 [ -f /etc/resolv.conf.dert.bak ] && { cp -a /etc/resolv.conf.dert.bak /etc/resolv.conf; echo "[卸载] 已还原 /etc/resolv.conf"; }
 
 userdel dert 2>/dev/null || true
-# 改名迁移残留（v0.1.49 及以前的 seedrou 布局）一并清理
-rm -rf /usr/local/lib/seedrou /etc/seedrou /var/lib/seedrou /run/seedrou /run/seedrou-dns
-rm -f /etc/systemd/system/seedrou-*.service /etc/systemd/system/seedrou-*.timer
-nft delete table inet seedrou_base 2>/dev/null || true
-nft delete table inet seedrou_dns 2>/dev/null || true
-userdel seedrou 2>/dev/null || true  # L10：卸载后移除专用用户
 systemctl daemon-reload
 echo "[卸载] 完成。网络配置文件已移除，重启后网口将回到未配置状态；如需恢复出厂前的网络，请使用安装包内备份或控制台重新配置。"

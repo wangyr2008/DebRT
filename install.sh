@@ -29,40 +29,6 @@ RUN_DIR="/run/dert"
 
 c_info()  { printf '\033[32m[安装]\033[0m %s\n' "$*"; }
 
-# 一次性迁移：旧版 SeedRou 布局搬入 DebRT 命名（v0.1.50 改名；幂等，全新安装 no-op）。
-# 自包含（install.sh 不 source lib.sh），与 priv/lib.sh 的同名函数语义一致。
-migrate_seedrou_to_dert() {
-  [ -d /usr/local/lib/seedrou ] || [ -d /etc/seedrou ] || return 0
-  c_warn "检测到旧版 SeedRou 安装，迁移到 DebRT 命名……"
-  systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service \
-    seedrou-dns-sync.service seedrou-pppoe.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
-  mv /usr/local/lib/seedrou /usr/local/lib/dert 2>/dev/null || true
-  [ -d /etc/seedrou ] && [ ! -d /etc/dert ] && mv /etc/seedrou /etc/dert
-  [ -d /var/lib/seedrou ] && [ ! -d /var/lib/dert ] && mv /var/lib/seedrou /var/lib/dert
-  id dert >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin dert 2>/dev/null || true
-  chown -R dert:dert /var/lib/dert 2>/dev/null || true
-  rm -f /etc/systemd/system/seedrou-panel.service /etc/systemd/system/seedrou-apply.service \
-        /etc/systemd/system/seedrou-converge.service /etc/systemd/system/seedrou-converge.timer \
-        /etc/systemd/system/seedrou-dns-sync.service /etc/systemd/system/seedrou-pppoe.service \
-        /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
-        /etc/systemd/system/seedrou-singbox-cleanup.service \
-        /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
-        /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf
-  rm -f /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
-        /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
-        /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug
-  rm -f /etc/sudoers.d/seedrou /etc/logrotate.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf
-  rm -f /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets
-  rm -f /etc/sing-box/00-seedrou-dns.json
-  nft delete table inet seedrou_base 2>/dev/null || true
-  nft delete table inet seedrou_dns 2>/dev/null || true
-  rm -rf /run/seedrou /run/seedrou-dns
-  userdel seedrou 2>/dev/null || true
-  systemctl daemon-reload
-  # sing-box 重启以拾取新 drop-in 与 00-dert-dns.json（旧 00-seedrou 已删）
-  systemctl try-restart sing-box.service 2>/dev/null || true
-  c_info "迁移完成：配置与数据已迁至 /etc/dert、/var/lib/dert"
-}
 c_warn()  { printf '\033[33m[注意]\033[0m %s\n' "$*"; }
 c_err()   { printf '\033[31m[错误]\033[0m %s\n' "$*"; }
 die() { c_err "$*"; exit 1; }
@@ -80,7 +46,6 @@ PKGS=(nftables dnsmasq ppp pppoe python3 curl ca-certificates sudo ethtool netwo
 apt-get install -y -qq "${PKGS[@]}" || die "软件包安装失败，请检查软件源（/etc/apt/sources.list）与网络"
 
 # ---------------- 2. 用户与目录 ----------------
-migrate_seedrou_to_dert   # 旧版 SeedRou → DebRT 一次性迁移（幂等）
 id dert >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin dert
 mkdir -p "$LIB_DIR/panel" "$SHARE_DIR" "$ETC_DIR" "$VAR_DIR/backups" "$VAR_DIR/lastgood" \
          "$VAR_DIR/uploads" "$RUN_DIR" /etc/nftables.d /var/lib/misc

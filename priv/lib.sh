@@ -125,44 +125,6 @@ if cfg.get("wan", {}).get("mode") != "pppoe":
 PYEOF
 }
 
-# ---------------- 一次性迁移：SeedRou → DebRT（v0.1.50 改名）----------------
-# 把旧布局（/usr/local/lib/seedrou、/etc/seedrou、旧单元名、旧钩子名）无痕搬入
-# 新名字；幂等（新布局已存在时全部 no-op）。install.sh 与 do_upgrade_apply 共用。
-migrate_seedrou_to_dert() {
-  [ -d /usr/local/lib/seedrou ] || [ -d /etc/seedrou ] || return 0
-  echo "[迁移] 检测到旧版 SeedRou 安装，迁移到 DebRT 命名……"
-  systemctl disable --now dert-converge.timer dert-panel.service dert-apply.service \
-    dert-dns-sync.service dert-pppoe.service dert-pppoe-watchdog.timer 2>/dev/null || true
-  systemctl disable --now seedrou-converge.timer seedrou-panel.service seedrou-apply.service \
-    seedrou-dns-sync.service seedrou-pppoe.service seedrou-pppoe-watchdog.timer 2>/dev/null || true
-  mv /usr/local/lib/seedrou /usr/local/lib/dert 2>/dev/null || true
-  [ -d /etc/seedrou ] && [ ! -d /etc/dert ] && mv /etc/seedrou /etc/dert
-  [ -d /var/lib/seedrou ] && [ ! -d /var/lib/dert ] && mv /var/lib/seedrou /var/lib/dert
-  id dert >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin dert 2>/dev/null || true
-  chown -R dert:dert /var/lib/dert 2>/dev/null || true
-  rm -f /etc/systemd/system/seedrou-panel.service /etc/systemd/system/seedrou-apply.service \
-        /etc/systemd/system/seedrou-converge.service /etc/systemd/system/seedrou-converge.timer \
-        /etc/systemd/system/seedrou-dns-sync.service /etc/systemd/system/seedrou-pppoe.service \
-        /etc/systemd/system/seedrou-pppoe-watchdog.service /etc/systemd/system/seedrou-pppoe-watchdog.timer \
-        /etc/systemd/system/seedrou-singbox-cleanup.service \
-        /etc/systemd/system/sing-box.service.d/10-seedrou-wait-wan.conf \
-        /etc/systemd/system/sing-box.service.d/20-seedrou-dns-split.conf
-  rm -f /etc/networkd-dispatcher/routable.d/70-seedrou-dns /etc/networkd-dispatcher/routable.d/80-seedrou-cake \
-        /etc/networkd-dispatcher/routable.d/75-seedrou-pppoe-hotplug /etc/networkd-dispatcher/routable.d/90-seedrou-lan-prefix \
-        /etc/networkd-dispatcher/no-carrier.d/70-seedrou-dns /etc/networkd-dispatcher/carrier.d/75-seedrou-pppoe-hotplug
-  rm -f /etc/sudoers.d/seedrou /etc/logrotate.d/seedrou /etc/sysctl.d/70-seedrou.conf /etc/modules-load.d/seedrou.conf
-  rm -f /etc/ppp/peers/seedrou /etc/ppp/chap-secrets /etc/ppp/pap-secrets
-  rm -f /etc/sing-box/00-seedrou-dns.json
-  nft delete table inet seedrou_base 2>/dev/null || true
-  nft delete table inet seedrou_dns 2>/dev/null || true
-  rm -rf /run/seedrou /run/seedrou-dns
-  userdel seedrou 2>/dev/null || true
-  systemctl daemon-reload
-  # sing-box 需重启以拾取新 drop-in 与 00-dert-dns.json（旧 00-seedrou 已删）
-  systemctl try-restart sing-box.service 2>/dev/null || true
-  c_info "迁移完成：配置与数据已迁至 /etc/dert、/var/lib/dert"
-}
-
 # ---------------- 配置读写 ----------------
 config_read() { python3 -c 'import json;print(json.dumps(json.load(open("'"$CONFIG_JSON"'")),ensure_ascii=False))' 2>/dev/null; }
 
