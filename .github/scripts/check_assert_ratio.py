@@ -30,7 +30,11 @@ GUARDS = os.path.join(ROOT, ".github", "scripts", "test_guards.py")
 # 该 bug 只在 upgrade-apply 以 root 跑且包含 `..` 时显现（真机实测踩到），
 # 没有不依赖 root 的行为测试办法；它会让安全错误提示变成 tar 的警告原文，
 # 属于必须锁住的坑。
-STRING_ASSERT_BUDGET = 133
+# v0.1.81：133 → 134。新增的是「install.sh 必须用 priv/*.py 通配部署」——
+# 这是部署通道的架构约束（改成逐个列举就会漏装新模块），没有不跑安装脚本的
+# 行为测试办法。同批还加了"dert-priv 引用的 priv 文件必须存在"的结构检查
+# （那条不走字符串断言，不计入）。
+STRING_ASSERT_BUDGET = 134
 
 
 def count():
