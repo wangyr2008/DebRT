@@ -371,7 +371,9 @@ assert "routable.d/90-dert-lan-prefix" in _un, \
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
 assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
-assert 'temps.get("current")' in _priv_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
+# v0.1.80：这段逻辑搬到了 priv/status.py（纯 Python 模块，可行为测试）
+_status_src = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").read()
+assert 'temps.get("current")' in _status_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
 # CI 冒烟网关：升级通道的内联收敛与延迟收敛重启必须按 /run/dert/smoke-mode 跳过
 # （runner 的网络不能动——CI 实测步骤全绿但 agent 收尾信号传不回，job 被超时标 cancelled）
 assert "smoke-mode" in _priv_src \

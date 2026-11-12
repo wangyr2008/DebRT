@@ -7,6 +7,42 @@
 
 ## [Unreleased]
 
+## [0.1.80] - 2026-11-12
+
+> 工业化重构 **P2-1（结构分层，第一个域）**：把 `status` / `selftest` 从
+> `dert-priv` 抽成独立 Python 模块。
+
+### Changed
+
+- **`priv/status.py`（238 行）与 `priv/selftest.py`（33 行）**。这两段本来就是
+  纯 Python，只是嵌在 bash 的 `<<'PYEOF'` 里——抽出来是**字面搬迁，逻辑一字未改**。
+  `dert-priv` 从 **1822 行降到 1565 行**（−257）。
+
+  抽出的直接收益：可以 `DERT_FSROOT=<假根> python3 priv/status.py` 真跑一遍，
+  断言**输出什么**，而不是断言源码里有没有某个字符串。
+
+- 模块自己从 `DERT_FSROOT` 推导数据根（`E/V/R`），不依赖 `lib.sh` 导出——
+  这样既能被 `dert-priv` 调用，也能独立跑，两条路径结果一致。
+
+### Added
+
+- `tests/test_status.py`（9 个行为用例）：用假 `ip` 命令控制网络状态，覆盖
+  WAN up/down、掩码换算、PPPoE「正在连接」、`converge_failed` 标记、
+  NAT6 显示 ULA、端口角色、自检项与汇总。
+
+### 验证
+
+- **与抽取前逐字节比对**：`git archive HEAD` 取旧版，同一假根下
+  `status` / `selftest` 输出完全一致。
+- 模块独立跑 vs 经 `dert-priv` 调用，输出也完全一致。
+
+### Notes
+
+- 抽走后守卫 P3-11（硬盘温度取 `current`）指向的源码位置变了，改成读
+  `priv/status.py`。**这正是 P1-2 想消除的脆弱性**——但这类断言只剩个位数，
+  棘轮保证它不会变多。
+- shellcheck 抓到 `SC2120`：两个子命令不接受参数，`"$@"` 是多余的，已去掉。
+
 ## [0.1.79] - 2026-11-12
 
 > 工业化重构 **P1-2（守卫分层，第四阶段）**：把测试缝铺到 `dert-priv`。
