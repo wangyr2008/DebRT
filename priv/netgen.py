@@ -191,16 +191,30 @@ def gen_ppp_network(cfg):
     # DHCP=ipv6 是客户端的启动开关：只写 DHCPPrefixDelegation=yes 不会拉起 DHCPv6
     # 客户端（真机 ppp0 抓 546/547 为零已证实），没有它 WithoutRA/UplinkInterface
     # 都无从生效
-    # [Route] ::/0 Scope=link 也是必需的：国内运营商在 PPPoE 链路上不发 RA（真机抓
-    # 22 秒 RA 为零），DHCPv6 又不携带默认路由，缺它就只有地址没有出口——表现为
-    # "能拿到 IPv6 地址但 ping6 报 Network is unreachable"
+    # [Route] ::/0 是必需的：国内运营商在 PPPoE 链路上不发 RA（真机抓 22 秒 RA 为零），
+    # DHCPv6 又不携带默认路由，缺它就只有地址没有出口——表现为"能拿到 IPv6 地址但
+    # ping6 报 Network is unreachable"。
+    # 但**不能**写 Scope=link：IPv6 路由没有 scope 概念，networkd 每次开机都会报
+    # "/etc/systemd/network/25-ppp0.network:17: Scope= is specified for IPv6 route.
+    #  It will be ignored."，而默认路由实际是靠 Destination=::/0 建起来的
+    # （ip -6 route 可见 default dev ppp0 proto static）。写它纯属噪音。
     return ("# 由 DebRT 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
             "IPv6AcceptRA=no\n"
             "DHCP=ipv6\n"
-            "DHCPPrefixDelegation=yes\n\n"
+            "DHCPPrefixDelegation=yes\n"
+            # KeepConfiguration=yes 是必需的，否则 pppd 分配的 IPv4 会被 networkd 清掉。
+            # networkd 重新配置/重启某个 link 时，默认（KeepConfiguration=no）会把
+            # "不是自己配的" 地址一并删除；而 ppp0 的 IPv4 是 pppd 用 ioctl 加的，
+            # 对 networkd 来说是外来配置。真机 2026-11-12 实测：`networkctl reconfigure
+            # ppp0` 之后 ppp0 只剩 DHCPv6 地址、IPv4 与默认路由全消失，v4 出网直接 000，
+            # 必须重拨才能恢复（pppd 进程始终存活，它自己不会重加地址）。
+            # 触发场景不止手工命令：apply-all 在网络设置变更时会重启 networkd，
+            # 同样会踩到——用户改个 LAN IP 就把 WAN 弄断，很难联想到根因。
+            # 加上它之后 reconfigure 保留 IPv4，v4/v6 出网均正常。
+            "KeepConfiguration=yes\n\n"
             "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n\n"
             "[DHCPPrefixDelegation]\nUplinkInterface=:self\n\n"
-            "[Route]\nDestination=::/0\nScope=link\n")
+            "[Route]\nDestination=::/0\n")
 
 
 def gen_lan_netdev(cfg):

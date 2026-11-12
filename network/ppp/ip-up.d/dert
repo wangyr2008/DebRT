@@ -24,6 +24,27 @@ systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 [ -x /usr/local/lib/dert/qdisc-apply ] && /usr/local/lib/dert/qdisc-apply
 [ -x /usr/local/lib/dert/wan-addr-sync ] && /usr/local/lib/dert/wan-addr-sync
 
+# 把本机 /etc/resolv.conf 恢复成指向 dnsmasq。
+#
+# 为什么必须做：pppd 的 usepeerdns 会让 /etc/ppp/ip-up.d/0000usepeerdns 把
+# resolv.conf 改写成运营商 DNS。后果是**路由器自身**绕过 dnsmasq：
+#   · 局域网主机名解析不了（真机 2026-11-12 实测：dig <host>.lan 返回空，
+#     而 dig @127.0.0.1 <host>.lan 正常）—— apt/docker/面板里按主机名访问全失效
+#   · 吃不到 dnsmasq 的 5000 条缓存，每次都要回源
+# 运营商上游已经由上面的步骤写进 /run/dert-dns/upstream.conf 交给 dnsmasq 了，
+# 所以这里可以放心覆盖。本钩子按字母序在 0000usepeerdns 之后执行，能覆盖它。
+# 用 tmp + mv：避免 dnsmasq/glibc 读到半个文件。
+if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+    {
+        echo "# 由 DebRT 维护 —— 指向本机 dnsmasq"
+        echo "# pppd 的 usepeerdns 会改写本文件，每次拨号后由 ip-up.d/dert 恢复"
+        echo "nameserver 127.0.0.1"
+        echo "nameserver ::1"
+    } > "/etc/resolv.conf.dert.$$" 2>/dev/null \
+      && mv -f "/etc/resolv.conf.dert.$$" /etc/resolv.conf 2>/dev/null \
+      || rm -f "/etc/resolv.conf.dert.$$" 2>/dev/null
+fi
+
 # 注意：这里**不再**碰 IPv6 前缀相关的任何事。
 # v0.1.65 曾用「延迟 20 秒再调钩子」去猜 PD 委派要多久，那是把时序不确定性换成
 # 一个猜出来的常数；实测委派耗时随 BRAS 波动，20 秒既可能不够也可能白等。

@@ -7,6 +7,53 @@
 
 ## [Unreleased]
 
+## [0.1.68] - 2026-11-12
+
+### Fixed
+
+- **路由器自身解析不了局域网主机名**（真机 2026-11-12 实测）：pppd 的 `usepeerdns`
+  会让 `/etc/ppp/ip-up.d/0000usepeerdns` 把 `/etc/resolv.conf` 改写成运营商 DNS，
+  于是**路由器自身绕过 dnsmasq**——`dig <host>.lan` 返回空、`getent hosts` 空，
+  而 `dig @127.0.0.1 <host>.lan` 正常；同时吃不到 dnsmasq 的 5000 条缓存。
+  运营商上游本来就已由钩子写进 `/run/dert-dns/upstream.conf` 交给 dnsmasq，
+  所以 `ip-up.d/dert` 与 `ip-down.d/dert` 现在把 resolv.conf 原子写回
+  `nameserver 127.0.0.1` + `::1`（tmp+mv，避免读到半个文件）。
+  两个钩子按字母序都排在 `0000usepeerdns` 之后，能覆盖它。
+- **`ppp0` 的 IPv4 会被 networkd 清掉**（真机 2026-11-12 实测，**会导致 WAN 断网**）：
+  networkd 重新配置 link 时默认删除「不是自己配的」地址，而 ppp0 的 IPv4 是 pppd
+  用 ioctl 加的（外来配置）。实测 `networkctl reconfigure ppp0` 之后 ppp0 只剩
+  DHCPv6 地址、IPv4 与默认路由全消失，v4 出网直接 `000`，必须重拨才恢复
+  （pppd 进程始终存活，它自己不会重加地址）。
+  触发场景不止手工命令——`apply-all` 在**仅 LAN 设置**变更时只重启 networkd
+  不重启 pppoe（`plan_for_section("lan")` 的动作串里没有 pppoe），用户改个
+  LAN IP 就会把 WAN 弄断，很难联想到根因。
+  修法：`25-ppp0.network` 加 `KeepConfiguration=yes`。实测 reconfigure 后
+  IPv4 保留、v4/v6 出网均 200。
+- **面板启动被 `network-online.target` 拖住**：该目标要等
+  `systemd-networkd-wait-online` 判定所有受管接口就绪，而 br-lan 在网线没插时
+  永远不 routable → 面板被硬拖到超时（默认 90s+）才起来。
+  面板只服务局域网，WAN 通不通与它无关，改为只依赖 `network.target`
+  （与 sing-box drop-in 里 `wait-wan` 的判断一致）。
+
+### Changed
+
+- `25-ppp0.network` 去掉 `Scope=link`：IPv6 路由没有 scope 概念，networkd 每次开机
+  都报 `Scope= is specified for IPv6 route. It will be ignored.`，实际建起默认路由的
+  是 `Destination=::/0`。去掉后默认路由仍正常建立（实测 `default dev ppp0 proto static`）。
+- `uninstall.sh` 对 `LIB_DIR`/`ETC_DIR`/`VAR_DIR` 加 `:?` 断言：这三个变量后面直接
+  喂给 `rm -rf`，为空或为根时后果不可逆。
+
+### Notes
+
+- 守卫新增 P3-22：resolv.conf 必须指回 dnsmasq 且原子写（ip-up/ip-down 各一条）、
+  面板不得依赖「在线」目标、ppp0 必须有 `KeepConfiguration=yes`、不得有 `Scope=link`。
+  四项变异测试全部捕获。
+- 真机一次性清理（不进代码，属改名迁移与另一项目的历史残留）：
+  `dnsmasq.service.d/10-seedrou-restart.conf`（与 dert 版重复，`ExecStartPre` 跑两次）、
+  `network/30-enp4s0.network`（把 **WAN 口 enp4s0 声明为 br-lan 成员**，靠
+  `10-wan.network` 字典序先匹配才没出事）、以及 7 个 `linux-router` 项目的残留文件。
+  已归档到 `/root/leftover-cleanup-*.tar.gz` 后删除。
+
 ## [0.1.67] - 2026-11-12
 
 ### Changed

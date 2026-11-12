@@ -9,6 +9,14 @@ LIB_DIR="/usr/local/lib/dert"
 ETC_DIR="/etc/dert"
 VAR_DIR="/var/lib/dert"
 
+# 这三个变量后面会被 rm -rf 直接吃掉。任何一处为空/为根都会变成灾难
+# （`rm -rf ""` 无害，但 `rm -rf "${LIB_DIR}/"` 在 LIB_DIR 为空时就等于 `rm -rf /`）。
+# 用 :? 断言：为空或未定义时立即以非零退出，不会走到 rm。
+: "${LIB_DIR:?}" "${ETC_DIR:?}" "${VAR_DIR:?}"
+case "$LIB_DIR$ETC_DIR$VAR_DIR" in
+    //*|/) echo "路径异常，拒绝执行" >&2; exit 1 ;;
+esac
+
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 
 echo "[卸载] 停止服务..."

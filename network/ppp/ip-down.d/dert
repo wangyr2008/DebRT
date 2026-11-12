@@ -4,4 +4,18 @@ rm -f /run/dert/ppp-session-start 2>/dev/null
 # 上游 DNS 也随之失效，交给下次拨号重建；保留旧文件会让 dnsmasq 指向已失效链路，删掉更干净
 rm -f /run/dert-dns/upstream.conf 2>/dev/null
 systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
+
+# 与 ip-up.d/dert 对称：0000usepeerdns 在 down 时也会改写 /etc/resolv.conf
+# （恢复成拨号前的版本，往往是空文件）。断网期间局域网仍在，主机名解析不能丢，
+# 所以这里同样把 resolv.conf 指回本机 dnsmasq。
+if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+    {
+        echo "# 由 DebRT 维护 —— 指向本机 dnsmasq"
+        echo "# pppd 的 usepeerdns 会改写本文件，每次拨号/掉线后由 DebRT 恢复"
+        echo "nameserver 127.0.0.1"
+        echo "nameserver ::1"
+    } > "/etc/resolv.conf.dert.$$" 2>/dev/null \
+      && mv -f "/etc/resolv.conf.dert.$$" /etc/resolv.conf 2>/dev/null \
+      || rm -f "/etc/resolv.conf.dert.$$" 2>/dev/null
+fi
 exit 0

@@ -116,7 +116,44 @@ ppp_net = netgen.gen_ppp_network(ppp_cfg)
 assert "Name=ppp0" in ppp_net, "ppp0 匹配缺失"
 assert "DHCPPrefixDelegation=yes" in ppp_net and "WithoutRA=solicit" in ppp_net, "PPPoE ppp0 PD 缺失"
 assert "DHCP=ipv6" in ppp_net, "PPPoE ppp0 缺 DHCP=ipv6（DHCPv6 客户端不会启动，真机 546/547 为零）"
-assert "Scope=link" in ppp_net, "PPPoE ppp0 缺 ::/0 默认路由（运营商不发 RA，只有地址没有出口）"
+# 默认路由必须存在（运营商不发 RA、DHCPv6 也不带默认路由，缺了就只有地址没有出口）。
+# 但**不能**靠 Scope=link 来实现：IPv6 路由没有 scope 概念，networkd 每次开机
+# 都报 "Scope= is specified for IPv6 route. It will be ignored."（真机 2026-11-12 实测），
+# 实际建起默认路由的是 Destination=::/0。
+assert "Destination=::/0" in ppp_net, \
+    "PPPoE ppp0 缺 ::/0 默认路由（运营商不发 RA，只有地址没有出口）"
+assert "Scope=link" not in ppp_net, \
+    "P3-22 回归：ppp0 的 IPv6 路由又写了 Scope=link（IPv6 无 scope 概念，networkd 会忽略并刷警告）"
+
+# P3-22：ppp0 必须 KeepConfiguration=yes。
+# networkd 重新配置 link 时默认会删掉"不是自己配的"地址，而 ppp0 的 IPv4 是 pppd
+# 用 ioctl 加的（外来配置）。真机 2026-11-12 实测：`networkctl reconfigure ppp0`
+# 之后 ppp0 只剩 DHCPv6 地址、IPv4 与默认路由全消失，v4 出网 000，必须重拨恢复。
+# 触发场景不止手工命令——apply-all 在网络设置变更时会重启 networkd，同样踩到。
+assert "KeepConfiguration=yes" in ppp_net, \
+    "P3-22 回归：ppp0 缺 KeepConfiguration=yes（networkd 重配/重启会清掉 pppd 的 IPv4，WAN 断）"
+
+# P3-22：本机 resolv.conf 必须指回 dnsmasq。
+# pppd 的 usepeerdns 会让 /etc/ppp/ip-up.d/0000usepeerdns 把 resolv.conf 改写成
+# 运营商 DNS，路由器自身于是绕过 dnsmasq —— 局域网主机名解析不了（真机 2026-11-12
+# 实测：dig <host>.lan 返回空，dig @127.0.0.1 <host>.lan 正常）、缓存也吃不到。
+for _h in ("ip-up.d", "ip-down.d"):
+    _hs = open(os.path.join(ROOT, "network", "ppp", _h, "dert"), encoding="utf-8").read()
+    assert "127.0.0.1" in _hs and "/etc/resolv.conf" in _hs, \
+        f"P3-22 回归：{_h}/dert 没把 resolv.conf 指回 dnsmasq（本机将绕过 dnsmasq，.lan 解析失败）"
+    # 必须原子写：tmp+mv，避免 dnsmasq/glibc 读到半个文件
+    assert "resolv.conf.dert." in _hs and "mv -f" in _hs, \
+        f"P3-22 回归：{_h}/dert 写 resolv.conf 不是原子写（可能被读到半个文件）"
+
+# P3-22：面板不能依赖 network-online.target。
+# network-online 要等 systemd-networkd-wait-online 判定所有受管接口就绪，
+# br-lan 在网线没插时永远不 routable → 面板被拖到超时（默认 90s+）才起来。
+# 面板只服务局域网，WAN 通不通与它无关（sing-box drop-in 的 wait-wan 同理）。
+_panel_unit = open(os.path.join(ROOT, "systemd", "dert-panel.service"), encoding="utf-8").read()
+assert "network-online" not in _panel_unit, \
+    "P3-22 回归：面板单元又依赖 network-online.target（无载波时启动被拖到超时）"
+assert "After=network.target" in _panel_unit, \
+    "P3-22 回归：面板单元丢了 After=network.target"
 # R-02：ppp0 必须被 DNS 钩子认作 WAN，且与 ip-up.d 写入的 IPv4 上游合并而非覆盖
 _hook = open(os.path.join(ROOT, "network", "dispatcher", "70-dert-dns"), encoding="utf-8").read()
 assert 'wans.append("ppp0")' in _hook, "R-02 回归：DNS 钩子不认 ppp0（PPPoE 的 IPv6 上游进不来）"

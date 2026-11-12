@@ -1,7 +1,11 @@
 [Unit]
 Description=DebRT 管理面板
-After=network-online.target
-Wants=network-online.target
+# 只依赖 network.target，**不能**依赖"在线"目标（那个目标要等
+# systemd-networkd-wait-online 判定所有受管接口就绪，而 br-lan 在网线没插时
+# 永远不 routable，面板会被硬拖到超时（默认 90s+）才起来）。
+# 面板只服务局域网，WAN 通不通与它无关——这一点和 sing-box drop-in 里的
+# wait-wan 是同一类判断（那里明确写了不依赖"在线"目标）。
+After=network.target
 
 [Service]
 Type=simple
