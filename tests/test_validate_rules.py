@@ -150,3 +150,35 @@ class TestUpgradeSourceRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpgradeSignaturePolicy(unittest.TestCase):
+    """require_signature 在「保存升级设置」时不能被静默清掉。
+
+    面板表单里没有这个字段，所以用户点一次保存就会提交 {source: ...}。
+    如果 norm_upgrade 不保留原值，强制验签会被悄悄关掉——这比没有开关更危险。
+    """
+
+    def test_preserved_when_form_omits_it(self):
+        cur = support.base_config()
+        cur["upgrade"] = {"source": "wangyr2008/DebRT", "require_signature": True}
+        rc, out = support.run_validate("upgrade", {"source": "wangyr2008/DebRT"}, current=cur)
+        self.assertEqual(rc, 0)
+        self.assertTrue(out["data"].get("require_signature"),
+                        "保存升级设置时把 require_signature 丢了")
+
+    def test_can_be_set_explicitly(self):
+        cur = support.base_config()
+        cur["upgrade"] = {"source": "wangyr2008/DebRT"}
+        rc, out = support.run_validate(
+            "upgrade", {"source": "wangyr2008/DebRT", "require_signature": True}, current=cur)
+        self.assertEqual(rc, 0)
+        self.assertTrue(out["data"].get("require_signature"))
+
+    def test_absent_stays_absent(self):
+        # 从未设置过的设备：不要凭空多出这个字段（保持 config 干净）
+        cur = support.base_config()
+        cur["upgrade"] = {"source": "wangyr2008/DebRT"}
+        rc, out = support.run_validate("upgrade", {"source": "wangyr2008/DebRT"}, current=cur)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("require_signature", out["data"])

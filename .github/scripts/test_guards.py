@@ -822,8 +822,35 @@ for _p in _sh_files:
 assert not _missing_u, \
     f"P3-30 回归：这些脚本缺 set -u（变量为空时可能做出破坏性操作）：{_missing_u}"
 
+# ---- P3-31：发布签名（v0.1.74）----
+# sha256 与产物同通道传输，只能证明"没被改坏"，不能证明"是谁发的"。
+# 用 Ed25519 detached signature：CI 签名、设备用 openssl 验签（不引入新二进制）。
+_pub = os.path.join(ROOT, "priv", "dert-signing.pub.pem")
+assert os.path.isfile(_pub), "P3-31 回归：验签公钥 priv/dert-signing.pub.pem 缺失"
+_pub_src = open(_pub, encoding="utf-8").read()
+assert "BEGIN PUBLIC KEY" in _pub_src, "P3-31 回归：公钥文件格式不对"
+
+# 公钥必须放在 priv/ 下：升级包的目录白名单由**旧版**校验，新增顶层目录会让
+# 旧版拒绝新包（升级自我阻塞，v0.1.62 踩过同类坑）。
+_rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8").read()
+assert "openssl pkeyutl -sign" in _rel, "P3-31 回归：release.yml 不再签名"
+assert "DERT_SIGNING_KEY" in _rel, "P3-31 回归：release.yml 没读签名密钥 Secret"
+assert "signing/dert-signing.pub.pem" not in _rel, \
+    "P3-31 回归：release.yml 又引用顶层 signing/ 目录（旧版升级包白名单会拒绝）"
+assert "dert-${VER}.tar.gz.sig" in _rel, "P3-31 回归：签名产物未加入 Release"
+
+_priv_sig = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+assert "openssl pkeyutl -verify" in _priv_sig, \
+    "P3-31 回归：upgrade-apply 不再验签（sha256 挡不住镜像劫持）"
+assert "UPG_SIG" in _priv_sig, "P3-31 回归：缺签名校验失败的错误码"
+assert "require_signature" in _priv_sig, \
+    "P3-31 回归：缺 upgrade.require_signature 策略开关"
+# 验签必须在解压之前：先确认来源，再碰包内容
+assert _priv_sig.index("openssl pkeyutl -verify") < _priv_sig.index("tar -tzf \"$pkg\""), \
+    "P3-31 回归：验签位置跑到解压之后了（应最先校验来源真实性）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
-      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/观察②③ 全部通过")
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/观察②③ 全部通过")

@@ -38,10 +38,36 @@ jobs:
           sha256sum "dert-${VER}.tar.gz" > "dert-${VER}.tar.gz.sha256"
           echo "VER=$VER" >> "$GITHUB_ENV"
 
+      # 签名（v0.1.74）：Ed25519 detached signature，设备端用 openssl 验签，
+      # 不需要任何额外二进制。私钥存在仓库 Secret DERT_SIGNING_KEY（base64 的 PEM），
+      # **不进 CI 镜像、不进仓库**。
+      #
+      # 没配 Secret 时只告警不失败：否则所有人 fork 后一打 tag 就红。
+      # 设备端策略由 config.upgrade.require_signature 控制（默认只警告）。
+      - name: 签名（Ed25519，若已配置密钥）
+        env:
+          SIGNING_KEY_B64: ${{ secrets.DERT_SIGNING_KEY }}
+        run: |
+          if [ -z "${SIGNING_KEY_B64:-}" ]; then
+            echo "::warning::未配置 DERT_SIGNING_KEY，本次发布不签名"
+            exit 0
+          fi
+          printf '%s' "$SIGNING_KEY_B64" | base64 -d > "$RUNNER_TEMP/sign.key"
+          chmod 600 "$RUNNER_TEMP/sign.key"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/sign.key" -rawin \
+            -in "dert-${VER}.tar.gz" -out "dert-${VER}.tar.gz.sig"
+          rm -f "$RUNNER_TEMP/sign.key"
+          # 立刻自验一次：签错了要在发布前发现，而不是等设备端拒绝
+          openssl pkey -in priv/dert-signing.pub.pem -pubin -noout 2>/dev/null \
+            && openssl pkeyutl -verify -pubin -inkey priv/dert-signing.pub.pem -rawin \
+                 -in "dert-${VER}.tar.gz" -sigfile "dert-${VER}.tar.gz.sig" \
+            || { echo "签名自验失败：私钥与仓库公钥不匹配"; exit 1; }
+
       - name: 上传到 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ env.VER }}" \
-            "dert-${{ env.VER }}.tar.gz" "dert-${{ env.VER }}.tar.gz.sha256" \
-            --title "DebRT v${{ env.VER }}" --generate-notes --repo "$GITHUB_REPOSITORY"
+          ASSETS=("dert-${VER}.tar.gz" "dert-${VER}.tar.gz.sha256")
+          [ -f "dert-${VER}.tar.gz.sig" ] && ASSETS+=("dert-${VER}.tar.gz.sig")
+          gh release create "v${VER}" "${ASSETS[@]}" \
+            --title "DebRT v${VER}" --generate-notes --repo "$GITHUB_REPOSITORY"

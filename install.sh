@@ -58,6 +58,9 @@ install -m 755 "$SRC_DIR/priv/dert-priv"   "$LIB_DIR/dert-priv"
 install -m 644 "$SRC_DIR/priv/lib.sh"         "$LIB_DIR/lib.sh"
 # 全部 .py 按 glob 部署：逐个列举会漏新文件（pwhash.py 就漏过一次，被 CI 抓到）
 install -m 644 "$SRC_DIR/priv/"*.py           "$LIB_DIR/"
+# 升级验签公钥（v0.1.74）。放在 priv/ 下是刻意的：升级包的目录白名单由**旧版**
+# 校验，新增一个顶层目录会让旧版拒绝新包（升级自我阻塞）。priv/ 本来就在白名单里。
+install -m 644 "$SRC_DIR/priv/dert-signing.pub.pem" "$LIB_DIR/"
 install -m 755 "$SRC_DIR/priv/qdisc-apply"    "$LIB_DIR/qdisc-apply"
 install -m 755 "$SRC_DIR/priv/wait-wan"       "$LIB_DIR/wait-wan"
 install -m 755 "$SRC_DIR/priv/wait-dns-upstream" "$LIB_DIR/wait-dns-upstream"

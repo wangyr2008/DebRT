@@ -369,7 +369,7 @@ def norm_firewall(section, data):
     return out
 
 
-def norm_upgrade(section, data):
+def norm_upgrade(section, data, cur=None):
     src = as_str(data.get("source"), "升级源")
     if src:
         # 仅允许两种形态（审计 B-14）：owner/repo（GitHub）或 https:// 清单地址。
@@ -387,7 +387,20 @@ def norm_upgrade(section, data):
         else:
             need(re.fullmatch(r"[\w.\-]+/[\w.\-]{1,100}", src), "UPG_SOURCE_BAD",
                  f"升级源 {src!r} 格式不正确", "填 GitHub 仓库（如 wangyr2008/DebRT）或完整 https 清单 URL")
-    return {"source": src}
+    out = {"source": src}
+    # v0.1.74：是否强制验签。面板表单里没有这个字段，所以「保存升级设置」时
+    # 必须保留原值，否则用户点一下保存就把强制验签关掉了——这类"静默降级"
+    # 比没有开关更危险。
+    if "require_signature" in data:
+        out["require_signature"] = bool(data.get("require_signature"))
+    else:
+        try:
+            prev = (cur or {}).get("upgrade") or {}
+            if "require_signature" in prev:
+                out["require_signature"] = bool(prev["require_signature"])
+        except Exception:
+            pass
+    return out
 
 
 def cross_validate(section, result, cur):
@@ -467,7 +480,7 @@ def main():
         "static": lambda: norm_static(section, data.get("list", [])),
         "qos": lambda: norm_qos(section, data),
         "firewall": lambda: norm_firewall(section, data),
-        "upgrade": lambda: norm_upgrade(section, data),
+        "upgrade": lambda: norm_upgrade(section, data, cur),
     }
     fn = fns.get(section)
     if fn is None:

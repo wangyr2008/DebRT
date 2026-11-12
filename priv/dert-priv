@@ -1177,7 +1177,7 @@ do_upgrade_download() {
   ver="${ver#v}"
   mkdir -p "${DERT_VAR}/staging"
   local out="${DERT_VAR}/staging/pkg.tar.gz"
-  rm -f "$out" "${out}.sha256"
+  rm -f "$out" "${out}.sha256" "${out}.sig"
   local prefix base="https://github.com" rc=1
   if [[ "$src" == *"://"* ]]; then
     local body asset="" sha256=""
@@ -1228,6 +1228,12 @@ sys.stdout.write(clean(d.get("url")) + "\n" + clean(d.get("sha256")) + "\n")
         done
       fi
       [ -s "${out}.sha256" ] || { rm -f "$out"; die "UPG_MANIFEST" "清单式升级源未提供 sha256，拒绝安装" "请在清单 JSON 中加入 sha256 字段，或提供 <url>.sha256 文件"; }
+      # 签名（可选，v0.1.74）：有就取，交给 upgrade-apply 验签。
+      # 取不到不算失败——是否强制由 upgrade.require_signature 决定（见 apply）。
+      for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+        curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${asset}.sig" -o "${out}.sig" 2>/dev/null \
+          && [ -s "${out}.sig" ] && break
+      done
     fi
   else
     repo="$src"
@@ -1238,6 +1244,10 @@ sys.stdout.write(clean(d.get("url")) + "\n" + clean(d.get("sha256")) + "\n")
     if [ "$rc" -eq 0 ]; then
       for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
         curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz.sha256" -o "${out}.sha256" 2>/dev/null && break
+      done
+      for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
+        curl -fsSL --connect-timeout 10 --max-time 30 "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz.sig" -o "${out}.sig" 2>/dev/null \
+          && [ -s "${out}.sig" ] && break
       done
     fi
   fi
@@ -1259,6 +1269,41 @@ do_upgrade_apply() {
   acquire_lock
   local pkg="${1:?缺少升级包路径}"
   [ -f "$pkg" ] || die "NO_FILE" "升级包不存在"
+
+  # 0) 签名校验（v0.1.74）——先验来源真实性，再谈包结构。
+  #    包和 .sha256 走同一通道（含 gh-proxy 第三方镜像回退），sha256 只能证明
+  #    "没被改坏"，不能证明"是谁发的"：镜像被劫持时可以同时替换包和哈希。
+  #    公钥随包安装，私钥不进 CI（本机保管，手动/发布流程签名）。
+  local pub="${DERT_ROOT}/dert-signing.pub.pem" sig_state="未签名"
+  if [ -s "${pkg}.sig" ]; then
+    [ -f "$pub" ] || die "UPG_SIG" "升级包带签名，但本机缺少验签公钥" \
+      "请确认 ${pub} 存在；可从仓库 signing/dert-signing.pub.pem 复制"
+    if ! openssl pkeyutl -verify -pubin -inkey "$pub" -rawin \
+           -in "$pkg" -sigfile "${pkg}.sig" >/dev/null 2>&1; then
+      logger -t dert-upgrade "签名校验失败，拒绝安装：$pkg"
+      die "UPG_SIG" "升级包签名校验失败" \
+        "包可能被篡改，或不是用 DebRT 官方密钥签发的；已拒绝安装（未做任何改动）"
+    fi
+    sig_state="已验签"
+    logger -t dert-upgrade "签名校验通过：$pkg"
+  else
+    # 没带签名：默认只警告（存量发布尚无签名，一刀切会锁死升级通道），
+    # 配了 upgrade.require_signature=true 则拒绝。这是"只验不拦 → 强制"的过渡开关。
+    local need_sig
+    need_sig="$(python3 -c '
+import json
+try:
+    c = json.load(open("/etc/dert/config.json"))
+    print("true" if (c.get("upgrade") or {}).get("require_signature") else "false")
+except Exception:
+    print("false")
+' 2>/dev/null)"
+    if [ "$need_sig" = "true" ]; then
+      die "UPG_SIG" "升级源未提供签名，已拒绝" \
+        "当前配置要求必须验签（upgrade.require_signature=true）；请使用带 .sig 的官方发布"
+    fi
+    logger -t dert-upgrade "升级包未带签名，仅做 sha256 校验（可通过 upgrade.require_signature 强制要求）：$pkg"
+  fi
   # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越
   #    判据只针对「危险路径」：绝对路径、含 ..、以及未知目录。
   #    顶层文件（不含 /）一律放行——它们只能落在包根，无法穿越，也不会被部署到
