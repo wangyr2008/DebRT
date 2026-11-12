@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# dert-netwatch —— 网络状态事件分发守护（常驻，root）
+#
+# 为什么需要它：DebRT 里有两处「等某个内核网络状态出现」的逻辑，过去全靠
+# sleep 轮询或延迟调用去猜时序：
+#   · ppp ip-up 里 systemd-run --on-active=20s 调前缀钩子（猜 PD 委派要多久）
+#   · 90-dert-lan-prefix 里 while [ -z "$NEW" ]; sleep 1（猜前缀何时出现）
+# 这些猜测都不准：ppp0 重拨时 networkd-dispatcher 的 routable 事件并不触发
+# （接口被销毁重建，状态机没有产生迁移），钩子根本收不到通知。
+#
+# 为什么不用 networkd-dispatcher：它只看链路的 operational state，而 PD 委派
+# 只改地址、不改状态。Debian 包描述明确写着它 "much more limited in the types
+# of events it supports due to the limited nature of systemd-networkd"。
+#
+# 为什么不用 systemd .path 盯 /run/systemd/netif/links/<ifindex>：
+# 实测确实能触发（networkd 原地重写该文件、inode 不变），但 systemd 的
+# 稳定性承诺（systemd.io/PORTABILITY_AND_STABILITY）里 /run/systemd/* 属于
+# 内部协议，不在稳定接口清单中——依赖它是押注实现细节。业界（OpenWrt netifd、
+# NetworkManager、dhcpcd）一律是订阅 rtnetlink，那是内核稳定 ABI。
+#
+# 本守护直接监听内核 netlink：`ip monitor address link`。地址/链路一变就
+# 立刻收到事件，不需要猜任何时间。
+#
+# 设计要点：**不解析事件内容，只把它当成"该对账了"的信号**。
+#   netlink 对一次地址新增会吐出多行（tentative / global / 续行 valid_lft），
+#   按事件类型精细解析既脆弱又容易漏。这里改成每条事件都重新读一遍真实状态
+#   （幂等 reconcile）——状态是什么就修什么，重复触发无副作用。
+#
+#   特别注意不能按"秒"去抖：重拨时的事件序列是
+#     旧地址删除 → 新地址 tentative → 新地址 scope global
+#   如果按时间去抖，最后那个「地址可用」事件会被丢掉，前缀就永远补不上
+#   （这正是 v0.1.65 之前那个 bug 的形态）。幂等对账没有这个问题。
+set -u
+
+PREFIX_HOOK=/etc/networkd-dispatcher/routable.d/90-dert-lan-prefix
+SYNC=/usr/local/lib/dert/dns-split-sync
+
+log() { logger -t dert-netwatch "$*" 2>/dev/null || true; }
+
+# br-lan 的当前 v4 / 全局 v6 地址（与 dns-split-sync 用同一套取值方式，
+# 兼容多行与 ip -o 单行两种输出）
+lan4() {
+    ip -4 addr show dev br-lan 2>/dev/null \
+      | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
+             $3 == "inet" { split($4, a, "/"); print a[1]; exit }'
+}
+lan6() {
+    # 与 dns-split-sync 完全一致的选取规则（两处必须同步，否则「当前地址」和
+    # 「表里的目标」会因为选取规则不同而永远判为不一致，反复重建）：
+    #   ① 排除 temporary（RFC 4941 隐私地址会轮换）
+    #   ② 优先 dynamic（PD 委派来的，有 valid_lft），其次任意全局
+    #   ③ 同档内按字典序取第一个，保证确定性
+    local v
+    v=$(lan6_pick dynamic)
+    [ -n "$v" ] || v=$(lan6_pick "")
+    printf '%s' "$v"
+}
+
+lan6_pick() { # $1 = 额外要求的标志（如 dynamic），空则不限
+    ip -6 addr show dev br-lan scope global 2>/dev/null | awk -v want="$1" '
+        ($1 == "inet6" || $3 == "inet6") {
+            if ($0 ~ /temporary/) next
+            if (want != "" && $0 !~ want) next
+            for (i = 1; i <= NF; i++)
+                if ($i ~ /^[0-9a-fA-F:]+\/[0-9]+$/ && $i ~ /:/) {
+                    split($i, a, "/"); print a[1]; break
+                }
+        }' | sort | head -1
+}
+
+# nft 分流表的目标地址是否已与 br-lan 当前地址不符。
+# 只在「5353 真的在监听」时才谈得上重建——否则建出来的表会把白名单 DNS
+# 指向一个没人收的端口。用监听状态而不是 tun 接口存在与否做判据：本表的目标
+# 全在 br-lan 上，不引用 tun 接口，tun 建好也不代表 5353 已 bind。
+# 必须比对而不是无条件重建：nft -f 重建会清零计数器，诊断时很要命。
+dns_table_stale() {
+    ss -lnu 2>/dev/null | grep -q ':5353' || return 1
+    nft list table inet dert_dns >/dev/null 2>&1 || return 0
+    local cur4 cur6 got4 got6
+    cur4="$(lan4)"
+    cur6="$(lan6)"
+    [ -n "$cur6" ] || cur6="::1"          # 与 dns-split-sync 的兜底保持一致
+    got4="$(nft list table inet dert_dns 2>/dev/null \
+            | grep -o 'dnat ip to [0-9.]*' | awk '{print $NF}' | sort -u | head -1)"
+    got6="$(nft list table inet dert_dns 2>/dev/null \
+            | grep -o 'dnat ip6 to \[[^]]*\]' | sed 's/.*\[\(.*\)\]/\1/' | sort -u | head -1)"
+    [ "$got4" = "$cur4" ] && [ "$got6" = "$cur6" ] && return 1
+    return 0
+}
+
+reconcile() {
+    # ① LAN 地址 / PD 前缀变化 → 交给前缀钩子。
+    #    钩子自己比对 /run/dert/lan-prefix 基线，没变就直接返回，重复调用无副作用。
+    #    它负责：清旧前缀 RA 路由、重生成 00-dert-dns.json、重启 sing-box
+    #    （重建 inet6_local_address_set —— 该集合只在启动时构建，前缀变了必须重建）。
+    if [ -x "$PREFIX_HOOK" ]; then
+        "$PREFIX_HOOK" br-lan routable >/dev/null 2>&1 || true
+    fi
+
+    # ② 分流表存在、但目标还是旧地址 → 重建。
+    #    sing-box 的 ExecStartPost 建表时地址可能还没就绪，靠这里补。
+    if dns_table_stale; then
+        log "DNS 分流表目标与 br-lan 当前地址不符，重建"
+        "$SYNC" >/dev/null 2>&1 || true
+    fi
+
+    # 注意：这里**不做** PPPoE 看门狗的事。看门狗是「服务活着但资源没了」的
+    # 健康检查，周期性是它的正当形态（kubelet probe / systemd WatchdogSec /
+    # monit 都如此），不属于"猜时序"。由 dert-pppoe-watchdog.timer 继续负责。
+}
+
+# 启动先对一次账：覆盖「netwatch 重启过、期间漏掉了事件」的情况
+reconcile
+
+# 续行（valid_lft / link/ether 等）以空格开头，跳过不做对账——
+# 真实事件行要么以序号开头，要么以 "Deleted" 开头
+ip monitor address link 2>/dev/null | while read -r line; do
+    case "$line" in
+        " "*|"") continue ;;
+    esac
+    reconcile
+done
+
+# ip monitor 退出（网络栈异常 / 被 kill）→ 交给 systemd Restart=always 拉起
+log "ip monitor 退出，等待 systemd 重启"
+exit 1

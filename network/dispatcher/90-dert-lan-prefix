@@ -76,12 +76,14 @@ NEW="$(lan_prefix)"
 OLD=""
 [ -f "$REC" ] && OLD="$(cat "$REC" 2>/dev/null)"
 
-# PD 委派与 ppp0 routable 事件常在同一秒竞争，br-lan 可能还没拿到新地址：
-# 空值不算变化，最多等 15 秒（真换前缀时通常第一轮就命中）
-i=0
-while [ -z "$NEW" ] && [ "$i" -lt 15 ]; do
-    sleep 1; i=$((i+1)); NEW="$(lan_prefix)"
-done
+# 不再在这里 sleep 轮询等前缀出现。
+# 本钩子的主要触发者已改为 dert-netwatch：它订阅 rtnetlink，br-lan 一拿到
+# 新的全局地址就立刻调用本钩子——那时前缀必然已经在位，不需要等。
+# 而如果此刻取不到前缀（例如 networkd-dispatcher 在 PD 委派前就调了一次），
+# 直接返回即可：等地址真正落地时 netwatch 会再调一次。
+#
+# 保留等待的害处：netwatch 的对账是串行的，钩子在这里阻塞 15 秒会把后续
+# 事件（比如 tun0 建好、分流表该重建）一起拖住。
 [ -n "$NEW" ] || exit 0
 
 if [ -z "$OLD" ]; then

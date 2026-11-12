@@ -63,6 +63,7 @@ install -m 755 "$SRC_DIR/priv/wait-wan"       "$LIB_DIR/wait-wan"
 install -m 755 "$SRC_DIR/priv/wait-dns-upstream" "$LIB_DIR/wait-dns-upstream"
 install -m 755 "$SRC_DIR/priv/wan-addr-sync"  "$LIB_DIR/wan-addr-sync"
 install -m 755 "$SRC_DIR/priv/pppoe-watchdog" "$LIB_DIR/pppoe-watchdog"
+install -m 755 "$SRC_DIR/priv/netwatch"       "$LIB_DIR/netwatch"
 install -m 644 "$SRC_DIR/panel/"*.py          "$LIB_DIR/panel/"
 mkdir -p "$LIB_DIR/panel/static"
 install -m 644 "$SRC_DIR/panel/static/"*      "$LIB_DIR/panel/static/"
@@ -90,6 +91,7 @@ install -m 644 "$SRC_DIR/systemd/dert-converge.timer"  /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-dns-sync.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-pppoe-watchdog.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-pppoe-watchdog.timer" /etc/systemd/system/
+install -m 644 "$SRC_DIR/systemd/dert-netwatch.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/systemd/dert-pppoe.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/sysctl/70-dert.conf"  /etc/sysctl.d/
 install -m 644 "$SRC_DIR/network/modules/dert.conf"    /etc/modules-load.d/
@@ -234,6 +236,7 @@ else
   fi
   # PPPoE 看门狗：pppd 卡在"服务 active 但 ppp0 消失"时无人自愈（真机实录）
   systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
+systemctl enable --now dert-netwatch.service >/dev/null 2>&1 || true
   systemctl enable --now dert-panel.service >/dev/null 2>&1
 
   c_info "首次配置收敛（生成网桥/防火墙/DHCP 配置并应用）..."

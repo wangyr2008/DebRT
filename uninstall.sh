@@ -12,7 +12,7 @@ VAR_DIR="/var/lib/dert"
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 
 echo "[卸载] 停止服务..."
-systemctl disable --now dert-converge.timer dert-panel.service dert-apply.service dert-pppoe.service dert-dns-sync.service dert-pppoe-watchdog.timer 2>/dev/null || true
+systemctl disable --now dert-converge.timer dert-panel.service dert-apply.service dert-pppoe.service dert-dns-sync.service dert-pppoe-watchdog.timer dert-netwatch.service 2>/dev/null || true
 systemctl stop dnsmasq.service 2>/dev/null || true
 nft delete table inet dert_base 2>/dev/null || true
 # B-3：WAN 口上的 cake/ingress 残留——不清理则运行中的机器继续被限速直到重启
@@ -34,6 +34,7 @@ rm -f /etc/sudoers.d/dert /etc/sysctl.d/70-dert.conf /etc/modules-load.d/dert.co
       /etc/systemd/system/dert-pppoe.service \
       /etc/systemd/system/dert-pppoe-watchdog.service /etc/systemd/system/dert-pppoe-watchdog.timer \
       /etc/systemd/system/dert-dns-sync.service /etc/systemd/system/dert-singbox-cleanup.service \
+      /etc/systemd/system/dert-netwatch.service \
       /etc/systemd/system/dnsmasq.service.d/10-dert-restart.conf \
       /etc/systemd/system/sing-box.service.d/10-dert-wait-wan.conf \
       /etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf \

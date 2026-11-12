@@ -453,14 +453,71 @@ assert "dns_bypass" in _ng_src, \
 assert "meta mark set 0x00002024" in _ng_src, \
     "P3-19 回归：dns_bypass 没打 0x2024（这是唯一能完全绕过 auto_redirect 的标记）"
 
-# v0.1.65：WAN 重拨不产生 networkd-dispatcher 的 routable 事件，前缀检查必须在
-# ppp ip-up 里主动触发。真机 2026-11-12 复现：重拨后前缀从 a50:3d81 变成 a53:bf71，
-# 钩子零日志，nft 的 v6 dnat 目标停在旧前缀，白名单 v6 DNS 437 个包全部落空。
+# v0.1.67：前缀变化改由 dert-netwatch 订阅 rtnetlink 触发，ip-up 不再延迟调用。
+# 背景：v0.1.65 用 systemd-run --on-active=20s 去猜 PD 委派耗时——那是把时序
+# 不确定性换成猜出来的常数（真机实测委派耗时随 BRAS 波动）。而 networkd-dispatcher
+# 结构上做不到：它只看链路 operational state，PD 委派只改地址不改状态
+# （Debian 包描述：much more limited in the types of events it supports）。
+# 业界（OpenWrt netifd / NetworkManager / dhcpcd）一律订阅 rtnetlink。
 _ipup = open(os.path.join(ROOT, "network", "ppp", "ip-up.d", "dert"), encoding="utf-8").read()
-assert "90-dert-lan-prefix" in _ipup, \
-    "P3-19 回归：ip-up 钩子没触发前缀检查（重拨换前缀后 nft v6 目标会停在旧前缀）"
-assert "systemd-run" in _ipup and "--on-active" in _ipup, \
-    "P3-19 回归：ip-up 里没用 systemd-run 延迟调用（pppd 退出会杀掉后台子进程）"
+assert "systemd-run" not in _ipup and "--on-active" not in _ipup, \
+    "P3-19 回归：ip-up 又在用延迟调用猜 PD 委派时序（应交给 dert-netwatch 的事件驱动）"
+assert "90-dert-lan-prefix" not in _ipup, \
+    "P3-19 回归：ip-up 又直接调前缀钩子（ip-up 时 PD 尚未委派，调了也只会看到旧前缀）"
+
+# netwatch：必须订阅 rtnetlink、必须幂等对账、必须能自愈
+_ntw = os.path.join(ROOT, "priv", "netwatch")
+assert os.path.isfile(_ntw), "P3-19 回归：priv/netwatch 缺失（前缀变化将无人通知）"
+_ntw_src = open(_ntw, encoding="utf-8").read()
+assert "ip monitor address link" in _ntw_src, \
+    "P3-19 回归：netwatch 没有订阅 rtnetlink（这是唯一能拿到地址变化的稳定接口）"
+assert "90-dert-lan-prefix" in _ntw_src and "dns-split-sync" in _ntw_src, \
+    "P3-19 回归：netwatch 没把事件分发到前缀钩子 / 分流表重建"
+# 必须「每条事件都重新读状态」，不能按事件类型解析或按秒去抖：
+# 重拨的事件序列是 旧地址删除 → 新地址 tentative → 新地址 scope global，
+# 去抖会把最后那个「地址可用」事件丢掉，前缀就永远补不上（v0.1.65 之前的 bug 形态）
+assert "reconcile" in _ntw_src, "P3-19 回归：netwatch 丢了幂等对账入口"
+assert "sleep" not in _ntw_src.split("reconcile() {")[1].split("}")[0], \
+    "P3-19 回归：netwatch 的对账里出现 sleep（事件驱动不该退化成轮询）"
+_ntw_unit = os.path.join(ROOT, "systemd", "dert-netwatch.service")
+assert os.path.isfile(_ntw_unit), "P3-19 回归：dert-netwatch.service 缺失"
+_ntw_unit_src = open(_ntw_unit, encoding="utf-8").read()
+assert "Restart=always" in _ntw_unit_src, \
+    "P3-19 回归：netwatch 没有 Restart=always（进程一死事件链就断，且无人发现）"
+assert "ExecStart=/usr/local/lib/dert/netwatch" in _ntw_unit_src, \
+    "P3-19 回归：netwatch 单元没指向安装后的脚本路径"
+
+# 三通道必须同步（A-04/R-01/P3-02/P3-18 同族：升级用户拿不到新单元，面板版本号却最新）
+assert "priv/netwatch" in _inst, "P3-19 回归：install.sh 未部署 priv/netwatch"
+assert "dert-netwatch.service" in _inst, "P3-19 回归：install.sh 未安装 netwatch 单元"
+assert "systemctl enable --now dert-netwatch.service" in _inst, \
+    "P3-19 回归：install.sh 未启用 netwatch（装了但不开等于没装）"
+assert "dert-netwatch.service" in _priv_src, \
+    "P3-19 回归：升级通道未同步 netwatch（升级用户永远拿不到）"
+assert "enable dert-netwatch.service" in _priv_src, \
+    "P3-19 回归：升级通道未启用 netwatch"
+assert "dert-netwatch.service" in _un, "P3-19 回归：卸载清单缺 dert-netwatch.service"
+
+# 分流表的等待判据必须是「5353 在监听」，不是 tun 接口存在——
+# 本表目标全在 br-lan 上，不引用 tun，tun 建好也不代表 5353 已 bind
+assert "5353" in _dss and "ip link show tun0" not in _dss, \
+    "P3-19 回归：sync 又在等 tun 接口而不是等 5353 监听（判据错位，超时也白等）"
+
+# 原子替换：nft -f 里直接写 `table X { ... }` 对已存在的表是**追加规则**，不是替换。
+# 真机 2026-11-12 实测：netwatch 在运行期多次触发 sync 后，表里堆到 20 条
+# （应为 4 条），最后几条还指向已删除的临时地址。
+assert "add table inet dert_dns" in _dss and "delete table inet dert_dns" in _dss, \
+    "P3-19 回归：sync 没做 nft 原子替换（add+delete 同事务），重复运行会累积规则"
+# v6 目标地址必须确定性选取：br-lan 可能有多个全局地址（多前缀/手工/隐私地址），
+# 用 "exit 取第一条" 会随内核返回顺序漂移，导致表反复重建
+assert "temporary" in _dss and "sort | head -1" in _dss, \
+    "P3-19 回归：sync 的 v6 目标选取不确定（排除 temporary + 字典序取第一）"
+assert "lan6_pick dynamic" in _dss, \
+    "P3-19 回归：sync 不再优先选 dynamic 地址（会选中手工加的静态地址，随时可能消失）"
+assert "temporary" in _ntw_src and "sort | head -1" in _ntw_src, \
+    "P3-19 回归：netwatch 的 lan6() 与 sync 选取规则不一致（会反复判为不一致）"
+assert "lan6_pick dynamic" in _ntw_src, \
+    "P3-19 回归：netwatch 的 lan6() 不再优先选 dynamic 地址（与 sync 规则不一致）"
 # v0.1.65 死代码清理后不应再出现
 assert "TUN4" not in _dss and "TUN6" not in _dss, \
     "P3-19 回归：sync 又读了 tun DNS 地址（新架构白名单走 LAN4:5353，与 tun 无关）"

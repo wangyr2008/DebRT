@@ -7,6 +7,69 @@
 
 ## [Unreleased]
 
+## [0.1.67] - 2026-11-12
+
+### Changed
+
+- **IPv6 前缀变化改为真正的事件驱动**：新增 `priv/netwatch`（常驻订阅 rtnetlink）
+  与 `systemd/dert-netwatch.service`，`br-lan` 地址一变就立刻对账——重新生成
+  DNS 分流配置、刷新 nft 表里白名单的 v6 DNAT 目标、必要时重启 sing-box 重建
+  `inet6_local_address_set`。
+  v0.1.65 的做法是在 ppp `ip-up` 里 `systemd-run --on-active=20s` 延迟调钩子，
+  本质是**把时序不确定性换成一个猜出来的常数**（真机实测 PD 委派耗时随 BRAS 波动）。
+  现在不再猜任何时间。
+
+### Removed
+
+- `network/ppp/ip-up.d/dert` 里的 `systemd-run --on-active=20s` 延迟调用。
+- `90-dert-lan-prefix` 里 `while [ -z "$NEW" ]; sleep 1` 的 15 秒轮询。
+  该钩子现在由 netwatch 在地址事件里调用，前缀必然已在位；而它若被
+  networkd-dispatcher 在 PD 委派前调到，直接返回即可（地址落地后 netwatch 会再调）。
+  保留等待的害处是：netwatch 的对账是串行的，钩子阻塞 15 秒会把后续事件一起拖住。
+
+### Fixed
+
+- **`dns-split-sync` 重复运行会累积 nft 规则**（预先存在的 bug，被 netwatch 暴露）：
+  `nft -f` 里直接写 `table inet dert_dns { ... }` 对**已存在**的表是**追加规则**
+  而不是替换，每跑一次就多 4 条。真机实测 netwatch 在运行期触发几次后表里堆到
+  **20 条**，最后几条还指向已删除的临时地址。改为在同一个事务里
+  `add table` + `delete table` + 重新定义（add 是幂等的，表在不在都成功），
+  既保持原子性又做到真替换。实测连续跑 5 次稳定在 4 条。
+  之前没暴露是因为 sync 只在 sing-box 启动时跑，而重启会先 `teardown` 删表。
+- **v6 DNAT 目标地址选取不确定**：原来用 `awk ... exit` 取「第一个」全局地址，
+  但 br-lan 上可能不止一个（多前缀委派、手工加的静态地址、隐私地址），谁先出现
+  取决于内核返回顺序——地址集合一变就可能选中另一个，导致表反复重建，甚至指向
+  一个随后消失的地址。改为：排除 `temporary`（RFC 4941 隐私地址会轮换）→
+  优先 `dynamic`（PD 委派来的，有 `valid_lft`）→ 同档内按字典序取第一个。
+  `netwatch` 的 `lan6()` 与 `dns-split-sync` 用完全相同的规则（否则「当前地址」
+  与「表里的目标」会永远判为不一致）。
+- **`dns-split-sync` 的等待判据错位**：原来等 `tun0` 出现（最多 20 秒），但本表
+  的目标地址全在 `br-lan` 上，根本不引用 tun0；tun 建好不等于 5353 已 bind，
+  反过来 5353 也可能先于 tun 就绪。改为等 **5353 真正在监听**（最多 10 秒）。
+
+### Notes
+
+- **为什么不用 networkd-dispatcher**：它只看链路的 operational state，而 PD 委派
+  只改地址、不改状态。Debian 包描述原文：*"much more limited in the types of events
+  it supports due to the limited nature of systemd-networkd"*。真机日志里 ppp0 重拨
+  时它只打 `WARNING:Unknown index 56 seen, reloading interface list`，不派发钩子。
+- **为什么不用 systemd `.path` 盯 `/run/systemd/netif/links/<ifindex>`**：实测确实
+  能触发（networkd 原地重写该文件、inode 不变），但 systemd 的稳定性承诺
+  （systemd.io/PORTABILITY_AND_STABILITY）把 `/run/systemd/*` 列为内部协议，
+  不在稳定接口清单里——依赖它是押注实现细节。业界（OpenWrt netifd、NetworkManager、
+  dhcpcd）一律订阅 rtnetlink，那是内核稳定 ABI。
+- **`dert-pppoe-watchdog.timer` 的每分钟轮询保留不动**：它做的是「服务活着但资源
+  没了」的**健康检查**，周期性是该模式的正当形态（kubelet probe、`WatchdogSec`、
+  monit 都如此），不属于"猜时序"。
+- netwatch 的对账是**幂等**的：每条事件都重新读一遍真实状态，不解析事件类型、
+  也不按秒去抖。重拨的事件序列是「旧地址删除 → 新地址 tentative → 新地址
+  scope global」，按时间去抖会把最后那个「地址可用」事件丢掉，前缀就永远补不上
+  ——那正是 v0.1.65 之前那个 bug 的形态。
+- 守卫 P3-19 重写：断言 ip-up 不得再出现延迟调用、netwatch 必须订阅 rtnetlink
+  且对账里不得有 sleep、单元必须 `Restart=always`、三通道（安装/升级/卸载）必须
+  同步、sync 必须等 5353 而非 tun 接口、nft 必须做原子替换（`add`+`delete` 同事务）、
+  v6 目标必须确定性选取且优先 `dynamic`。七项变异测试全部捕获。
+
 ## [0.1.66] - 2026-11-12
 
 ### Fixed

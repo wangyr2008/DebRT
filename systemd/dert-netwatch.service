@@ -1,0 +1,21 @@
+[Unit]
+# 订阅内核 rtnetlink，把「地址/链路变了」变成对账动作（见 priv/netwatch 头注释）。
+# 为什么不是 networkd-dispatcher：它只看链路 operational state，而 PD 委派
+# 只改地址不改状态，收不到通知。
+Description=DebRT 网络事件分发（rtnetlink → 前缀检查 / DNS 分流表）
+After=network.target networkd-dispatcher.service
+# networkd 还没起来时订阅不到有意义的事件，等它
+Wants=networkd-dispatcher.service
+# 重拨换前缀、sing-box 重启都会让本单元所在的主机继续运行，无需重载
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/dert/netwatch
+# ip monitor 异常退出（网络栈抖动 / 被 OOM）必须拉回来，否则事件链断掉
+Restart=always
+RestartSec=2
+# 事件密集时可能短时占用，给足余量但不无限等
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -32,13 +32,20 @@ case "$STATE" in
     *) exit 0 ;;
 esac
 
-# tun 可能还在初始化（ExecStartPost 紧跟启动），最多等 20 秒
+# 等 5353 真正在监听——这才是「白名单 DNS 能解析」的前提。
+#
+# 旧代码等的是 tun 接口出现，那只是个代理指标：tun 建好不等于 5353 已 bind，
+# 反过来 5353 也可能先于 tun 就绪。而且本表的目标地址全在 br-lan 上，
+# 根本不引用 tun 接口。改成检查真实前提，语义更准，超时也能短很多。
+#
+# 这里没法做成事件驱动：监听套接字不产生 netlink 事件，sing-box 也不支持
+# sd_notify。业界对此的通行做法就是有界等待（等自己的服务 bind 端口）。
 i=0
-while [ "$i" -lt 20 ]; do
-    ip link show tun0 >/dev/null 2>&1 && break
+while [ "$i" -lt 10 ]; do
+    ss -lnu 2>/dev/null | grep -q ':5353' && break
     sleep 1; i=$((i + 1))
 done
-ip link show tun0 >/dev/null 2>&1 || exit 0
+ss -lnu 2>/dev/null | grep -q ':5353' || exit 0
 
 # 从 config.json 读白名单列表（sub-store 维护的唯一数据源）
 #
@@ -75,9 +82,27 @@ LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
        | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
               $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
 [ -n "$LAN4" ] || exit 0
-LAN6=$(ip -6 addr show dev br-lan scope global 2>/dev/null \
-       | awk '$1 == "inet6" { split($2, a, "/"); print a[1]; exit }
-              $3 == "inet6" { split($4, a, "/"); print a[1]; exit }')
+
+# v6 目标地址必须**确定性**且优先选 PD 委派来的那个：
+#   · br-lan 上可能不止一个全局地址（多前缀委派、手工加的静态地址、隐私地址），
+#     谁先出现取决于内核顺序。之前用 "exit 取第一条"，地址集合一变就可能选中
+#     另一个 → 表被反复重建，甚至指向一个随后消失的地址。
+#   · PD 委派的地址带 dynamic 标志（有 valid_lft），手工加的是静态（forever）。
+#     DNAT 目标应该用前者——那才是"运营商给本网段的地址"，不会被人随手删掉。
+#   · 同档内按字典序取第一个，保证同一组地址永远选出同一个结果。
+lan6_pick() { # $1 = 额外要求的标志（如 dynamic），空则不限
+    ip -6 addr show dev br-lan scope global 2>/dev/null | awk -v want="$1" '
+        ($1 == "inet6" || $3 == "inet6") {
+            if ($0 ~ /temporary/) next
+            if (want != "" && $0 !~ want) next
+            for (i = 1; i <= NF; i++)
+                if ($i ~ /^[0-9a-fA-F:]+\/[0-9]+$/ && $i ~ /:/) {
+                    split($i, a, "/"); print a[1]; break
+                }
+        }' | sort | head -1
+}
+LAN6=$(lan6_pick dynamic)
+[ -n "$LAN6" ] || LAN6=$(lan6_pick "")
 [ -n "$LAN6" ] || LAN6="::1"
 
 # 记录前缀基线 /run/dert/lan-prefix，供 90-dert-lan-prefix 判断"前缀是否变了"。
@@ -114,8 +139,17 @@ fi
 # 拼 MAC 集合：0c:19:...,44:59:...
 SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
 
-# 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表
+# 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表。
+#
+# 开头的 add + delete 是「原子替换」的固定写法，不能省：
+# 直接写 `table inet dert_dns { ... }` 对**已存在**的表是**追加规则**，
+# 不是替换 —— 每跑一次就多 4 条（真机 2026-11-12 实测：netwatch 在运行期
+# 触发几次后表里堆到 20 条，最后几条还指向已删除的临时地址）。
+# add 是幂等的（表在不在都成功），delete 清空，随后的定义重建，
+# 三步在同一个事务里提交，对外仍是原子的。
 if ! nft -f - <<EOF 2>/dev/null
+add table inet dert_dns
+delete table inet dert_dns
 table inet dert_dns {
     chain pre {
         type nat hook prerouting priority dstnat - 2; policy accept;

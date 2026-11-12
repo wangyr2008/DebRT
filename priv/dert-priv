@@ -1363,6 +1363,15 @@ DPEOF
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   fi
+  # 网络事件分发（v0.1.67）：订阅 rtnetlink，替代 ip-up 里延迟调钩子的做法。
+  # 与 A-04/R-01/P3-02/P3-18 同族——升级通道漏装时面板版本号已是最新，排查极误导，
+  # 所以这里用覆盖写 + enable --now，不判断"是否已存在"。
+  if [ -f /usr/local/lib/dert/systemd/dert-netwatch.service ]; then
+    install -m 644 /usr/local/lib/dert/systemd/dert-netwatch.service /etc/systemd/system/ 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable dert-netwatch.service >/dev/null 2>&1 || true
+    systemctl restart dert-netwatch.service >/dev/null 2>&1 || true
+  fi
   for pyf in /usr/local/lib/dert/*.py /usr/local/lib/dert/lib.sh; do
     [ -f "$pyf" ] && chmod 644 "$pyf"
   done
