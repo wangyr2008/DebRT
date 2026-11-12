@@ -780,8 +780,50 @@ assert _wd.count("python3 -c") == 1, \
 assert "systemctl restart dert-pppoe-watchdog.timer" in _priv_src_all, \
     "P3-29 回归：升级通道不重启看门狗 timer（新周期要等下次开机才生效）"
 
+# ---- P3-30：所有 shell 脚本必须有 set -u（v0.1.73）----
+# 未定义变量在 bash 里默认为空字符串，`rm -rf "$DIR"/` 这种写法在 DIR 拼错时
+# 会变成 `rm -rf /`。set -u 是唯一能挡住这类事故的开关。
+_sh_files = []
+for _base in ("priv", "network"):
+    for _dirpath, _dirs, _files in os.walk(os.path.join(ROOT, _base)):
+        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        for _fn in _files:
+            _p = os.path.join(_dirpath, _fn)
+            try:
+                with open(_p, encoding="utf-8", errors="replace") as _fh:
+                    _head = _fh.readline()
+            except OSError:
+                continue
+            if _head.startswith("#!") and ("bash" in _head or "/sh" in _head):
+                _sh_files.append(_p)
+for _top in ("install.sh", "uninstall.sh"):
+    _sh_files.append(os.path.join(ROOT, _top))
+
+_missing_u = []
+for _p in _sh_files:
+    _src = open(_p, encoding="utf-8", errors="replace").read()
+    _has_u = False
+    for _l in _src.split("\n"):
+        _s = _l.strip()
+        if _s.startswith("#"):
+            continue
+        _s = _s.split("#")[0].strip()   # 去掉行尾注释
+        if not _s.startswith("set "):
+            continue
+        # 匹配 set -u / set -eu / set -euo pipefail 等各种写法
+        for _tok in _s.split()[1:]:
+            if _tok.startswith("-") and "u" in _tok:
+                _has_u = True
+                break
+        if _has_u:
+            break
+    if not _has_u:
+        _missing_u.append(os.path.relpath(_p, ROOT))
+assert not _missing_u, \
+    f"P3-30 回归：这些脚本缺 set -u（变量为空时可能做出破坏性操作）：{_missing_u}"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
-      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/观察②③ 全部通过")
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/观察②③ 全部通过")

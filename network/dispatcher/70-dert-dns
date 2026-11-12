@@ -2,8 +2,11 @@
 # networkd-dispatcher 钩子（routable.d / no-carrier.d）
 # 仅当事件接口是 WAN 口时：把 networkd 学到的上游 DNS 写入 /run/dert-dns/，
 # dnsmasq 以 conf-dir=/run/dert-dns 动态读取。
-IFACE="$1"
-STATE="$2"
+set -u
+# ${N:-} 而不是 $N：networkd-dispatcher 一定传 (iface, state)，
+# 但手工调试时不带参数也不该因 -u 直接退出
+IFACE="${1:-}"
+STATE="${2:-}"
 RUNDIR="/run/dert-dns"
 CONF="${RUNDIR}/upstream.conf"
 

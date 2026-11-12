@@ -1,7 +1,8 @@
 #!/bin/sh
 # networkd-dispatcher 钩子：WAN 口状态变化时重放 QoS（cake 需要在接口就绪后应用）
-IFACE="$1"
-STATE="$2"
+set -u
+IFACE="${1:-}"
+STATE="${2:-}"
 [ -x /usr/local/lib/dert/qdisc-apply ] && /usr/local/lib/dert/qdisc-apply
 [ -x /usr/local/lib/dert/wan-addr-sync ] && /usr/local/lib/dert/wan-addr-sync
 exit 0

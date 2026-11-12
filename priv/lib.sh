@@ -2,6 +2,11 @@
 # DebRT 特权库 —— 仅被 dert-priv / 钩子脚本 source。
 # 约定：所有用户可见错误一律以 JSON 输出到 stdout（die），可操作（原因 + 下一步）。
 # 原子写：同目录临时文件 → fsync → rename，任何时刻磁盘上都只有完整文件。
+#
+# set -u：本文件被 source，因此这条会作用到调用方的 shell。当前三个调用方
+# （dert-priv / qdisc-apply / wan-addr-sync）本来就都有 set -u，所以实际行为不变；
+# 写在这里是为了让"直接 source 本文件调试"时也不会静默吞掉未定义变量。
+set -u
 
 DERT_ROOT="/usr/local/lib/dert"
 DERT_SHARE="${DERT_ROOT}/share"

@@ -1,7 +1,9 @@
 #!/bin/sh
 # pppd ip-up.d 钩子：PPPoE 拨上后记录会话起点 + 更新上游 DNS + 重放 QoS
 # 环境变量由 pppd 提供：$1=接口名 $2=tty $3=速率 $4=本地IP $5=对端IP $6=ipparam
-IFACE="$1"
+set -u
+# ${1:-} 而不是 $1：pppd 一定会传参，但手工调试时不带参数也不该因 -u 直接退出
+IFACE="${1:-}"
 RUNDIR="/run/dert"
 DNSDIR="/run/dert-dns"
 CONF="${DNSDIR}/upstream.conf"

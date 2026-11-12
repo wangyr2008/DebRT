@@ -2,7 +2,8 @@
 # WAN 口载波恢复热插拔：PPPoE 模式下确保拨号服务在跑。
 # 背景（真机实测）：换绑 WAN 口后先保存再插网线，pppd persist 偶发不自动恢复拨号，
 # 用户需手动重新保存才连上；载波事件时主动拉起/轻推一次，链路自愈。
-IFACE="$1"
+set -u
+IFACE="${1:-}"
 [ -f /etc/dert/config.json ] || exit 0
 
 # A-1：只认 PPPoE 模式——DHCP/静态下载波事件绝不能拉起拨号服务（pppd 会用

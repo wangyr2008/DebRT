@@ -7,6 +7,43 @@
 
 ## [Unreleased]
 
+## [0.1.73] - 2026-11-12
+
+> 工业化重构 **P0-3（全脚本补 `set -u`）**。
+> 未定义变量在 shell 里默认是空字符串，`rm -rf "$DIR"/` 这种写法在 `DIR`
+> 拼错时会变成 `rm -rf /`。`set -u` 是唯一能挡住这类事故的开关。
+
+### Security
+
+- **6 个脚本补 `set -u`**：`priv/lib.sh`、`network/ppp/ip-up.d/dert`、
+  `network/ppp/ip-down.d/dert`、`network/dispatcher/70-dert-dns`、
+  `75-dert-pppoe-hotplug`、`80-dert-cake`。至此仓库内全部 20 个 shell 脚本
+  都有该开关。
+
+### Changed
+
+- **钩子的位置参数改为 `${1:-}` 形式**。pppd 与 networkd-dispatcher 一定会
+  传参，但手工调试时不带参数也不该因 `-u` 直接退出——保持"缺参就是空值"
+  的原有行为，只是把静默变成显式。
+
+- `lib.sh` 的 `set -u` 会作用到 source 它的 shell。当前三个调用方
+  （`dert-priv` / `qdisc-apply` / `wan-addr-sync`）本来就都有 `set -u`，
+  所以**实际行为不变**；写在这里是为了让"直接 source 本文件调试"时也不会
+  静默吞掉未定义变量。
+
+### 真机验证
+
+- 5 个钩子**不带参数**逐个执行：全部 `rc=0`，无 `unbound variable`
+- 真实重拨（触发 ip-down → ip-up 全链路）：journald 里无任何 `-u` 相关错误
+- 钩子副作用正常：会话起点已记录、上游 DNS 已写入、`resolv.conf` 指向本机
+- 五服务 active、0 失败单元、DNS 双路径正常、`.lan` 可解析、v4/v6/面板 200
+
+### Notes
+
+- 守卫新增 P3-30：**所有** shell 脚本必须有 `set -u`（按 shebang 自动收集，
+  新增脚本自动纳入）。判定会剥掉行尾注释，避免说明文字里的 `set -u` 骗过断言
+  —— 这个坑本轮又踩了一次（初版把 `"u" in tokens` 当成匹配，结果全部误报）。
+
 ## [0.1.72] - 2026-11-12
 
 > 工业化重构 **P0-1（PPPoE 看门狗改为事件优先）**。
