@@ -16,7 +16,7 @@
 
 - **`DERT_FSROOT` 测试缝扩到 `lib.sh`**。只作用于**数据**路径
   （`DERT_ETC` / `DERT_VAR` / `DERT_RUN`），代码路径（`DERT_ROOT` / `DERT_SHARE`）
-> 不变——「程序在哪」和「数据在哪」是两件事。
+  不变——「程序在哪」和「数据在哪」是两件事。
 
   未设时是空串，`"${FSROOT}/etc/dert"` 与 `"/etc/dert"` **逐字符等价**，
   生产行为一字不变；设了就指向临时根。三个变量同时 `export`，供内联
