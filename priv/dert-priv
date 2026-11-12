@@ -1391,6 +1391,9 @@ DPEOF
     install -m 644 /usr/local/lib/dert/systemd/dert-pppoe-watchdog.timer /etc/systemd/system/ 2>/dev/null || true
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
+    # 周期改过（1min → 15min）必须重启才生效：enable --now 对已在运行的 timer
+    # 是空操作，不重启的话新周期要等到下次开机才应用
+    systemctl restart dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   fi
   # 网络事件分发（v0.1.67）：订阅 rtnetlink，替代 ip-up 里延迟调钩子的做法。
   # 与 A-04/R-01/P3-02/P3-18 同族——升级通道漏装时面板版本号已是最新，排查极误导，

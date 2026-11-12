@@ -753,8 +753,35 @@ assert "由 DebRT 生成" in _cl_src, \
 assert "由 DebRT 生成" in _cl_src and "PATTERNS" in _cl_src, \
     "P3-28 回归：cleanup.py 缺白名单模式"
 
+# ---- P3-29：PPPoE 看门狗改为事件优先（v0.1.72）----
+# 原来 1 分钟轮询：真机实测 24h 1275 次执行，每次起 1 unit + 1 shell + 2 个 python3
+# （读同一份 config.json）。而 ppp0 消失这件事 netlink 能立刻收到，不必轮询。
+# 现在：事件 → 立即调看门狗打标记 + 一次性 180s 复查；timer 降到 15 分钟做兜底。
+_timer = open(os.path.join(ROOT, "systemd", "dert-pppoe-watchdog.timer"),
+              encoding="utf-8").read()
+assert "OnUnitActiveSec=15min" in _timer, \
+    "P3-29 回归：看门狗 timer 周期被改回去了（1 分钟轮询会每天空转 1440 次）"
+assert "OnUnitActiveSec=1min" not in _timer, \
+    "P3-29 回归：看门狗 timer 又变回每分钟"
+
+_ntw = open(os.path.join(ROOT, "priv", "netwatch"), encoding="utf-8").read()
+assert "ip link show ppp0" in _ntw, \
+    "P3-29 回归：netwatch 不再检测 ppp0 消失（快速路径失效，只能等 15 分钟兜底）"
+assert "systemd-run --on-active=180s" in _ntw, \
+    "P3-29 回归：netwatch 缺 180s 有界复查（ppp0 消失后无人判定是否该重启）"
+assert "pppoe-watchdog" in _ntw, \
+    "P3-29 回归：netwatch 不再调用看门狗"
+
+# 合并 python3：脚本里只应剩 1 处 python3 调用（原先 2 处读同一份 JSON）
+assert _wd.count("python3 -c") == 1, \
+    f"P3-29 回归：看门狗里的 python3 调用变成 {_wd.count('python3 -c')} 处（应合并为 1）"
+
+# 周期改动必须重启 timer 才生效：enable --now 对已在运行的 timer 是空操作
+assert "systemctl restart dert-pppoe-watchdog.timer" in _priv_src_all, \
+    "P3-29 回归：升级通道不重启看门狗 timer（新周期要等下次开机才生效）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
-      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/观察②③ 全部通过")
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/观察②③ 全部通过")

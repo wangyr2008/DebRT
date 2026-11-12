@@ -236,6 +236,7 @@ else
   fi
   # PPPoE 看门狗：pppd 卡在"服务 active 但 ppp0 消失"时无人自愈（真机实录）
   systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
+  systemctl restart dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   systemctl enable --now dert-netwatch.service >/dev/null 2>&1 || true
   systemctl enable --now dert-panel.service >/dev/null 2>&1
 

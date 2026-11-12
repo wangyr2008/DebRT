@@ -1,10 +1,10 @@
 [Unit]
-Description=DebRT PPPoE 看门狗定时器（每分钟探测 ppp0）
+Description=DebRT PPPoE 看门狗定时器（兜底：每 15 分钟；快速路径由 dert-netwatch 事件驱动）
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=1min
-AccuracySec=10s
+OnUnitActiveSec=15min
+AccuracySec=30s
 Unit=dert-pppoe-watchdog.service
 
 [Install]

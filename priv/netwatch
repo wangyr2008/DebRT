@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # dert-netwatch —— 网络状态事件分发守护（常驻，root）
 #
-# 为什么需要它：DebRT 里有两处「等某个内核网络状态出现」的逻辑，过去全靠
+# 为什么需要它：DebRT 里有多处「等某个内核网络状态出现」的逻辑，过去全靠
 # sleep 轮询或延迟调用去猜时序：
 #   · ppp ip-up 里 systemd-run --on-active=20s 调前缀钩子（猜 PD 委派要多久）
 #   · 90-dert-lan-prefix 里 while [ -z "$NEW" ]; sleep 1（猜前缀何时出现）
+#   · dns-split-sync 里等 tun 接口出现（判据本身就错位）
+#   · pppoe-watchdog.timer 每分钟轮询 ppp0（v0.1.72 起改为事件优先）
 # 这些猜测都不准：ppp0 重拨时 networkd-dispatcher 的 routable 事件并不触发
 # （接口被销毁重建，状态机没有产生迁移），钩子根本收不到通知。
 #
@@ -34,8 +36,20 @@ set -u
 
 PREFIX_HOOK=/etc/networkd-dispatcher/routable.d/90-dert-lan-prefix
 SYNC=/usr/local/lib/dert/dns-split-sync
+WATCHDOG=/usr/local/lib/dert/pppoe-watchdog
+MISS_FLAG=/run/dert/pppoe-watchdog-miss
 
 log() { logger -t dert-netwatch "$*" 2>/dev/null || true; }
+
+# 是否 PPPoE 上网（只有 PPPoE 才有 ppp0 可看）
+is_pppoe() {
+    [ -f /etc/dert/config.json ] || return 1
+    python3 -c 'import json, sys
+try:
+    sys.exit(0 if json.load(open(sys.argv[1])).get("wan", {}).get("mode") == "pppoe" else 1)
+except Exception:
+    sys.exit(1)' /etc/dert/config.json 2>/dev/null
+}
 
 # br-lan 的当前 v4 / 全局 v6 地址（与 dns-split-sync 用同一套取值方式，
 # 兼容多行与 ip -o 单行两种输出）
@@ -104,9 +118,22 @@ reconcile() {
         "$SYNC" >/dev/null 2>&1 || true
     fi
 
-    # 注意：这里**不做** PPPoE 看门狗的事。看门狗是「服务活着但资源没了」的
-    # 健康检查，周期性是它的正当形态（kubelet probe / systemd WatchdogSec /
-    # monit 都如此），不属于"猜时序"。由 dert-pppoe-watchdog.timer 继续负责。
+    # ③ ppp0 消失 → 立刻交给看门狗，并安排一次 180s 后的有界复查。
+    #    pppd 的 persist 对"接口被外部删除"不敏感：服务仍 active、进程还在，
+    #    但会话没了，既不自愈也不报错（2026-11-05 真机实录）。
+    #    netlink 对 link 消失是能立刻收到的，所以快速路径不再依赖每分钟轮询。
+    #
+    #    为什么还要 180s 复查：拨号建立本身要时间，ppp0 刚消失就重启服务会
+    #    打断正在重试的 pppd。这里用**一次性**定时（systemd-run --on-active）
+    #    而不是周期 timer —— 它是"给定宽限期后做判定"，不是猜"什么时候能好"，
+    #    也不会像 1 分钟 timer 那样每天空转 1440 次。
+    if is_pppoe && ! ip link show ppp0 >/dev/null 2>&1; then
+        if [ ! -f "$MISS_FLAG" ]; then
+            log "ppp0 消失，标记缺失并安排 180s 后复查"
+            "$WATCHDOG" >/dev/null 2>&1 || true
+            systemd-run --on-active=180s --collect "$WATCHDOG" >/dev/null 2>&1 || true
+        fi
+    fi
 }
 
 # 启动先对一次账：覆盖「netwatch 重启过、期间漏掉了事件」的情况

@@ -5,8 +5,13 @@
 # 仍是 active、进程还在，但 ppp0 已经不存在，既不自愈也不报错，表现为"拨不了号"。
 # 典型诱因是 networkd 重配 / 手工 reconfigure ppp0 打断了会话。
 #
-# 策略：周期检查（默认 1 分钟）。ppp0 缺失先打标记，给拨号留一个周期；连续缺失
-# 超过 3 分钟才重启服务，避免正常拨号过程中被误杀。
+# 策略（v0.1.72 起）：
+#   · **快速路径**由 dert-netwatch 的事件驱动：netlink 收到 ppp0 消失就立刻调本
+#     脚本打标记，并安排 180s 后的一次性复查（见 priv/netwatch 的 ③）。
+#   · 本脚本仍是"给定宽限期后做判定"的那一环：首次缺失只打标记，AGE ≥ 180s
+#     才重启服务，避免打断正在重试的 pppd。
+#   · `dert-pppoe-watchdog.timer` 从每分钟降到每 15 分钟，只作为兜底
+#     （netwatch 挂掉或事件丢失时仍能收敛）。
 set -u
 CFG="/etc/dert/config.json"
 FLAG="/run/dert/pppoe-watchdog-miss"
@@ -15,7 +20,23 @@ UNIT="dert-pppoe.service"
 [ -f "$CFG" ] || exit 0
 mkdir -p /run/dert 2>/dev/null || true
 
-MODE="$(python3 -c "import json;print(json.load(open('$CFG')).get('wan',{}).get('mode',''))" 2>/dev/null)"
+# 一次 python 读出「上网方式 + WAN 口名」。
+# 此前每次运行起 2 个 python3 进程读同一份 JSON，而它原本每分钟跑一次
+# （真机实测 24h 1275 次执行 → 约 2550 次 python3 启动）。合并成 1 次；
+# 路径走 argv 而不是拼进源码字符串。
+CFG_OUT="$(python3 -c '
+import json, sys
+try:
+    c = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+w = c.get("wan", {}) or {}
+print(w.get("mode", ""))
+print(next((p.get("name", "") for p in (c.get("ports") or []) if p.get("wan")), ""))
+' "$CFG" 2>/dev/null)"
+MODE="$(printf '%s\n' "$CFG_OUT" | sed -n '1p')"
+WPORT="$(printf '%s\n' "$CFG_OUT" | sed -n '2p')"
+
 if [ "$MODE" != "pppoe" ]; then
   rm -f "$FLAG" 2>/dev/null
   exit 0
@@ -23,7 +44,6 @@ fi
 
 # C-6：WAN 口无缆线时不清 flag 也不重启——pppd persist 本就在重试，
 # 此刻重启只是无意义搅动；载波恢复由热插拔钩子负责轻推
-WPORT="$(python3 -c "import json;print(next((p['name'] for p in json.load(open('$CFG')).get('ports',[]) if p.get('wan')),''))" 2>/dev/null)"
 if [ -n "$WPORT" ] && [ "$(cat /sys/class/net/$WPORT/carrier 2>/dev/null || echo 0)" != "1" ]; then
   rm -f "$FLAG" 2>/dev/null
   exit 0
