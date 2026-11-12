@@ -7,6 +7,44 @@
 
 ## [Unreleased]
 
+## [0.1.85] - 2026-11-12
+
+> 工业化重构 **P2-5**：sing-box 控制面域抽成独立模块。
+
+### Changed
+
+- **`priv/singbox.py`（405 行）**：10 个子动作（status / ctl / autostart /
+  install / sub-set / sub-update / schedule / uninstall / dash-set / check）。
+  `dert-priv` 从 **1284 行降到 1035 行**（−249）。
+
+  注意边界：DebRT **不管 sing-box 的流量路径**（分流由 nft + 配置决定），
+  这里只有"控制面"——服务开关、订阅地址、自动更新、面板地址。
+
+  逐条保留踩过的坑：
+  - `clash_api` 在新版是 `services[type=api]`，且 **listen 与 listen_port 是两个
+    字段**——只取 listen 会拼出 `host:0.0.0.0` 死链（N-01）
+  - `sub-set` 的 URL 必须过 `validate.url_host_blacklisted`，否则可指向内网
+  - `schedule` 写 `/etc/cron.d/sing-box` 只替换 sb update 那一行，**其它任务的行
+    必须保留**；只剩我们这行时整文件删除
+
+### Added
+
+- `tests/test_singbox.py`（18 个用例）：假根 + 假 `sing-box`/`systemctl`/`ps`，
+  覆盖 API controller 的两种来源（services / clash_api）、订阅地址脱敏、
+  cron 时间解析、内网 URL 拒绝、cron 行的精确增删、时间格式校验等。
+
+### Fixed
+
+- **测试跨模块污染**。`test_singbox` 改了 `os.environ["PATH"]` 与 `privlib`
+  的模块级路径变量，`test_container` 打了 `privlib.run` 的桩——都**没恢复**，
+  导致全量跑时互相干扰（单模块跑全绿、合起来 1 个失败）。已加 `tearDown` 恢复。
+  这是"共享模块 + 打桩"必然会遇到的坑，值得记。
+
+### 验证
+
+- **真机双跑**：`singbox-ops status` 新旧实现 **13 个字段完全一致**
+  （含 API controller、订阅脱敏、cron 时间、tailscale endpoint、dashboard）。
+
 ## [0.1.84] - 2026-11-12
 
 > 工业化重构 **P2-4**：备份包成员校验抽成可测模块。

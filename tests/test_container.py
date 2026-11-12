@@ -33,6 +33,11 @@ class Base(unittest.TestCase):
         # 测试机不是 root；真正的 require_root 在 main() 里，这里直接调 act_*
         self.calls = []
         self.outputs = {}
+        # privlib 是共享模块：打桩后必须恢复，否则污染其它测试
+        self._saved = (self.P.run, self.P.run_out, self.P.ETC, self.P.VAR)
+
+    def tearDown(self):
+        self.P.run, self.P.run_out, self.P.ETC, self.P.VAR = self._saved
 
     def stub(self, mapping, default=""):
         """把 run_out 换成按命令前缀返回构造好的输出；记录所有调用。"""
