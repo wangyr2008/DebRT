@@ -7,6 +7,42 @@
 
 ## [Unreleased]
 
+## [0.1.78] - 2026-11-12
+
+> 工业化重构 **P1-2（守卫分层，第三阶段）**：给 `lib.sh` 加测试缝，
+> 让配置事务的核心函数第一次有运行时测试。
+
+### Added
+
+- **`DERT_FSROOT` 测试缝扩到 `lib.sh`**。只作用于**数据**路径
+  （`DERT_ETC` / `DERT_VAR` / `DERT_RUN`），代码路径（`DERT_ROOT` / `DERT_SHARE`）
+> 不变——「程序在哪」和「数据在哪」是两件事。
+
+  未设时是空串，`"${FSROOT}/etc/dert"` 与 `"/etc/dert"` **逐字符等价**，
+  生产行为一字不变；设了就指向临时根。三个变量同时 `export`，供内联
+  Python 用 `os.environ` 取（heredoc 是 `<<'PYEOF'` 形式，shell 不展开变量）。
+
+- **`tests/test_lib_functions.py`（16 个行为用例）**。这些函数此前**没有任何
+  运行时测试**，只有源码字符串断言：
+  - `write_atomic`：内容/权限/自动建父目录/**不残留临时文件**/覆盖写
+  - `snapshot_lastgood` / `restore_lastgood`：快照落盘、回滚还原、
+    快照不存在时必须返回非零（不能静默成功）、**轮转只留 5 份**
+  - `plan_for_section`：9 个配置段的重启映射（改错会导致"改了没生效"或
+    "多断一次网"）、未知段回落全量、IPv6 变更不带 cake
+  - `ok_out` / `die`：面板依赖的 JSON 协议，类型强转与字段完整性
+  - **缝不生效**：未设 / 设成空串时，解析出的路径必须与生产完全一致
+
+### Notes
+
+- **为什么这版没动 `dert-priv`**：它有 70 处硬编码 `/etc|/run|/var/lib`，
+  其中 41 处在 `<<'PYEOF'` 的 Python heredoc 里（shell 不展开变量，必须改成
+  `os.environ`），而且里面混着**提示文案**（如 `"在系统上执行：rm /etc/dert/..."`），
+  盲替换会改错。这是升级通道本身，值得单独一版、单独验证。
+- 真机验证：部署后 `CONFIG_JSON` / `DERT_VAR` / `DERT_RUN` 解析与改动前
+  完全一致；`config-get`、`status`、`apply-all --convergent` 均正常；
+  `/etc/dert` 无残留临时文件；lastgood 仍是 5 份。
+- 棘轮预算不变（133）——本轮新增的全是行为断言。
+
 ## [0.1.77] - 2026-11-12
 
 > 修一个 **v0.1.76 自己在真机上暴露的 bug**，并补上锁住它的守卫。

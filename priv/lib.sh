@@ -8,11 +8,22 @@
 # 写在这里是为了让"直接 source 本文件调试"时也不会静默吞掉未定义变量。
 set -u
 
+# 代码路径（不随测试缝变化）：这些是"程序在哪"，不是"数据在哪"
 DERT_ROOT="/usr/local/lib/dert"
 DERT_SHARE="${DERT_ROOT}/share"
-DERT_ETC="/etc/dert"
-DERT_VAR="/var/lib/dert"
-DERT_RUN="/run/dert"
+
+# 数据路径：v0.1.78 起支持测试缝。
+#   FSROOT="${DERT_FSROOT:-}" 未设时是空串 → "${FSROOT}/etc/dert" 与 "/etc/dert"
+#   逐字符等价，生产行为一字不变；设了就指向临时根，让原子写/快照/清理这些
+#   逻辑能在无 root 环境里被真正跑一遍（P2 拆 dert-priv 的安全网）。
+FSROOT="${DERT_FSROOT:-}"
+DERT_ETC="${FSROOT}/etc/dert"
+DERT_VAR="${FSROOT}/var/lib/dert"
+DERT_RUN="${FSROOT}/run/dert"
+
+# 导出给内联 Python 用：heredoc 是 <<'PYEOF' 形式，shell 不展开变量，
+# 所以 Python 侧统一用 os.environ["DERT_ETC"] 取路径。
+export DERT_ETC DERT_VAR DERT_RUN
 CONFIG_JSON="${DERT_ETC}/config.json"
 SECRETS_JSON="${DERT_ETC}/secrets.json"
 VERSION_FILE="${DERT_SHARE}/VERSION"
