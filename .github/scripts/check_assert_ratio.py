@@ -26,7 +26,11 @@ GUARDS = os.path.join(ROOT, ".github", "scripts", "test_guards.py")
 # 当前基线（2026-11-12 / v0.1.76：132 条。已行为化的两批：DNS 分流 14 条、
 # 升级包白名单 2 条。剩余多为"通道同步"类跨文件约定，属真正该留的架构约束）。
 # 只允许下调。上调必须在这里写明理由。
-STRING_ASSERT_BUDGET = 132
+# v0.1.77：132 → 133。新增的是「tar 的 stderr 不得合进成员清单管道」——
+# 该 bug 只在 upgrade-apply 以 root 跑且包含 `..` 时显现（真机实测踩到），
+# 没有不依赖 root 的行为测试办法；它会让安全错误提示变成 tar 的警告原文，
+# 属于必须锁住的坑。
+STRING_ASSERT_BUDGET = 133
 
 
 def count():

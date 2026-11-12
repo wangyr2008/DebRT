@@ -623,6 +623,11 @@ for _f in ("LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
 # dert-priv 必须以 root 解压前调用该模块，不能又写回内联逻辑。
 assert "tarcheck.py" in _priv_src, \
     "P3-20 回归：升级包成员校验未走 priv/tarcheck.py（内联逻辑无法行为测试）"
+# 不能把 tar 的 stderr 合进成员清单管道：tar 对含 `..` 的成员会打
+# "Removing leading ..."，合并后那行会被当成成员名，拒绝原因变成 tar 的警告原文；
+# 反过来正常包若有任何 tar 警告也会被误判为危险条目。两个方向都错（真机实测踩到）。
+assert 'tar -tzf "$pkg" 2>&1 | python3' not in _priv_src, \
+    "P3-20 回归：tar 的 stderr 又被合进成员清单管道（警告会被当成成员名）"
 
 # P3-21：dnsmasq 必须用 bind-dynamic，不能用 bind-interfaces。
 # 开机时序：dnsmasq 先起（br-lan 只有 fe80::），4 秒后 PD 委派的 GUA 才出现。

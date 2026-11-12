@@ -1308,8 +1308,15 @@ except Exception:
   #    v0.1.76 起抽到 priv/tarcheck.py —— 这段逻辑此前只有源码字符串断言，
   #    而它是"以 root 解压之前"的最后一道防线，字符串断言证明不了真拦得住。
   #    抽出来后可以用真实恶意成员名做行为测试（tests/test_tarcheck.py）。
-  local tc_out
-  if ! tc_out="$(tar -tzf "$pkg" 2>&1 | python3 "${PRIV_DIR}/tarcheck.py" 2>&1)"; then
+  # 先把成员清单取到变量里，再喂给校验器。
+  # 不能写成 `tar -tzf "$pkg" 2>&1 | tarcheck.py`：tar 对含 `..` 的成员会往
+  # stderr 打 "Removing leading ..."，合并进管道后那行会被当成成员名，
+  # 于是拒绝原因变成 tar 的警告原文（真机 2026-11-12 实测踩到）。
+  # 反过来，正常包若触发任何 tar 警告也会被误判为危险条目——两个方向都错。
+  local tc_list tc_out
+  tc_list="$(tar -tzf "$pkg" 2>/dev/null)" \
+    || die "UPG_BAD" "升级包无法读取（损坏或不是 tar.gz）" "请重新下载或重新上传升级包"
+  if ! tc_out="$(printf '%s\n' "$tc_list" | python3 "${PRIV_DIR}/tarcheck.py" 2>&1)"; then
     # 带上具体是哪个条目，比"包含不认识的条目"可诊断得多
     local tc_reason=""
     case "$tc_out" in
