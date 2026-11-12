@@ -7,6 +7,37 @@
 
 ## [Unreleased]
 
+## [0.1.84] - 2026-11-12
+
+> 工业化重构 **P2-4**：备份包成员校验抽成可测模块。
+
+### Security
+
+- **`priv/backupcheck.py`**：从 `do_backup_restore` 抽出的恢复前校验。
+  这段踩过一类很隐蔽的绕过：
+
+  ```
+  etc/dert/./secrets.json     ← 绕过「secrets 精确匹配」
+  etc/dert//secrets.json      ← 同上
+  ```
+
+  而 tar 解压时会自动规范化成 `etc/dert/secrets.json`，端到端可以写穿（复审 N-01）。
+  判定必须**先 `posixpath.normpath` 归一，再比对**。
+
+  抽出来之后这两个绕过有了专门的行为用例锁住——此前只有源码字符串断言，
+  证明不了它真的拦得住。
+
+### Added
+
+- `tests/test_backupcheck.py`（11 个用例）：正常备份、secrets（含 `./` 与 `//`
+  两种绕过变体）、绝对路径、`..` 穿越、白名单外文件、notes.json 的精确放行、
+  空清单、行尾换行，以及 CLI 退出码。
+
+### Notes
+
+- `dert-priv` 里那段内联 Python 换成一行调用；恢复流程其余部分（解压、预检、
+  应用）仍在 bash，属后续域。
+
 ## [0.1.83] - 2026-11-12
 
 > 工业化重构 **P2-3**：认证域抽成独立模块。这批是**安全语义**，
