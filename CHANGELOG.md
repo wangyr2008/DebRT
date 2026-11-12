@@ -7,6 +7,47 @@
 
 ## [Unreleased]
 
+## [0.1.82] - 2026-11-12
+
+> 工业化重构 **P2-2**：容器（podman）域抽成独立模块。
+
+### Changed
+
+- **`priv/container.py`（335 行）**：`do_podman_ops` + `do_podman_update` 的实现。
+  `dert-priv` 从 **1567 行降到 1409 行**（−158）。
+
+  这不是字面搬迁——原实现是 bash 编排，改写成了 Python，**逐条对应**这些细节：
+  - 只读操作（`status`/`list-*`/`compose-get`）**不进排他锁**：pull 最长 660s，
+    拉大镜像期间若占锁，开容器页会 504（真机实测）
+  - `list-images` 按**镜像 ID** 匹配使用状态，不按名字（容器 `.Image` 与
+    images `.Names` 首个 tag 常拼写不一致，按名字会误报"未使用"）
+  - `container update` 只回放端口/卷/环境变量/重启策略；**自定义网络或
+    privileged 前置拒绝**并指路 Compose（否则重建"成功"但配置丢了）
+  - 先建后删（审计 B-19）：新容器创建成功才动旧容器
+  - `compose-deploy` 遇 cgroup slice 竞态（OCI "No such file or directory"
+    且 State=created）重试一次
+
+- **`priv/privlib.py`（共用基础设施）**：JSON 协议（`die`/`ok_out`）、数据根推导、
+  `require_root`、`pod_lock`（flock + 超时）、`write_atomic`。域模块共用，
+  避免各写一遍后漂移。
+
+### Added
+
+- `tests/test_container.py`（11 个用例）：用打桩替换 `podman` 调用，
+  断言模块**调了哪些命令、输出什么 JSON**。重点覆盖上面两条坑：
+  按 ID 匹配使用状态、特殊配置前置拒绝；另断言「create 必须在 stop 旧容器之前」。
+
+### 验证
+
+- **真机新旧双跑**：`podman-ops` 的 4 个只读子命令（status / list-containers /
+  list-images / compose-get）与抽取前的实现**逐字节一致**。
+
+### Notes
+
+- 守卫「观察③ 容器更新缺前置拒绝」的断言位置改指向 `container.py`。
+- 三个文件（dert-priv / container.py / privlib.py）**一次性部署**——
+  v0.1.81 就是先传调用方后传模块把 status 弄坏过一次。
+
 ## [0.1.81] - 2026-11-12
 
 > **P4（可观测）** + 一条防止"拆分漏部署"的结构守卫。

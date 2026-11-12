@@ -369,7 +369,9 @@ assert "90-dert-lan-prefix /etc/networkd-dispatcher/routable.d/" in _priv_src, \
 assert "routable.d/90-dert-lan-prefix" in _un, \
     "P3-18 回归：卸载清单缺 90-dert-lan-prefix"
 # 观察③：容器更新必须前置拒绝自定义网络 / privileged（静默丢参数后用户连不上才发现）
-assert "CT_UPDATE_SKIP" in _priv_src, "观察③ 回归：容器更新缺前置拒绝"
+# v0.1.82：容器域搬到 priv/container.py；行为测试见 tests/test_container.py
+_container_src = open(os.path.join(ROOT, "priv", "container.py"), encoding="utf-8").read()
+assert "CT_UPDATE_SKIP" in _container_src, "观察③ 回归：容器更新缺前置拒绝"
 # P3-11：硬盘温度只取 temperature.current（遍历全部值会把 drive_trip 阈值当温度）
 # v0.1.80：这段逻辑搬到了 priv/status.py（纯 Python 模块，可行为测试）
 _status_src = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").read()
