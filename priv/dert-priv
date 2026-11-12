@@ -39,6 +39,7 @@ do_auth_verify() {
   [ -f "${DERT_VAR}/auth-state.json" ] && lock_state="$(cat "${DERT_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
   # 密码经环境变量传入（/proc/<pid>/environ 为 0400 root，ps 不可见），不走 argv（审计 B-15）
   out="$(DERT_SECRET="$pw" python3 - "$lock_state" <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, sys, time
 sys.path.insert(0, "/usr/local/lib/dert")
 import pwhash
@@ -57,7 +58,7 @@ elif state.get("lock_until", 0):
     state["fails"] = 0        # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
     state["lock_until"] = 0   # 过期时间戳一并清零（复审顺手项）
 try:
-    rec = json.load(open("/etc/dert/secrets.json"))["admin_pbkdf2"]
+    rec = json.load(open(E + "/secrets.json"))["admin_pbkdf2"]
     ok = pwhash.verify(pw, rec)
 except ValueError:
     # 记录格式坏：与"密码不正确"区分开，CI/排查一眼定位（六审建议）
@@ -83,7 +84,7 @@ else:
                           "message": "管理密码不正确", "hint": "请检查密码后重试"}))
 # P3-1：全项目 /etc 写入都是 tmp+os.replace，唯独这里曾直写——断电写一半会
 # 打碎 auth-state.json，下次 json.loads 抛异常 → 无输出 → 登录不可用（须 root 手删）
-state_path = "/var/lib/dert/auth-state.json"
+state_path = V + "/auth-state.json"
 with open(state_path + ".tmp", "w") as f:
     json.dump(state, f)
 os.replace(state_path + ".tmp", state_path)
@@ -96,9 +97,10 @@ PYEOF
 
 do_session_secret() {
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json
 try:
-    s = json.load(open("/etc/dert/secrets.json")).get("session_secret", "")
+    s = json.load(open(E + "/secrets.json")).get("session_secret", "")
     print(json.dumps({"ok": True, "secret": s}))
 except Exception:
     print(json.dumps({"ok": False, "code": "NO_SECRET", "message": "secrets.json 缺失或损坏", "hint": "请重新运行 install.sh"}))
@@ -110,10 +112,11 @@ PYEOF
 # ---------------------------------------------------------------------------
 do_config_get() {
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json
-cfg = json.load(open("/etc/dert/config.json"))
+cfg = json.load(open(E + "/config.json"))
 try:
-    has_pw = bool(json.load(open("/etc/dert/secrets.json")).get("pppoe_password"))
+    has_pw = bool(json.load(open(E + "/secrets.json")).get("pppoe_password"))
 except Exception:
     has_pw = False
 cfg.setdefault("wan", {})["has_password"] = has_pw
@@ -132,7 +135,7 @@ do_config_set() {
   acquire_lock
 
   local in_json norm tag stage man_json pre_wan acts failed
-  in_json="$(mktemp /run/dert/in.XXXXXX)"
+  in_json="$(mktemp ${DERT_RUN}/in.XXXXXX)"
   cat > "$in_json"
 
   # 1) 校验与规范化（失败时 validate.py 直接输出可操作的 JSON 错误）
@@ -144,19 +147,20 @@ do_config_set() {
   # 此前把 norm JSON 字符串当文件路径 open()，保存静默失败，真机实测）
   if [ "$section" = "upgrade" ]; then
     local norm_file
-    norm_file="$(mktemp /run/dert/norm.XXXXXX)"
+    norm_file="$(mktemp ${DERT_RUN}/norm.XXXXXX)"
     chmod 600 "$norm_file"
     printf '%s' "$norm" > "$norm_file"
     if ! python3 - "$in_json" "$norm_file" <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, sys, os
 in_file, norm_file = sys.argv[1], sys.argv[2]
 norm = json.load(open(norm_file))["data"]
-cfg = json.load(open("/etc/dert/config.json"))
+cfg = json.load(open(E + "/config.json"))
 cfg["upgrade"] = norm
-tmp = "/etc/dert/.config.tmp"
+tmp = E + "/.config.tmp"
 json.dump(cfg, open(tmp, "w"), ensure_ascii=False, indent=1)
 os.chmod(tmp, 0o644)
-os.replace(tmp, "/etc/dert/config.json")
+os.replace(tmp, E + "/config.json")
 PYEOF
     then
       rm -f "$in_json" "$norm_file"
@@ -176,19 +180,20 @@ PYEOF
   tag="s$(date +%s%N | tail -c 9)"
   snapshot_lastgood "$tag"
   local new_cfg new_sec norm_file
-  new_cfg="$(mktemp /run/dert/cfg.XXXXXX)"
-  new_sec="$(mktemp /run/dert/sec.XXXXXX)"
-  norm_file="$(mktemp /run/dert/norm.XXXXXX)"
+  new_cfg="$(mktemp ${DERT_RUN}/cfg.XXXXXX)"
+  new_sec="$(mktemp ${DERT_RUN}/sec.XXXXXX)"
+  norm_file="$(mktemp ${DERT_RUN}/norm.XXXXXX)"
   chmod 600 "$new_sec" "$norm_file"
   printf '%s' "$norm" > "$norm_file"
   if ! python3 - "$section" "$in_json" "$norm_file" "$new_cfg" "$new_sec" <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, sys
 section, in_file, norm_file, out_cfg, out_sec = sys.argv[1:6]
-cfg = json.load(open("/etc/dert/config.json"))
+cfg = json.load(open(E + "/config.json"))
 sec_in = json.load(open(in_file))
 norm = json.load(open(norm_file))["data"]
 try:
-    secrets = json.load(open("/etc/dert/secrets.json"))
+    secrets = json.load(open(E + "/secrets.json"))
 except Exception:
     secrets = {}
 if section == "bind":
@@ -236,7 +241,7 @@ PYEOF
   [ -s "$new_sec" ] && write_atomic "$SECRETS_JSON" 600 < "$new_sec"
 
   # 4) 用新配置生成 + 预检。此时原生文件尚未部署，失败回滚后系统与旧配置完全一致（安全）
-  stage="$(mktemp -d /run/dert/stage.XXXXXX)"
+  stage="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json"; then
     cat "$man_json"
@@ -301,7 +306,7 @@ PYEOF
     # 回滚到修改前配置并重放
     restore_lastgood "$tag"
     local stage2 man2
-    stage2="$(mktemp -d /run/dert/stage.XXXXXX)"
+    stage2="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
     man2="$stage2/manifest.json"
     if python3 "${PRIV_DIR}/netgen.py" --stage "$stage2" > "$man2" 2>/dev/null; then
       apply_stage_files "$stage2" "$man2"
@@ -330,10 +335,10 @@ PYEOF
 do_apply_all() {
   require_root
   local convergent=""; [ "${1:-}" = "--convergent" ] && convergent="1"
-  mkdir -p /run/dert-dns /run/dert
+  mkdir -p "${FSROOT}/run/dert-dns" "${DERT_RUN}"
   acquire_lock
   local stage man_json migrated=""
-  stage="$(mktemp -d /run/dert/stage.XXXXXX)"
+  stage="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
   man_json="$stage/manifest.json"
   if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
     # P3-12：生成器的 stderr 不再丢弃——结构损坏（KeyError / AddressValueError）时
@@ -349,21 +354,22 @@ do_apply_all() {
     if grep -qE 'LAN_MASK_TOO_WIDE' "$man_json" 2>/dev/null; then
       snapshot_lastgood "m$(date +%s)"
       MIGFIX="$(python3 - <<'INNERPYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os
-cfg = json.load(open("/etc/dert/config.json"))
+cfg = json.load(open(E + "/config.json"))
 fixes = []
 if cfg.get("lan", {}).get("mask") != "255.255.255.0":
     cfg["lan"]["mask"] = "255.255.255.0"
     fixes.append("LAN 掩码迁移为 /24")
-json.dump(cfg, open("/etc/dert/.config.tmp", "w"), ensure_ascii=False, indent=1)
-os.replace("/etc/dert/.config.tmp", "/etc/dert/config.json")
+json.dump(cfg, open(E + "/.config.tmp", "w"), ensure_ascii=False, indent=1)
+os.replace(E + "/.config.tmp", E + "/config.json")
 print("；".join(fixes))
 INNERPYEOF
 )"
       if [ -n "$MIGFIX" ]; then
         migrated="已自动修正不兼容的存量配置（$MIGFIX）"
         rm -rf "$stage"
-        stage="$(mktemp -d /run/dert/stage.XXXXXX)"
+        stage="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
         man_json="$stage/manifest.json"
         if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
           # 迁移成功：继续正常流程（跳过下方 die）
@@ -393,6 +399,7 @@ INNERPYEOF
       [ -f "/${rel}" ] || { drift=1; break; }
       cmp -s "/${rel}" "${stage}/${rel}" || { drift=1; break; }
     done < <(python3 - "$man_json" <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, sys
 for f in json.load(open(sys.argv[1]))["files"]:
     print(f"{f['path']}\t{f['mode']:04o}")
@@ -573,7 +580,7 @@ print(json.dumps({"ok": True, "images": [imgs[k] for k in order]}))' ;;
     compose-get)
       ok_out "content" "$(python3 -c '
 import json, os
-p = "/etc/dert/compose.yaml"
+p = os.environ.get("DERT_ETC", "/etc/dert") + "/compose.yaml"
 print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || echo '""')" ;;
     compose-set)
       write_atomic "${DERT_ETC}/compose.yaml" 644
@@ -582,7 +589,7 @@ print(json.dumps(open(p).read() if os.path.exists(p) else ""))' 2>/dev/null || e
       [ -f "${DERT_ETC}/compose.yaml" ] || die "COMPOSE_EMPTY" "尚未保存 Compose 内容" "请先在文本框中填写并部署"
       command -v podman-compose >/dev/null 2>&1 || die "COMPOSE_MISSING" "未安装 podman-compose" "在系统上执行 apt install podman-compose 后重试"
       local logf logtail
-      logf="$(mktemp /run/dert/compose.XXXXXX)"
+      logf="$(mktemp ${DERT_RUN}/compose.XXXXXX)"
       if ! podman-compose -f "${DERT_ETC}/compose.yaml" -p dert up -d >"$logf" 2>&1; then
         # pod 建立时 cgroup slice 竞态：报 OCI "No such file or directory" 且容器
         # State=created——重试一次即好（真机实测一次）
@@ -657,6 +664,7 @@ do_singbox_ops() {
   case "$action" in
     status)
       python3 - <<'SBJ'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, re, subprocess
 
 def _run(cmd):
@@ -742,7 +750,7 @@ if ui_dir:
     ui = os.path.isdir(full)
 custom = ""
 try:
-    custom = open("/var/lib/dert/singbox-dash-url").read().strip()
+    custom = open(V + "/singbox-dash-url").read().strip()
 except Exception:
     custom = ""
 up_s = None
@@ -801,6 +809,7 @@ SBJ
         *) die "SB_URL_BAD" "配置地址需以 http(s):// 开头" "示例：https://sub.example.com/link/xxx" ;;
       esac
       python3 - "$url" <<'SBURL' || die "SB_URL_BAD" "配置地址不能指向内网或主机名无效" "请使用公网可访问的配置地址"
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import sys
 sys.path.insert(0, "/usr/local/lib/dert")
 import validate
@@ -862,9 +871,9 @@ SBURLF
     dash-set)
       local url
       url="$(python3 -c 'import json,sys;print(str(json.load(sys.stdin).get("url","")).strip())' 2>/dev/null)" || die "SB_DASH_BAD" "请求格式错误"
-      mkdir -p /var/lib/dert
+      mkdir -p ${DERT_VAR}
       if [ -z "$url" ]; then
-        rm -f /var/lib/dert/singbox-dash-url
+        rm -f ${DERT_VAR}/singbox-dash-url
         ok_out "message" "Dashboard 地址已清除（回到按配置自动推导）"
         exit 0
       fi
@@ -872,7 +881,7 @@ SBURLF
         https://*|http://*) ;;
         *) die "SB_DASH_BAD" "Dashboard 地址需以 http(s):// 开头" "示例：https://metacubexd.pages.dev" ;;
       esac
-      write_atomic "/var/lib/dert/singbox-dash-url" 644 <<SBDASH
+      write_atomic "${DERT_VAR}/singbox-dash-url" 644 <<SBDASH
 $url
 SBDASH
       ok_out "message" "Dashboard 地址已保存" ;;
@@ -901,14 +910,15 @@ do_passwd_set() {
   local out rc
   # body（含新旧密码）经环境变量传入，不进 argv（审计 B-15）
   out="$(DERT_SECRET="$body" python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, sys, time
 sys.path.insert(0, "/usr/local/lib/dert")
 import pwhash
 body = json.loads(os.environ["DERT_SECRET"])
 old, new = body.get("old", ""), body.get("new", "")
-secrets = json.load(open("/etc/dert/secrets.json"))
+secrets = json.load(open(E + "/secrets.json"))
 # C-2：原密码暴破限速（持有会话的攻击者此前可无限尝试）——5 次锁 5 分钟
-FAILS = "/var/lib/dert/passwd-fails.json"
+FAILS = V + "/passwd-fails.json"
 def pf_load():
     try:
         return json.load(open(FAILS))
@@ -949,12 +959,12 @@ if not (8 <= len(new) <= 32):
 secrets["admin_pbkdf2"] = pwhash.hash_new(new)
 # 轮换会话密钥：改密后所有旧会话（含可能被盗的 cookie）立即失效（审计 B-17）
 secrets["session_secret"] = os.urandom(32).hex()
-tmp = "/etc/dert/.secrets.tmp"
+tmp = E + "/.secrets.tmp"
 with open(tmp, "w") as f:
     json.dump(secrets, f, ensure_ascii=False, indent=1)
     f.flush(); os.fsync(f.fileno())
 os.chmod(tmp, 0o600)
-os.replace(tmp, "/etc/dert/secrets.json")
+os.replace(tmp, E + "/secrets.json")
 print(json.dumps({"ok": True, "message": "管理密码已更新"}))
 PYEOF
 )"
@@ -1016,7 +1026,7 @@ print(reason)
     die "BACKUP_BAD" "备份文件内容不符合 DebRT 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
   fi
   snapshot_lastgood "r$(date +%s)"
-  local stage; stage="$(mktemp -d /run/dert/restore.XXXXXX)"
+  local stage; stage="$(mktemp -d ${DERT_RUN}/restore.XXXXXX)"
   # --no-same-owner：root 解压不保留包内属主；防软链/目录覆盖类穿越（审计 5.3）
   tar -C "$stage" --no-same-owner --no-overwrite-dir -xzf "$src" 2>/dev/null \
     || { rm -rf "$stage"; die "BACKUP_BAD" "备份文件解压失败（文件可能损坏）"; }
@@ -1044,17 +1054,18 @@ print(reason)
   # 备份不含 secrets：按 secrets.json 实际内容重算 has_password（复审 N-04）
   local pw_warn=""
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json
 try:
-    cfg = json.load(open("/etc/dert/config.json"))
-    sec = json.load(open("/etc/dert/secrets.json"))
+    cfg = json.load(open(E + "/config.json"))
+    sec = json.load(open(E + "/secrets.json"))
 except Exception:
     raise SystemExit
 has = bool(sec.get("pppoe_password"))
 cfg.setdefault("wan", {})["has_password"] = has
-json.dump(cfg, open("/etc/dert/config.json.new", "w"), ensure_ascii=False, indent=1)
+json.dump(cfg, open(E + "/config.json.new", "w"), ensure_ascii=False, indent=1)
 import os
-os.replace("/etc/dert/config.json.new", "/etc/dert/config.json")
+os.replace(E + "/config.json.new", E + "/config.json")
 PYEOF
   if [ "$(python3 -c 'import json;c=json.load(open("'"$CONFIG_JSON"'"));print(c["wan"]["mode"]=="pppoe" and not c["wan"].get("has_password"))' 2>/dev/null)" = "True" ]; then
     pw_warn="注意：备份不含宽带密码，PPPoE 拨号尚未可用——请在「网络设置 → 上网设置」重新填写宽带密码并保存"
@@ -1074,6 +1085,7 @@ do_factory_reset() {
   chmod 600 "$prebak" 2>/dev/null || true
   # 发现网口：eth*/en* 排除 ppp/tun/br/veth
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, re
 ports = []
 for n in sorted(os.listdir("/sys/class/net")):
@@ -1094,22 +1106,23 @@ cfg = {
     "upgrade": {"source": ""},
 }
 try:
-    old = json.load(open("/etc/dert/config.json"))
+    old = json.load(open(E + "/config.json"))
     cfg["upgrade"]["source"] = old.get("upgrade", {}).get("source", "")  # 升级源保留
 except Exception:
     pass
-json.dump(cfg, open("/etc/dert/config.json.new", "w"), ensure_ascii=False, indent=1)
+json.dump(cfg, open(E + "/config.json.new", "w"), ensure_ascii=False, indent=1)
 PYEOF
   mv -f "${CONFIG_JSON}.new" "$CONFIG_JSON"
   # 宽带密码属于路由配置：一并清除；管理密码保留
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json
 try:
-    s = json.load(open("/etc/dert/secrets.json"))
+    s = json.load(open(E + "/secrets.json"))
     s.pop("pppoe_password", None)
-    json.dump(s, open("/etc/dert/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
-    import os; os.chmod("/etc/dert/.secrets.tmp", 0o600)
-    os.replace("/etc/dert/.secrets.tmp", "/etc/dert/secrets.json")
+    json.dump(s, open(E + "/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
+    import os; os.chmod(E + "/.secrets.tmp", 0o600)
+    os.replace(E + "/.secrets.tmp", E + "/secrets.json")
 except Exception:
     pass
 PYEOF
@@ -1291,9 +1304,9 @@ do_upgrade_apply() {
     # 配了 upgrade.require_signature=true 则拒绝。这是"只验不拦 → 强制"的过渡开关。
     local need_sig
     need_sig="$(python3 -c '
-import json
+import json, os
 try:
-    c = json.load(open("/etc/dert/config.json"))
+    c = json.load(open(os.environ.get("DERT_ETC", "/etc/dert") + "/config.json"))
     print("true" if (c.get("upgrade") or {}).get("require_signature") else "false")
 except Exception:
     print("false")
@@ -1492,7 +1505,7 @@ DPEOF
   # CI 冒烟网关（install.sh --smoke 写 /run/dert/smoke-mode）：收敛会重启
   # networkd/dnsmasq/nft——runner 的网络不能动（CI 实测：步骤全绿但 agent 收尾
   # 信号传不回，job 被超时标 cancelled，run#101）；跳过内联收敛与延迟收敛重启。
-  local _smoke=0; [ -f /run/dert/smoke-mode ] && _smoke=1
+  local _smoke=0; [ -f ${DERT_RUN}/smoke-mode ] && _smoke=1
   if [ "$_smoke" != "1" ]; then
     _DERT_LOCK_HELD=1 /usr/local/lib/dert/dert-priv apply-all --convergent >> /var/log/dert-upgrade-selftest.log 2>&1 || \
       logger -t dert-upgrade "升级后收敛有报错，详见 /var/log/dert-upgrade-selftest.log"
@@ -1516,9 +1529,10 @@ DPEOF
 # ---------------------------------------------------------------------------
 do_status() {
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, subprocess, time
 
-cfg = json.load(open("/etc/dert/config.json"))
+cfg = json.load(open(E + "/config.json"))
 ULA_PREFIX_STATIC = "fda1:9e3a:8b7f"
 wans = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
 wans_set = set(wans) | ({"ppp0"} if cfg.get("wan", {}).get("mode") == "pppoe" else set())
@@ -1576,7 +1590,7 @@ if wan_dev:
     if mode == "pppoe":
         # 会话起点由 pppd ip-up.d 钩子写入（掉线重拨即归零），不再用服务启动时间（persist 下不准，审计 B-22）
         try:
-            st = os.stat("/run/dert/ppp-session-start")
+            st = os.stat(R + "/ppp-session-start")
             wan["session_s"] = max(0, int(time.time() - st.st_mtime))
         except OSError:
             wan["session_s"] = None
@@ -1674,7 +1688,7 @@ except Exception:
 disk_temp = None
 try:
     import os as _os
-    cache = "/run/dert/disk-temp"
+    cache = R + "/disk-temp"
     now = time.time()
     cached = None
     try:
@@ -1698,17 +1712,17 @@ try:
             _note = ""
         if _note:
             try:
-                _unchanged = open("/run/dert/disk-unavailable").read() == _note
+                _unchanged = open(R + "/disk-unavailable").read() == _note
             except OSError:
                 _unchanged = False
             if not _unchanged:
-                with open("/run/dert/disk-unavailable", "w") as f:
+                with open(R + "/disk-unavailable", "w") as f:
                     f.write(_note)
         else:
             # P3-1：采集正常时清掉历史诊断标记——否则补装 smartmontools 后
             # tooltip 仍显示"未安装"（/run 只在重启时才清）
             try:
-                os.remove("/run/dert/disk-unavailable")
+                os.remove(R + "/disk-unavailable")
             except OSError:
                 pass
         if devices:
@@ -1721,7 +1735,7 @@ try:
                 _cur = temps.get("current")
                 if isinstance(_cur, (int, float)) and 0 < _cur < 120:
                     disk_temp = int(_cur)
-        _os.makedirs("/run/dert", exist_ok=True)
+        _os.makedirs(R, exist_ok=True)
         with open(cache + ".tmp", "w") as f:
             f.write(str(disk_temp if disk_temp is not None else ""))
         _os.replace(cache + ".tmp", cache)
@@ -1737,13 +1751,13 @@ for vp in ("/usr/local/lib/dert/share/VERSION", "/usr/local/lib/dert/VERSION"):
         continue
 print(json.dumps({
     "ok": True,
-    "converge_failed": os.path.exists("/run/dert/converge-failed"),
+    "converge_failed": os.path.exists(R + "/converge-failed"),
     "wan": wan, "ipv6": v6, "ports": ports,
     "lan": cfg.get("lan", {}),
     "version": ver,
     "system_ok": bool(dnsmasq_ok and networkd_ok and nft_ok),
     "disk_temp": disk_temp,
-    "disk_temp_note": (open("/run/dert/disk-unavailable").read().strip() if os.path.exists("/run/dert/disk-unavailable") else ""),
+    "disk_temp_note": (open(R + "/disk-unavailable").read().strip() if os.path.exists(R + "/disk-unavailable") else ""),
     "leases_count": leases,
 }, ensure_ascii=False))
 PYEOF
@@ -1754,12 +1768,13 @@ PYEOF
 # ---------------------------------------------------------------------------
 do_selftest() {
   python3 - <<'PYEOF'
+import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
 import json, os, shutil, subprocess, sys
 checks = []
 def add(name, ok, hint=""):
     checks.append({"name": name, "ok": bool(ok), "hint": hint})
 try:
-    json.load(open("/etc/dert/config.json"))
+    json.load(open(E + "/config.json"))
     add("config.json 存在且可解析", True)
 except Exception as e:
     add("config.json 存在且可解析", False, f"解析失败：{e}；可从 /var/lib/dert/lastgood 恢复")

@@ -7,6 +7,57 @@
 
 ## [Unreleased]
 
+## [0.1.79] - 2026-11-12
+
+> 工业化重构 **P1-2（守卫分层，第四阶段）**：把测试缝铺到 `dert-priv`。
+> 这是本项目风险最高的一次改动——它是升级通道本身。
+
+### Added
+
+- **`dert-priv` 全部数据路径支持 `DERT_FSROOT`**。57 处硬编码 `/etc/dert` /
+  `/var/lib/dert` / `/run/dert` 改为走 `DERT_ETC` / `DERT_VAR` / `DERT_RUN`
+  （由 `lib.sh` 统一提供，未设时为空串 → 与原路径**逐字符等价**）。
+
+  两类上下文分别处理：
+  - **shell 上下文**（18 处）：直接引用变量。
+  - **`<<'PYEOF'` 的 Python heredoc**（38 处）：引号 heredoc 不展开 shell 变量，
+    每个块顶部注入一行 `E/V/R = os.environ.get(...)` 前置声明，字面量改为
+    `E + "/config.json"` 形式。
+  - **单引号 `python3 -c '...'`**（2 处）：同样走 `os.environ`。
+
+- **`tests/test_dert_priv.py`（6 个行为用例）**：这个文件过去只能做源码断言，
+  现在可以真的跑起来喂假根：
+  - `config-get` 从假根读取、**不泄漏 secrets**（admin_pbkdf2 / pppoe_password /
+    session_secret 都不得出现在输出里）、以 `has_password` 布尔代替明文
+  - `status` 的 `converge_failed` 跟随假根（决定面板是否显示"上次收敛失败"）
+  - 缝的隔离性：设了 FSROOT 就绝不能读到真实 `/etc`
+
+### 验证方式（关键）
+
+这类改动**不能只靠单测**——单测证明不了 shell 接线对不对（v0.1.76 就是这么翻车的）。
+这次用**新旧并排双跑**：
+
+1. 先把新文件放到 `/usr/local/lib/dert/dert-priv.new`，**不替换现役**
+2. 同一批只读子命令两边各跑一次，逐字节比对：
+   `config-get` / `status` / `compose-get` / `list-containers` / `list-images` / `version`
+   → **6/6 完全一致**
+3. 再造一个假根验证缝真的生效：
+   - 新版 + `DERT_FSROOT` → 读到假根里的 `marker: FAKE-ROOT`、`converge_failed: true`
+   - 新版 无 FSROOT → 读到真实配置、`converge_failed: false`
+   - 现役 无 FSROOT → 与新版一致
+4. 确认无误后才替换现役文件
+
+### Notes
+
+- **转换脚本本身踩了一个坑，值得记**：初版按「`<<TAG` 就是 Python heredoc」处理，
+  结果把 `<<SBURL` / `<<SBDASH`（写 URL 文件）和 `<<'DPEOF'`（写 systemd unit）
+  也当成 Python，往里注入了 `import os` 一行——那会直接把垃圾写进配置文件和
+  unit。是「逐块做 Python 语法检查」发现的：3 个块报 SyntaxError。
+  修正为**只有命令行含 `python3` 的 heredoc 才当 Python**。
+- 中文提示文案（如 `"在系统上执行：rm /etc/dert/secrets.json ..."`）全部保留原样，
+  替换时按「行内含 CJK 就跳过」规避。
+- 棘轮预算不变（133）——本轮新增的全是行为断言。
+
 ## [0.1.78] - 2026-11-12
 
 > 工业化重构 **P1-2（守卫分层，第三阶段）**：给 `lib.sh` 加测试缝，
