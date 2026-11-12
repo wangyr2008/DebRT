@@ -1561,5 +1561,7 @@ case "$CMD" in
   upgrade-apply)   do_upgrade_apply "$@" ;;
   status)          do_status ;;
   selftest)        do_selftest ;;
+  # v0.1.81（P4）：结构化健康检查，退出码 0/1，供监控直接消费
+  health)          exec python3 "${PRIV_DIR}/health.py" "$@" ;;
   *)               die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;
 esac

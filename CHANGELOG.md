@@ -7,6 +7,44 @@
 
 ## [Unreleased]
 
+## [0.1.81] - 2026-11-12
+
+> **P4（可观测）** + 一条防止"拆分漏部署"的结构守卫。
+
+### Added
+
+- **`dert-priv health`**（`priv/health.py`）：一条命令给出结构化健康状态，
+  **只读、不改任何东西**，退出码 0/1 供监控直接消费（systemd timer / cron /
+  Zabbix / node_exporter textfile 都能用）。
+
+  14 项检查，每一项都对应一个真机踩过的坑：
+  | 检查 | 为什么要有 |
+  |---|---|
+  | 5 个服务 active | 基本存活 |
+  | 失败单元数 = 0 | 别只看单个服务 |
+  | `dert_dns` 规则数 = 4 | 直接写 table 定义是**追加**，真机曾堆到 20 条 |
+  | nft v6 目标 = 当前 GUA | 前缀变了没跟上 → 白名单 v6 DNS 全落空（437 个包） |
+  | 5353 在监听 | fakeip 不可用时白名单 DNS 直接坏 |
+  | `resolv.conf` 指向 127.0.0.1 | 被 pppd 改写后 `.lan` 解析失败 |
+  | 收敛失败标记 | 面板要显示"上次收敛失败" |
+  | 磁盘余量 ≥ 1GB | 升级包需要空间 |
+  | 配置可解析 / 版本可读 | 基础 |
+
+- `tests/test_health.py`（9 个用例）：用假 `systemctl`/`nft`/`ss`/`ip` 把
+  **每一种不健康场景**单独构造出来，断言被正确识别且退出码为 1。
+
+### Fixed
+
+- **`dert-priv` 引用了不存在的模块时会直接坏掉**（真机实测踩到）。
+  拆分后 `do_status` 变成 `exec python3 "${PRIV_DIR}/status.py"`，而我手工部署时
+  先传了 `dert-priv`、后传模块，中间那段时间 `status` 报
+  `can't open file '/usr/local/lib/dert/status.py'`。
+  **升级通道本身是整目录替换，不会出这个问题**——是手工部署才踩到。
+
+  新增守卫 P3-32：`dert-priv` 里 `${PRIV_DIR}/xxx` 引用的每个文件都必须在
+  `priv/` 下真实存在；反向也断言 `install.sh` 仍用 `priv/*.py` 通配部署
+  （改成逐个列举就会漏装新模块）。
+
 ## [0.1.80] - 2026-11-12
 
 > 工业化重构 **P2-1（结构分层，第一个域）**：把 `status` / `selftest` 从

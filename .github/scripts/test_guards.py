@@ -833,6 +833,22 @@ assert "require_signature" in _priv_sig, \
 assert _priv_sig.index("openssl pkeyutl -verify") < _priv_sig.index("tar -tzf \"$pkg\""), \
     "P3-31 回归：验签位置跑到解压之后了（应最先校验来源真实性）"
 
+# ---- P3-32：dert-priv 引用的每个 priv/ 文件都必须真实存在（v0.1.81）----
+# 拆分之后 dert-priv 会 `exec python3 "${PRIV_DIR}/status.py"` 这类调用。
+# 如果只部署了 dert-priv 而漏了模块，运行期才报 "can't open file"——
+# 真机 2026-11-12 就这么把 status 弄坏过一次（我手工部署时先传了调用方）。
+# 这条守卫在 CI 阶段就能拦住"引用了不存在的文件"。
+import re as _re
+_priv_refs = set(_re.findall(r'\$\{PRIV_DIR\}/([A-Za-z0-9_.-]+)', _priv_src_all))
+_missing_refs = [r for r in sorted(_priv_refs)
+                 if not os.path.exists(os.path.join(ROOT, "priv", r))]
+assert not _missing_refs, \
+    f"P3-32 回归：dert-priv 引用了 priv/ 下不存在的文件：{_missing_refs}（拆分漏部署会直接坏掉）"
+# 反向：priv/ 下每个 .py 都必须能被部署通道带上（install.sh 用 glob，这里确认没被改成列举）
+_inst_src = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
+assert '"$SRC_DIR/priv/"*.py' in _inst_src, \
+    "P3-32 回归：install.sh 不再用 glob 部署 priv/*.py（新增模块会漏装）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
