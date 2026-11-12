@@ -1179,13 +1179,31 @@ do_upgrade_download() {
   rm -f "$out" "${out}.sha256"
   local prefix base="https://github.com" rc=1
   if [[ "$src" == *"://"* ]]; then
-    local body sha256=""
+    local body asset="" sha256=""
     body="$(fetch_body "$src")" || die "UPG_NET" "无法访问升级源"
-    eval "$(printf '%s' "$body" | python3 -c '
+    # 从清单 JSON 里取 url / sha256。
+    # 以前的做法是让 python 打印 shlex.quote 后的赋值语句、再交给 shell 求值。
+    # 那样虽然能防注入，但「执行动态生成的代码」本身就是坏味道——将来谁改了
+    # 引号处理就变成命令执行。改成「python 输出两行、bash 用 read 读」：
+    # 值原样传递（URL 与 sha256 不可能含换行，去掉 \r\n 是安全的），
+    # 全程不经过 shell 求值，注入面为零。
+    {
+      IFS= read -r asset || true
+      IFS= read -r sha256 || true
+    } < <(printf '%s' "$body" | python3 -c '
 import json, sys
-d = json.load(sys.stdin)
-print("asset=" + __import__("shlex").quote(str(d.get("url", ""))))
-print("sha256=" + __import__("shlex").quote(str(d.get("sha256", ""))))' 2>/dev/null)"
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict):
+    sys.exit(0)
+def clean(v):
+    if not isinstance(v, str):
+        return ""
+    return v.replace("\r", "").replace("\n", "")
+sys.stdout.write(clean(d.get("url")) + "\n" + clean(d.get("sha256")) + "\n")
+' 2>/dev/null)
     [ -n "$asset" ] || die "UPG_MANIFEST" "清单缺少 url 字段"
     for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
       curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${asset}" -o "$out" 2>/dev/null && { rc=0; break; }

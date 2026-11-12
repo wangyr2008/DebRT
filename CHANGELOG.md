@@ -7,6 +7,38 @@
 
 ## [Unreleased]
 
+## [0.1.69] - 2026-11-12
+
+> 工业化重构 P0-4 + P1：**运行时行为零变化**，只补测试地基与去掉一处坏味道。
+
+### Added
+
+- **行为测试层 `tests/`**（45 个用例，`python3 -m unittest discover -s tests -t .`）：
+  断言的是**生成产物的内容**和 **CLI 的输出**，不再对源码做字符串包含断言。
+  覆盖：`25-ppp0.network` 的 `KeepConfiguration`/默认路由、`dnsmasq` 的
+  `bind-dynamic`、`nft` 的 `dns_bypass` 与 `wan_in`、端口角色到 `30-*.network`
+  的映射、manifest 契约（相对路径 / 无穿越 / 每个文件有 mode 与内容），
+  以及 validate 的跨段组合与各字段拒绝码。
+  设计约束：**不需要 root、不读写 `/etc`、不依赖真机**。
+- CI 拆成两段：`fast-tests`（秒级，无 root）先跑，`real-path-smoke`
+  通过 `needs: fast-tests` 依赖它 —— 快测挂了不再浪费 25 分钟的集成跑。
+
+### Changed
+
+- `dert-priv` 解析升级清单不再用 `eval`：改为 python 输出两行、bash 用
+  `read` 读取。原写法虽有 `shlex.quote` 保护，但「执行动态生成的代码」本身
+  是坏味道，将来谁改了引号处理就变成命令执行。改后全程不经 shell 求值。
+  行为等价（URL 与 sha256 不可能含换行，去掉 `\r\n` 是安全的），
+  已用 7 种边界输入验证（正常 / 缺字段 / 非法 JSON / 类型异常 / 注入载荷）。
+
+### Notes
+
+- 守卫新增 P3-23（行为测试层存在、不得依赖 root、CI 必须 fast 门控）
+  与 P3-24（`dert-priv` 不得再用 `eval`）。后者**只检查非注释行**——
+  源码文本断言被自己的说明文字绊倒已经踩过三次，这次一并修掉判定方式。
+- 本轮不改任何生成配置、不改任何服务单元、不动 sing-box/Tailscale/podman
+  的调用逻辑。
+
 ## [0.1.68] - 2026-11-12
 
 ### Fixed

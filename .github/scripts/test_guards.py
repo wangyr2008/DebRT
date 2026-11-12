@@ -659,7 +659,41 @@ assert '"bind-dynamic"' in _ng, \
 assert '\n             "bind-interfaces"' not in _ng and "\"bind-interfaces\"," not in _ng, \
     "P3-21 回归：netgen.py 仍在生成 bind-interfaces"
 
+# ---- P3-23：行为测试层 + CI 分层（v0.1.69）----
+# 这套断言守的是"测试架构"本身：行为测试必须存在、不得依赖 root、
+# CI 必须先用秒级的 fast 阶段 gate 住重活。
+for _rel in ("tests/support.py", "tests/test_netgen_artifacts.py", "tests/test_validate_rules.py"):
+    assert os.path.isfile(os.path.join(ROOT, _rel)), \
+        f"P3-23 回归：行为测试缺失 {_rel}"
+
+_sup = open(os.path.join(ROOT, "tests", "support.py"), encoding="utf-8").read()
+# 行为测试必须能在无 root 环境跑：不能出现 sudo / 直接写 /etc
+assert "sudo" not in _sup, "P3-23 回归：tests/support.py 依赖 sudo（fast 阶段跑不了）"
+assert '"/etc/dert' not in _sup.replace('DERT_VALIDATE_CONFIG', ''), \
+    "P3-23 回归：tests/support.py 硬编码了 /etc 路径（测试会碰真机配置）"
+
+# 产物式断言优先：新测试文件里不应再出现"对源码做字符串包含"的写法
+for _t in ("tests/test_netgen_artifacts.py", "tests/test_validate_rules.py"):
+    _src = open(os.path.join(ROOT, _t), encoding="utf-8").read()
+    assert "open(os.path.join(ROOT, \"priv\"" not in _src, \
+        f"P3-23 回归：{_t} 在直接读源码做字符串断言（应断言产物/输出）"
+
+_smoke = open(os.path.join(ROOT, ".github", "workflows", "smoke.yml"), encoding="utf-8").read()
+assert "fast-tests:" in _smoke, "P3-23 回归：CI 缺 fast-tests 阶段"
+assert "python3 -m unittest discover -s tests -t ." in _smoke, \
+    "P3-23 回归：CI 的 fast 阶段没跑行为测试"
+assert "needs: fast-tests" in _smoke, \
+    "P3-23 回归：重活阶段没有依赖 fast-tests（快测挂了仍会浪费 25 分钟集成跑）"
+
+# ---- P3-24：升级清单解析不得再用 eval ----
+# 只看非注释行：注释里解释"以前用 eval"是合理的，断言源码文本时
+# 必须排除注释，否则清理代码时会被自己的说明文字绊倒（已踩过三次）。
+_priv_src_all = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+_priv_code = [l for l in _priv_src_all.split("\n") if not l.strip().startswith("#")]
+assert not any("eval " in l for l in _priv_code), \
+    "P3-24 回归：dert-priv 又在用 eval 执行动态生成的代码（改用 read 读值）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
-      "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/观察②③ 全部通过")
+      "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/观察②③ 全部通过")
