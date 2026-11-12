@@ -98,31 +98,37 @@ PYX
     return 0
 }
 
-# 清理已从配置中移除的网口对应的 networkd 文件（apply 只写不删的遗留）
-cleanup_stale_port_networks() {
-  python3 - <<'PYEOF' | while read -r f; do [ -n "$f" ] && rm -f "$f"; done
-import json, glob, os
-try:
-    cfg = json.load(open("/etc/dert/config.json"))
-    names = {p["name"] for p in cfg.get("ports", [])}
-    _v6 = cfg.get("ipv6", {})
-    need_ppp = (cfg.get("wan", {}).get("mode") == "pppoe"
-                and _v6.get("enabled") and _v6.get("mode") in ("native", "nat6"))
-except Exception:
-    raise SystemExit
-for f in glob.glob("/etc/systemd/network/30-*.network"):
-    base = os.path.basename(f)[3:-len(".network")]
-    if base not in names:
-        print(f)
-if not need_ppp and os.path.exists("/etc/systemd/network/25-ppp0.network"):
-    print("/etc/systemd/network/25-ppp0.network")
-# B-1：非 PPPoE 模式清理拨号残留（peers 里有旧凭据，是热插拔误拨号的放大器；
-# secrets 里的宽带密码保留——切回 PPPoE 不应要求重输密码）
-if cfg.get("wan", {}).get("mode") != "pppoe":
-    for f in ("/etc/ppp/peers/dert", "/etc/ppp/chap-secrets", "/etc/ppp/pap-secrets"):
-        if os.path.exists(f):
-            print(f)
-PYEOF
+# 清理本次不再生成的陈旧文件（v0.1.71）。
+#
+# 为什么改成「按 manifest 对账」而不是「按配置重算」：
+#   旧实现判断「30-<口>.network 的口名不在 ports 里 → 删」。但 gen_port_networks
+#   对 **WAN 口不生成** 30-*.network，所以端口从 LAN 改成 WAN 时，口名仍在 ports
+#   里 → 旧文件不删 → 它内容还是 `Bridge=br-lan` → **WAN 口被塞进 LAN 桥**。
+#   真机 2026-11-12 就踩到过（30-enp4s0.network 与 10-wan.network 并存，靠
+#   `10-` 字典序先匹配才没出事）。
+#
+#   按配置重算的另一个问题是把生成器的判断逻辑抄了一遍，两边迟早会漂移。
+#   改成拿「本次要部署的 manifest」当唯一事实来源：清单里没有的生成物就是陈旧的。
+#
+# 安全边界（三道）：
+#   1. 只在白名单目录 + 白名单文件名模式里找，绝不遍历整个 /etc；
+#   2. 只删首两行带「由 DebRT 生成」标记的文件 —— 用户手写的同名文件不动；
+#   3. 清单读不出来就什么都不删（宁可留垃圾，不可误删）。
+# 每条删除都写 journald，事后可倒查。
+cleanup_stale_generated() {
+  local man="${1:-}" stale f
+  [ -n "$man" ] && [ -f "$man" ] || return 0
+  if [ ! -f "${DERT_ROOT}/cleanup.py" ]; then
+    # 静默跳过会让"清理悄悄失效"长期无人发现，所以留一条日志
+    logger -t dert-apply "清理脚本缺失，跳过陈旧文件清理：${DERT_ROOT}/cleanup.py"
+    return 0
+  fi
+  stale="$(python3 "${DERT_ROOT}/cleanup.py" "$man" --apply 2>/dev/null || true)"
+  [ -n "$stale" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    logger -t dert-apply "已清理陈旧的生成文件：$f"
+  done <<< "$stale"
 }
 
 # ---------------- 配置读写 ----------------

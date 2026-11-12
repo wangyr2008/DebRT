@@ -724,8 +724,37 @@ assert "shellcheck" in _smoke, \
 assert "xargs -0 shellcheck" in _smoke, \
     "P3-27 回归：shellcheck 步骤没有自动收集脚本（新增脚本会漏检）"
 
+# ---- P3-28：陈旧生成物必须按 manifest 回收（v0.1.71）----
+# 旧实现按配置重算「30-<口>.network 的口名是否还在 ports 里」，但生成器对
+# WAN 口不产出该文件 → 端口从 LAN 改成 WAN 时旧文件不删 → WAN 口被塞进 LAN 桥。
+# 真机 2026-11-12 踩到过。现在改成按 manifest 对账。
+_lib_src = open(os.path.join(ROOT, "priv", "lib.sh"), encoding="utf-8").read()
+assert "cleanup_stale_port_networks" not in _lib_src, \
+    "P3-28 回归：又出现了按配置重算的清理函数（会漏掉 LAN→WAN 的端口角色变更）"
+assert "cleanup_stale_generated" in _lib_src, \
+    "P3-28 回归：陈旧生成物清理不见了（旧 30-*.network 会永久残留）"
+assert 'cleanup.py" "$man" --apply' in _lib_src, \
+    "P3-28 回归：清理没有调用 cleanup.py --apply"
+
+_cl_dp = [l for l in open(os.path.join(ROOT, "priv", "dert-priv"),
+                          encoding="utf-8").read().split("\n")
+          if not l.strip().startswith("#")]
+assert sum(1 for l in _cl_dp if "cleanup_stale_generated" in l) == 3, \
+    "P3-28 回归：清理调用点不是 3 处（config-set 正常路径 / 回滚路径 / apply-all）"
+
+assert os.path.isfile(os.path.join(ROOT, "priv", "cleanup.py")), \
+    "P3-28 回归：priv/cleanup.py 缺失"
+_cl_src = open(os.path.join(ROOT, "priv", "cleanup.py"), encoding="utf-8").read()
+# 安全边界：清单不可用时必须一个都不删（错误 JSON 也满足 json.load）
+assert "not isinstance(files, list) or not files" in _cl_src, \
+    "P3-28 回归：cleanup.py 不再校验 files 非空（错误清单会把所有生成物删光）"
+assert "由 DebRT 生成" in _cl_src, \
+    "P3-28 回归：cleanup.py 不再检查生成标记（会误删用户手写文件）"
+assert "由 DebRT 生成" in _cl_src and "PATTERNS" in _cl_src, \
+    "P3-28 回归：cleanup.py 缺白名单模式"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
-      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/观察②③ 全部通过")
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/观察②③ 全部通过")

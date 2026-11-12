@@ -252,7 +252,7 @@ PYEOF
   # 5) 部署生成文件 + 重启受影响服务
   rm -f "$in_json" "$new_cfg" "$new_sec" "$norm_file"
   apply_stage_files "$stage" "$man_json"
-  cleanup_stale_port_networks
+  cleanup_stale_generated "$man_json"
   rm -rf "$stage"
   acts="$(plan_for_section "$section")"
   # 仅在模式/账号变化或网口重绑定时才重拨 PPPoE（避免改个 DNS 就断线重连）
@@ -305,7 +305,7 @@ PYEOF
     man2="$stage2/manifest.json"
     if python3 "${PRIV_DIR}/netgen.py" --stage "$stage2" > "$man2" 2>/dev/null; then
       apply_stage_files "$stage2" "$man2"
-      cleanup_stale_port_networks
+      cleanup_stale_generated "$man2"
       run_actions "$(plan_for_section "$section")" >/dev/null 2>&1 || true
     fi
     rm -rf "$stage2"
@@ -428,7 +428,7 @@ PYEOF
       die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
   fi
   apply_stage_files "$stage" "$man_json"
-  cleanup_stale_port_networks
+  cleanup_stale_generated "$man_json"
   cleanup_ifupdown_for_ports
   rm -rf "$stage"
   run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true

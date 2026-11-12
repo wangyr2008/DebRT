@@ -185,6 +185,14 @@ def load_validate():
     return validate
 
 
+def load_cleanup():
+    """陈旧生成物清理逻辑（priv/cleanup.py），支持 --root 注入以便纯内存测试。"""
+    if PRIV not in sys.path:
+        sys.path.insert(0, PRIV)
+    import cleanup  # noqa: E402
+    return cleanup
+
+
 def cross_error(section, result, cur):
     """调用 cross_validate，返回被拒时的错误码；通过则返回 None。"""
     v = load_validate()
