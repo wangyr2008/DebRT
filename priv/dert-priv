@@ -30,69 +30,8 @@ CMD="${1:-}"; [ $# -gt 0 ] && shift
 # 认证
 # ---------------------------------------------------------------------------
 do_auth_verify() {
-  local pw lock_state out
-  pw="$(head -c 4096)"   # stdin 只读一次
-  [ -n "$pw" ] || die "AUTH_EMPTY" "请输入管理密码"
-  # 暴力破解兜底限速：按来源 IP 的限速在面板层做；本层是全局兜底（20 次失败锁 300 秒），
-  # 阈值放宽以免全局单计数器被用来把管理员锁在门外（审计 B-18）。
-  lock_state='{"fails":0,"lock_until":0}'
-  [ -f "${DERT_VAR}/auth-state.json" ] && lock_state="$(cat "${DERT_VAR}/auth-state.json" 2>/dev/null || echo "$lock_state")"
-  # 密码经环境变量传入（/proc/<pid>/environ 为 0400 root，ps 不可见），不走 argv（审计 B-15）
-  out="$(DERT_SECRET="$pw" python3 - "$lock_state" <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json, os, sys, time
-sys.path.insert(0, "/usr/local/lib/dert")
-import pwhash
-try:
-    state = json.loads(sys.argv[1])
-except Exception:
-    state = {"fails": 0, "lock_until": 0}  # P3-1：状态损坏兜底——限速计数可丢，登录不能丢
-pw = os.environ.get("DERT_SECRET", "")
-now = int(time.time())
-if state.get("lock_until", 0) > now:
-    print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
-                      "message": f"尝试次数过多，请 {state['lock_until'] - now + 1} 秒后重试",
-                      "hint": "密码不会因此失效；稍等即可再次尝试"}))
-    sys.exit(0)
-elif state.get("lock_until", 0):
-    state["fails"] = 0        # P2-5：锁已过期即归零——否则 fails 跨天累积，演变成"错一次立刻锁 5 分钟"
-    state["lock_until"] = 0   # 过期时间戳一并清零（复审顺手项）
-try:
-    rec = json.load(open(E + "/secrets.json"))["admin_pbkdf2"]
-    ok = pwhash.verify(pw, rec)
-except ValueError:
-    # 记录格式坏：与"密码不正确"区分开，CI/排查一眼定位（六审建议）
-    print(json.dumps({"ok": False, "code": "AUTH_RECORD_BAD",
-                      "message": "密码记录无法解析（secrets.json 可能损坏或来自旧版本）",
-                      "hint": "在系统上执行：rm /etc/dert/secrets.json && sudo bash install.sh 重新生成密码"}))
-    sys.exit(1)
-except Exception:
-    ok = False
-if ok:
-    state = {"fails": 0, "lock_until": 0}
-    # 成功也必须输出 JSON：bash 包装层靠 stdout 判定，空输出会被当作失败（六审复现 A 揭出）
-    print(json.dumps({"ok": True}))
-else:
-    state["fails"] = int(state.get("fails", 0)) + 1
-    if state["fails"] >= 20:
-        state["lock_until"] = now + 300
-        print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
-                          "message": "连续多次密码错误，已临时锁定 5 分钟",
-                          "hint": "若忘记密码：长按机身 Reset 键 8 秒恢复出厂，或在控制台执行 dert-priv factory-reset"}))
-    else:
-        print(json.dumps({"ok": False, "code": "AUTH_BAD",
-                          "message": "管理密码不正确", "hint": "请检查密码后重试"}))
-# P3-1：全项目 /etc 写入都是 tmp+os.replace，唯独这里曾直写——断电写一半会
-# 打碎 auth-state.json，下次 json.loads 抛异常 → 无输出 → 登录不可用（须 root 手删）
-state_path = V + "/auth-state.json"
-with open(state_path + ".tmp", "w") as f:
-    json.dump(state, f)
-os.replace(state_path + ".tmp", state_path)
-sys.exit(0 if ok else 1)
-PYEOF
-)"
-  printf '%s\n' "$out"
-  case "$out" in *'"ok": true'*) exit 0 ;; *) exit 1 ;; esac
+  # v0.1.83：实现搬到 priv/authops.py（密码仍只经 stdin，不进 argv）
+  exec python3 "${PRIV_DIR}/authops.py" verify
 }
 
 do_session_secret() {
@@ -747,72 +686,8 @@ SBDASH
 do_passwd_set() {
   require_root
   acquire_lock
-  local body
-  body="$(cat)"
-  local out rc
-  # body（含新旧密码）经环境变量传入，不进 argv（审计 B-15）
-  out="$(DERT_SECRET="$body" python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json, os, sys, time
-sys.path.insert(0, "/usr/local/lib/dert")
-import pwhash
-body = json.loads(os.environ["DERT_SECRET"])
-old, new = body.get("old", ""), body.get("new", "")
-secrets = json.load(open(E + "/secrets.json"))
-# C-2：原密码暴破限速（持有会话的攻击者此前可无限尝试）——5 次锁 5 分钟
-FAILS = V + "/passwd-fails.json"
-def pf_load():
-    try:
-        return json.load(open(FAILS))
-    except Exception:
-        return {"fails": 0, "lock_until": 0}
-def pf_save(st):
-    tmp = FAILS + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(st, f)
-    os.replace(tmp, FAILS)
-now = int(time.time())
-_st = pf_load()
-if _st.get("lock_until", 0) > now:
-    print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
-                      "message": f"尝试次数过多，请 {_st['lock_until'] - now + 1} 秒后重试",
-                      "hint": "密码不会因此失效"})); sys.exit(1)
-def check(pw, rec):
-    try:
-        return pwhash.verify(pw, rec)
-    except Exception:
-        return False
-if not check(old, secrets.get("admin_pbkdf2", "")):
-    _st["fails"] = _st.get("fails", 0) + 1
-    if _st["fails"] >= 5:
-        _st["lock_until"] = now + 300
-        _st["fails"] = 0
-        pf_save(_st)
-        print(json.dumps({"ok": False, "code": "AUTH_LOCKED",
-                          "message": "原密码连续错误次数过多，已临时锁定 5 分钟",
-                          "hint": "密码不会因此失效"})); sys.exit(1)
-    pf_save(_st)
-    print(json.dumps({"ok": False, "code": "AUTH_BAD", "message": "原密码不正确", "hint": "请输入当前使用的管理密码"})); sys.exit(1)
-# C-2 收尾：原密码验证通过即清零暴破计数——否则陈旧计数无限期累积，
-# 零散输错累计 5 次（哪怕中间成功改过密）也会误触锁（与 auth-verify 成功路径同语义）
-pf_save({"fails": 0, "lock_until": 0})
-if not (8 <= len(new) <= 32):
-    print(json.dumps({"ok": False, "code": "PW_LEN", "message": "新密码需为 8–32 位"})); sys.exit(1)
-secrets["admin_pbkdf2"] = pwhash.hash_new(new)
-# 轮换会话密钥：改密后所有旧会话（含可能被盗的 cookie）立即失效（审计 B-17）
-secrets["session_secret"] = os.urandom(32).hex()
-tmp = E + "/.secrets.tmp"
-with open(tmp, "w") as f:
-    json.dump(secrets, f, ensure_ascii=False, indent=1)
-    f.flush(); os.fsync(f.fileno())
-os.chmod(tmp, 0o600)
-os.replace(tmp, E + "/secrets.json")
-print(json.dumps({"ok": True, "message": "管理密码已更新"}))
-PYEOF
-)"
-  rc=$?
-  printf '%s\n' "$out"
-  exit $rc
+  # v0.1.83：实现搬到 priv/authops.py（body 仍只经 stdin）
+  exec python3 "${PRIV_DIR}/authops.py" passwd-set
 }
 
 # ---------------------------------------------------------------------------
