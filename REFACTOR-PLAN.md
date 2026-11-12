@@ -15,7 +15,7 @@
 | P0-2 配置删除回收 | ✅ 完成（改为按 manifest 对账） | v0.1.71 |
 | P0-3 补 `set -u` | ✅ 完成（20/20 脚本） | v0.1.73 |
 | P1-2 守卫分层 | ✅ 四阶段完成（含 dert-priv 测试缝） | v0.1.75~79 |
-| P2 结构分层 | 🔄 首个域完成（status/selftest，dert-priv 1822→1567 行） | v0.1.80 |
+| P2 结构分层 | 🔄 四域完成（status/selftest、container、auth、backup 校验） | v0.1.80~84 |
 | P3 供应链签名 | ✅ 代码完成（待配 Secret） | v0.1.74 |
 | P4 可观测 | 🔄 health 完成；单元硬化待做 | v0.1.81 |
 
@@ -181,9 +181,14 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 
 ### P2 — 结构分层（进行中）
 
-**已完成（v0.1.80）**：`status` / `selftest` 抽成 `priv/status.py`（238 行）与
-`priv/selftest.py`（33 行）——这两段本来就是纯 Python，是**字面搬迁**，
-与抽取前逐字节比对一致。`dert-priv` 从 1822 行降到 1567 行。
+**已完成**（`dert-priv` 1822 → 1284 行）：
+
+| 版本 | 抽出 | 方式 | 验证 |
+|---|---|---|---|
+| v0.1.80 | `status.py` / `selftest.py`（271 行） | 字面搬迁 | 与抽取前逐字节一致 |
+| v0.1.82 | `container.py`（335 行）+ `privlib.py` | 改写 | 4 个子命令逐字节一致 |
+| v0.1.83 | `authops.py`（190 行） | 字面搬迁 | 语义 + 副作用一致 |
+| v0.1.84 | `backupcheck.py`（60 行） | 抽取 | 11 个用例含两种绕过 |
 
 **剩余域**（都是**重写**而非搬迁，每个需要单独一版 + 双跑验证）：
 | 域 | 行数 | 形态 | 风险 |
