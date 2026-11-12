@@ -20,7 +20,11 @@
 #     写 ["00:00:00:00:00:00"] 这种哨兵 = 所有真实设备都落在「非白名单」= 全部直连。
 set -u
 
-CONF=/etc/sing-box/config.json
+# 测试缝（v0.1.75）：DERT_FSROOT 未设时是空串，${FSROOT}/etc/... 与原绝对路径
+# 完全等价，生产行为一字不变；设了就指向临时根，能在无 root 环境跑完整逻辑。
+# 这是 P1-2 的前提——把"源码里有没有某个字符串"换成"实际生成了什么规则"。
+FSROOT="${DERT_FSROOT:-}"
+CONF="${FSROOT}/etc/sing-box/config.json"
 [ -f "$CONF" ] || exit 0
 
 # 只在 sing-box 真的活着时建表——否则表指向没人监听的地址，全网断 DNS。
@@ -128,10 +132,10 @@ if s:
         pass
 ' 2>/dev/null)
     if [ -n "$PREFIX6" ]; then
-        mkdir -p /run/dert 2>/dev/null
+        mkdir -p "${FSROOT}/run/dert" 2>/dev/null
         # 原子写：钩子可能并发读，不能让它读到半个前缀
-        if printf '%s\n' "$PREFIX6" > /run/dert/lan-prefix.tmp 2>/dev/null; then
-            mv -f /run/dert/lan-prefix.tmp /run/dert/lan-prefix 2>/dev/null
+        if printf '%s\n' "$PREFIX6" > "${FSROOT}/run/dert/lan-prefix.tmp" 2>/dev/null; then
+            mv -f "${FSROOT}/run/dert/lan-prefix.tmp" "${FSROOT}/run/dert/lan-prefix" 2>/dev/null
         fi
     fi
 fi

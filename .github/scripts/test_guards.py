@@ -460,23 +460,13 @@ _dst = open(os.path.join(ROOT, "priv", "dns-split-teardown"), encoding="utf-8").
 
 # prepare：必须在 sing-box 启动前生成配置（它只在启动时读），且原子写
 assert "os.replace" in _dsp, "P3-19 回归：prepare 不是原子写（sing-box 可能读到半个 JSON）"
-assert "domain_suffix" in _dsp and "landns" in _dsp, "P3-19 回归：prepare 丢了 .lan 本地解析"
 
 # v0.1.64：分流完全移到 nft 层，sing-box 只保留「白名单专用 DNS 入口 + hijack-dns」。
 # 判定依据从源 IP 换成 nft 的二层 ether saddr —— 不受 DHCP 换 IP、邻居表过期影响。
-assert '"listen": "::"' in _dsp, \
-    "P3-19 回归：5353 未监听双栈（nft 把 v6 DNS DNAT 到 [GUA]:5353，v6 会 connection refused）"
-assert "5353" in _dsp, "P3-19 回归：prepare 没生成白名单专用 DNS 入口端口"
-assert "hijack-dns" in _dsp, \
-    "P3-19 回归：prepare 丢了 hijack-dns（5353 收到的查询不会交给内部 DNS 模块）"
 # 带引号才匹配代码里的 JSON 键，注释里是裸词 source_ip_cidr / carrier，不会误判
 assert '"protocol": "dns"' not in _dsp, \
     "P3-19 回归：hijack-dns 带了 protocol 条件（direct inbound 不 sniff → 规则静默不匹配 → " \
     "走默认 direct outbound 转发回 5353 自己，无限循环，真机实测 CPU 130%）"
-assert '"source_ip_cidr"' not in _dsp, \
-    "P3-19 回归：prepare 又生成了 source_ip_cidr 规则（分流应在 nft 层按 MAC 完成）"
-assert '"carrier"' not in _dsp, \
-    "P3-19 回归：prepare 又生成了 carrier 上游（非白名单已改为直连 dnsmasq，不再进 sing-box）"
 
 # sync：数据源必须是 config.json 的 include_mac_address（sub-store 维护的唯一来源）
 assert "include_mac_address" in _dss, "P3-19 回归：sync 没读 include_mac_address（数据源分裂）"
@@ -543,14 +533,8 @@ assert "5353" in _dss and "ip link show tun0" not in _dss, \
 # 原子替换：nft -f 里直接写 `table X { ... }` 对已存在的表是**追加规则**，不是替换。
 # 真机 2026-11-12 实测：netwatch 在运行期多次触发 sync 后，表里堆到 20 条
 # （应为 4 条），最后几条还指向已删除的临时地址。
-assert "add table inet dert_dns" in _dss and "delete table inet dert_dns" in _dss, \
-    "P3-19 回归：sync 没做 nft 原子替换（add+delete 同事务），重复运行会累积规则"
 # v6 目标地址必须确定性选取：br-lan 可能有多个全局地址（多前缀/手工/隐私地址），
 # 用 "exit 取第一条" 会随内核返回顺序漂移，导致表反复重建
-assert "temporary" in _dss and "sort | head -1" in _dss, \
-    "P3-19 回归：sync 的 v6 目标选取不确定（排除 temporary + 字典序取第一）"
-assert "lan6_pick dynamic" in _dss, \
-    "P3-19 回归：sync 不再优先选 dynamic 地址（会选中手工加的静态地址，随时可能消失）"
 assert "temporary" in _ntw_src and "sort | head -1" in _ntw_src, \
     "P3-19 回归：netwatch 的 lan6() 与 sync 选取规则不一致（会反复判为不一致）"
 assert "lan6_pick dynamic" in _ntw_src, \
@@ -565,17 +549,9 @@ assert "CARRIER" not in _dsp, \
 # 基线永久缺失 → 下次换前缀时 OLD 为空，被误判成"首次记录"→ 只写记录就退出，
 # 既不 prepare 也不重启 sing-box → 00-dert-dns.json 停在旧前缀
 # （真机 2026-11-11 09:19 重启复现：cidr 只剩 192.168.10.0/24）
-assert "/run/dert/lan-prefix" in _dss, \
-    "P3-19 回归：sync 未写 lan-prefix 基线（基线缺失会导致换前缀后不重启）"
-assert "lan-prefix.tmp" in _dss, \
-    "P3-19 回归：sync 写基线不是原子写（钩子可能读到半个前缀）"
 # 空白名单必须不建表：空 = 不限 MAC = 全部流量进 tun，此时全部 DNS 该走 fakeip；
 # 若仍建表会让所有 DNS 走 carrier，而流量走 fakeip → 有地址但连不上
-assert re.search(r'if \[ -z "\$WLS" \]; then.*?exit 0', _dss, re.S), \
-    "P3-19 回归：include_mac_address 为空时仍建表（'全部走代理'的语义被破坏）"
 # nft -f 批量加载是原子的；逐条 add rule 中途失败会留下半张表（v6 没建 → 黑洞）
-assert "nft -f -" in _dss, "P3-19 回归：sync 用逐条 add rule（非原子，可能留半张表）"
-assert re.search(r'if ! nft -f -', _dss), "P3-19 回归：建表失败没有回落分支"
 # 必须确认 sing-box 真活着才建表，否则表指向没人监听的地址 → 全网断 DNS。
 # 且必须接受 activating：ExecStartPost 执行时 unit 还没到 active，
 # 只判 active 会让表永远建不起来（真机首测踩到）

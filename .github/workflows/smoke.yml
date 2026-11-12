@@ -25,6 +25,11 @@ jobs:
         run: python3 -m unittest discover -s tests -t . -v
       - name: 审计守卫（架构约束：通道同步、跨段组合等）
         run: python3 .github/scripts/test_guards.py
+      # 棘轮：字符串断言数量只能降不能升。守卫里 `assert "文本" in 源码` 这类断言
+      # 断言的是代码长相而非行为，重构时容易误报（本项目已踩过 4 次）。
+      # 新断言优先写成"跑一遍、断言产物"的行为测试。
+      - name: 守卫断言棘轮（字符串断言不得回升）
+        run: python3 .github/scripts/check_assert_ratio.py --check
       - name: 内嵌 Python 编译检查
         run: python3 .github/scripts/check_inline_py.py
       # shellcheck：1,744 行 bash 是全项目最大风险面（历史 bug 注释多出自这里），

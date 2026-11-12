@@ -21,8 +21,10 @@
 # 写文件用 tmp + rename，避免 sing-box 读到半个 JSON。
 set -u
 
-CONF=/etc/sing-box/config.json
-DNSJSON=/etc/sing-box/00-dert-dns.json
+# 测试缝（v0.1.75）：同 dns-split-sync，未设 DERT_FSROOT 时行为完全不变
+FSROOT="${DERT_FSROOT:-}"
+CONF="${FSROOT}/etc/sing-box/config.json"
+DNSJSON="${FSROOT}/etc/sing-box/00-dert-dns.json"
 [ -f "$CONF" ] || exit 0
 
 # br-lan 的 v4 地址（dnsmasq 的监听地址，也是客户端 DNS 指向）
