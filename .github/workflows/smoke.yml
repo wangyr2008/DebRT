@@ -27,6 +27,16 @@ jobs:
         run: python3 .github/scripts/test_guards.py
       - name: 内嵌 Python 编译检查
         run: python3 .github/scripts/check_inline_py.py
+      # shellcheck：1,744 行 bash 是全项目最大风险面（历史 bug 注释多出自这里），
+      # 但此前 CI 只有 `bash -n` 语法检查。基线已清零，所以按 warning 级门控。
+      # SC2034（未使用变量）暂时排除——那 12 处是历史遗留的常量声明，
+      # 逐条确认是否有间接引用后单独清理，不在本轮动。
+      - name: Shell 静态分析（shellcheck）
+        run: |
+          shellcheck --version
+          grep -rlZ -E '^#!.*(bash|sh)$' install.sh uninstall.sh priv network \
+            | xargs -0 shellcheck --severity=warning --exclude=SC2034 \
+                --format=gcc
 
   real-path-smoke:
     needs: fast-tests

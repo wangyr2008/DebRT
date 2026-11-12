@@ -693,7 +693,39 @@ _priv_code = [l for l in _priv_src_all.split("\n") if not l.strip().startswith("
 assert not any("eval " in l for l in _priv_code), \
     "P3-24 回归：dert-priv 又在用 eval 执行动态生成的代码（改用 read 读值）"
 
+# ---- P3-25：收敛侧字段级安全断言（v0.1.70）----
+# validate.py 只在「面板写入」路径生效；备份恢复/回滚/升级后收敛直接读
+# config.json，绕过它。而这些字段会被原样拼进 dnsmasq/nft/network 文件，
+# 一个换行即可注入指令（dnsmasq 的 dhcp-script= 以 root 执行）。
+# 断言落在 schema_check 里，因为它在 --schema/--check/--stage 全路径都会跑。
+_ng_code = [l for l in open(os.path.join(ROOT, "priv", "netgen.py"),
+                            encoding="utf-8").read().split("\n")
+            if not l.strip().startswith("#")]
+_ng_join = "\n".join(_ng_code)
+assert "def scan(" in _ng_join and "ctrl.search" in _ng_join, \
+    "P3-25 回归：schema_check 不再扫描控制字符（备份包可注入 dnsmasq/nft 指令）"
+assert "scan(cfg, \"\")" in _ng_join, \
+    "P3-25 回归：schema_check 没有对整份配置调用 scan()"
+assert "dhcp-host" in _ng_join, \
+    "P3-25 回归：静态绑定的生成逻辑不见了（守卫需同步更新）"
+
+# ---- P3-26：升级下载加固（v0.1.70）----
+# 1) 清单里的 url 只接受 https：curl 会照做 file:// 等协议
+# 2) 单文件大小上限：恶意/错误源不能把磁盘写满
+assert "--max-filesize" in _priv_src_all, \
+    "P3-26 回归：升级下载又没限制文件大小（恶意源可写满磁盘）"
+assert "升级源地址必须以 https:// 开头" in _priv_src_all, \
+    "P3-26 回归：清单 url 未强制 https（file:// 会被 curl 照做）"
+
+# ---- P3-27：CI 必须有 shell 静态分析（v0.1.70）----
+# 1,744 行 bash 是最大风险面，此前只有 `bash -n` 语法检查。
+assert "shellcheck" in _smoke, \
+    "P3-27 回归：CI 又丢了 shellcheck（bash 静态分析是本项目性价比最高的单项投入）"
+assert "xargs -0 shellcheck" in _smoke, \
+    "P3-27 回归：shellcheck 步骤没有自动收集脚本（新增脚本会漏检）"
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
-      "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/观察②③ 全部通过")
+      "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/观察②③ 全部通过")

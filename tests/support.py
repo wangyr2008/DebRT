@@ -130,6 +130,38 @@ def run_netgen_full(cfg, secrets=None):
         return json.loads(buf.getvalue())
 
 
+def run_netgen_expect_fail(cfg, secrets=None):
+    """跑 netgen main()，返回它拒绝配置时的 {code, message, hint}。
+
+    netgen 的 fail() 是「打印 JSON 到 stdout + sys.exit(1)」，所以这里捕获
+    SystemExit 再解析 stdout。用于断言收敛侧的字段级安全校验。
+    """
+    netgen = load_netgen()
+    with tempfile.TemporaryDirectory() as td:
+        cpath = os.path.join(td, "config.json")
+        spath = os.path.join(td, "secrets.json")
+        stage = os.path.join(td, "stage")
+        os.makedirs(stage)
+        with open(cpath, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        with open(spath, "w", encoding="utf-8") as f:
+            json.dump(secrets or {}, f)
+
+        old_c, old_s, old_argv = netgen.CONFIG_PATH, netgen.SECRETS_PATH, sys.argv
+        netgen.CONFIG_PATH, netgen.SECRETS_PATH = cpath, spath
+        sys.argv = ["netgen.py", "--stage", stage]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                netgen.main()
+        except SystemExit:
+            pass
+        finally:
+            netgen.CONFIG_PATH, netgen.SECRETS_PATH = old_c, old_s
+            sys.argv = old_argv
+        return json.loads(buf.getvalue())
+
+
 def manifest_text(man):
     """把 manifest 的 content_b64 解成 {相对路径: 文本}。"""
     out = {}

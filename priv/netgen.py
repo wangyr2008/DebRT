@@ -4,7 +4,7 @@
 用法:
   netgen.py --check                 仅校验 /etc/dert/config.json 并输出结果
   netgen.py --stage STAGE_DIR       校验并生成全部原生配置到 STAGE_DIR（保留相对路径）
-输出（stdout）为 JSON：{ok, files:[{path,mode,content_b64}], restart:[...], pppoe:bool, cake:bool, nft:bool, summary}
+输出（stdout）为 JSON：{ok, files:[{path,mode,content_b64}], networkd:bool, pppoe:bool, cake:bool, nft:bool, summary}
 永不写真实路径——写盘由 dert-priv 用原子方式完成。
 """
 import base64
@@ -577,6 +577,56 @@ def schema_check(cfg):
     if cfg.get("qos") is not None and not isinstance(cfg.get("qos"), dict):
         bad("QoS 段格式损坏", "请在「网络设置 → QoS 限速」重新保存")
 
+    # ---- P3-25：字段级安全断言（收敛侧）----
+    # validate.py 的字段校验只在「面板写入」这一条路径生效；备份恢复、回滚、
+    # 升级后收敛都是直接读 config.json，绕过了它——而这些字段会被原样拼进
+    # dnsmasq / nft / network 文件。一个换行就能注入新指令（dnsmasq 的
+    # dhcp-script= 会以 root 执行脚本）。
+    #
+    # 刻意只拦「会导致注入」的字符，不碰语义：存量 /25 掩码之类仍放行，
+    # 否则 backup-restore 会因噎废食拒绝恢复（见 dert-priv 中
+    # do_backup_restore 的注释）。真正的语义校验交给 validate 与 cross_validate。
+    ctrl = re.compile(r"[\x00-\x1f\x7f]")
+
+    def scan(v, path):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                scan(x, f"{path}.{k}" if path else str(k))
+        elif isinstance(v, list):
+            for i, x in enumerate(v):
+                scan(x, f"{path}[{i}]")
+        elif isinstance(v, str) and ctrl.search(v):
+            bad(f"配置字段 {path} 含控制字符（换行/制表符等不可见字符）",
+                "请在面板重新填写该项；若来自备份包，请重新配置后再备份")
+
+    scan(cfg, "")
+
+    # 静态绑定会拼成 dnsmasq 的 dhcp-host={mac},{ip},{name}：
+    # 逗号会错位字段、换行会拆成两条指令，所以字符集必须与 validate 侧一致
+    for i, s in enumerate(cfg.get("static") or []):
+        if not isinstance(s, dict):
+            continue
+        name = s.get("name")
+        if isinstance(name, str) and not re.fullmatch(
+                r"[\w\u4e00-\u9fff\-. ]{1,32}", name, re.UNICODE):
+            bad(f"静态绑定第 {i + 1} 条的设备名 {name!r} 含非法字符",
+                "设备名支持 1–32 位中英文、数字、点、横线、空格；逗号与换行不可用")
+        mac = s.get("mac")
+        if isinstance(mac, str) and not re.fullmatch(
+                r"(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}", mac):
+            bad(f"静态绑定第 {i + 1} 条的 MAC {mac!r} 格式不正确",
+                "格式示例：AA:BB:CC:DD:EE:FF")
+
+    # 转发规则的端口会被直接拼进 nft 表达式
+    for i, r in enumerate(((cfg.get("firewall") or {}).get("portfw") or [])):
+        if not isinstance(r, dict):
+            continue
+        for k in ("wport", "lport"):
+            v = r.get(k)
+            if isinstance(v, str) and not re.fullmatch(r"\d{1,5}(-\d{1,5})?", v):
+                bad(f"转发规则第 {i + 1} 条的 {k} {v!r} 不是合法端口",
+                    "端口支持 1–65535，或 8080-8090 这样的区间")
+
 
 def main():
     global CONFIG_PATH
@@ -637,7 +687,6 @@ def main():
             files.append(("etc/systemd/network/25-ppp0.network", 0o644, gen_ppp_network(cfg)))
 
     # 变更影响面
-    restart = ["dnsmasq"]
     wan_changed_if = cfg["wan"]["mode"] == "pppoe"
     out_files = []
     for rel, fmode, content in files:
@@ -652,7 +701,6 @@ def main():
     print(json.dumps({
         "ok": True,
         "files": out_files,
-        "restart": restart,
         "networkd": True,
         "pppoe": wan_changed_if,
         "cake": bool(cfg.get("qos", {}).get("enabled")),

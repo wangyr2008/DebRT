@@ -186,9 +186,11 @@ class TestFullPipeline(unittest.TestCase):
         ):
             self.assertIn(need, paths)
 
-    def test_restart_hints(self):
-        self.assertIn("dnsmasq", self.man["restart"])
+    def test_change_hints(self):
+        # v0.1.70 删掉了 `restart` 字段：它与 dert-priv 里 plan_for_section 的
+        # 语义重复，且全仓库无消费者（旧断言在这里跟着一起删）
         self.assertTrue(self.man.get("pppoe"), "PPPoE 模式应提示需要重启拨号")
+        self.assertTrue(self.man.get("networkd"), "生成物含 networkd 配置，应提示重载")
 
     def test_no_wan_network_for_pppoe(self):
         # PPPoE 下 10-wan.network 应把物理 WAN 口配成"什么都不做"

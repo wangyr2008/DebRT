@@ -1068,7 +1068,8 @@ do_factory_reset() {
   require_root
   acquire_lock
   snapshot_lastgood "f$(date +%s)"
-  local prebak="${DERT_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
+  local prebak
+  prebak="${DERT_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
   tar -C / -czf "$prebak" --exclude='etc/dert/secrets.json' etc/dert 2>/dev/null || true
   chmod 600 "$prebak" 2>/dev/null || true
   # 发现网口：eth*/en* 排除 ppp/tun/br/veth
@@ -1205,8 +1206,17 @@ def clean(v):
 sys.stdout.write(clean(d.get("url")) + "\n" + clean(d.get("sha256")) + "\n")
 ' 2>/dev/null)
     [ -n "$asset" ] || die "UPG_MANIFEST" "清单缺少 url 字段"
+    # P3-26：清单里的 url 只接受 https://。curl 本身会照做 file:// 等协议，
+    # 被篡改的清单可借此把任意本地文件当成"升级包"喂进后续解压/校验流程。
+    case "$asset" in
+      https://*) ;;
+      *) die "UPG_MANIFEST" "升级源地址必须以 https:// 开头" \
+               "清单里的 url 字段格式不正确（只允许 https）；当前值前 40 字符：${asset:0:40}" ;;
+    esac
+    # P3-26：限制单文件大小，防止恶意/错误源把磁盘写满（256MB 远大于实际包体）
     for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
-      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${asset}" -o "$out" 2>/dev/null && { rc=0; break; }
+      curl -fsSL --connect-timeout 10 --max-time 300 --max-filesize 268435456 \
+        "${prefix}${asset}" -o "$out" 2>/dev/null && { rc=0; break; }
     done
     if [ "$rc" -eq 0 ]; then
       # sha256 强制校验（审计 B-13）：优先用清单内 sha256 字段，否则尝试 url+".sha256"
@@ -1222,7 +1232,8 @@ sys.stdout.write(clean(d.get("url")) + "\n" + clean(d.get("sha256")) + "\n")
   else
     repo="$src"
     for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
-      curl -fsSL --connect-timeout 10 --max-time 300 "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz" -o "$out" 2>/dev/null && { rc=0; break; }
+      curl -fsSL --connect-timeout 10 --max-time 300 --max-filesize 268435456 \
+        "${prefix}${base}/${repo}/releases/download/v${ver}/dert-${ver}.tar.gz" -o "$out" 2>/dev/null && { rc=0; break; }
     done
     if [ "$rc" -eq 0 ]; then
       for prefix in "" "https://gh-proxy.org/" "https://gh-proxy.com/"; do
