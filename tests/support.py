@@ -185,6 +185,14 @@ def load_validate():
     return validate
 
 
+def load_tarcheck():
+    """升级包成员校验（priv/tarcheck.py）。"""
+    if PRIV not in sys.path:
+        sys.path.insert(0, PRIV)
+    import tarcheck  # noqa: E402
+    return tarcheck
+
+
 def load_cleanup():
     """陈旧生成物清理逻辑（priv/cleanup.py），支持 --root 注入以便纯内存测试。"""
     if PRIV not in sys.path:

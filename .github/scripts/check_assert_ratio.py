@@ -23,9 +23,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GUARDS = os.path.join(ROOT, ".github", "scripts", "test_guards.py")
 
-# 当前基线（2026-11-12 / v0.1.75：DNS 分流那批 14 条已行为化，实测 133 条）。
+# 当前基线（2026-11-12 / v0.1.76：132 条。已行为化的两批：DNS 分流 14 条、
+# 升级包白名单 2 条。剩余多为"通道同步"类跨文件约定，属真正该留的架构约束）。
 # 只允许下调。上调必须在这里写明理由。
-STRING_ASSERT_BUDGET = 133
+STRING_ASSERT_BUDGET = 132
 
 
 def count():

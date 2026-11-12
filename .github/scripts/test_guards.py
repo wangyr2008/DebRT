@@ -618,10 +618,11 @@ assert "dns-split-prepare" in _hook3, \
 _rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8").read()
 for _f in ("LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
     assert _f in _rel, f"P3-20 回归：release 打包清单缺 {_f}（源码包不含该文件）"
-assert 'if "/" not in p: continue' in _priv_src, \
-    "P3-20 回归：升级包白名单未放行顶层文件（新增文档会导致升级被拒）"
-assert "ALLOW_FILE" not in _priv_src, \
-    "P3-20 回归：白名单退化为顶层文件允许清单（新增文档即自我阻塞）"
+# 白名单语义（放行顶层文件、拒绝未知目录、拒绝穿越）已迁到行为测试：
+# tests/test_tarcheck.py 用真实恶意 tar 验证。这里只保留"接线"约束——
+# dert-priv 必须以 root 解压前调用该模块，不能又写回内联逻辑。
+assert "tarcheck.py" in _priv_src, \
+    "P3-20 回归：升级包成员校验未走 priv/tarcheck.py（内联逻辑无法行为测试）"
 
 # P3-21：dnsmasq 必须用 bind-dynamic，不能用 bind-interfaces。
 # 开机时序：dnsmasq 先起（br-lan 只有 fe80::），4 秒后 PD 委派的 GUA 才出现。

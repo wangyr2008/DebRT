@@ -1304,27 +1304,24 @@ except Exception:
     fi
     logger -t dert-upgrade "升级包未带签名，仅做 sha256 校验（可通过 upgrade.require_signature 强制要求）：$pkg"
   fi
-  # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越
-  #    判据只针对「危险路径」：绝对路径、含 ..、以及未知目录。
-  #    顶层文件（不含 /）一律放行——它们只能落在包根，无法穿越，也不会被部署到
-  #    系统路径（后续只 cp priv/* 到 LIB_DIR）。这条很重要：若用「允许清单」逐个
-  #    列顶层文件，新版本一旦新增文档（LICENSE/CHANGELOG…）就会被旧版白名单拒掉，
-  #    而执行校验的恰是旧版代码——升级包自我阻塞，无法自愈。
-  if ! tar -tzf "$pkg" 2>/dev/null | python3 -c '
-import sys
-ALLOW_PREFIX = ("panel/", "priv/", "config/", "systemd/", "network/", "singbox/", "sudoers/", ".github/")
-ok = True
-for line in sys.stdin:
-    p = line.rstrip("\n")
-    if not p: continue
-    if p.startswith("/") or ".." in p.split("/"): ok = False; break
-    if p.endswith("/"): continue
-    if "/" not in p: continue          # 顶层文件：落在包根，安全
-    if p.startswith(ALLOW_PREFIX): continue
-    ok = False; break
-sys.exit(0 if ok else 1)
-'; then
-    die "UPG_BAD" "升级包含不认识的条目" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包"
+  # 1) 包结构校验 + 成员白名单（审计 B-12）：以 root 解压前必须防路径穿越。
+  #    v0.1.76 起抽到 priv/tarcheck.py —— 这段逻辑此前只有源码字符串断言，
+  #    而它是"以 root 解压之前"的最后一道防线，字符串断言证明不了真拦得住。
+  #    抽出来后可以用真实恶意成员名做行为测试（tests/test_tarcheck.py）。
+  local tc_out
+  if ! tc_out="$(tar -tzf "$pkg" 2>&1 | python3 "${PRIV_DIR}/tarcheck.py" 2>&1)"; then
+    # 带上具体是哪个条目，比"包含不认识的条目"可诊断得多
+    local tc_reason=""
+    case "$tc_out" in
+      *'"reason"'*) tc_reason="$(printf '%s' "$tc_out" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("reason", ""))
+except Exception:
+    pass
+' 2>/dev/null)" ;;
+    esac
+    die "UPG_BAD" "升级包含不认识的条目" "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包${tc_reason:+。具体：$tc_reason}"
   fi
   tar -tvzf "$pkg" 2>/dev/null | awk '{print substr($1,1,1)}' | grep -qE '^[lh]' \
     && die "UPG_BAD" "升级包含链接条目，已拒绝" "为防路径穿越，升级包只允许普通文件与目录"
