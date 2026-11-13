@@ -43,10 +43,24 @@ fi
 
 ip link show "$WAN_DEV" >/dev/null 2>&1 || exit 0   # ppp0 未拨上时跳过，等钩子再调
 
-tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort 2>/dev/null || true
+# 两个参数：
+#   nat        路由器做 masquerade，cake 必须靠 conntrack 还原出内网主机，
+#              否则整条 LAN 被当成一台机器——单台设备下载就能吃掉全部带宽，
+#              其它设备再公平排队也没用（真机 2026-11-13 实测 tc 显示 nonat）。
+#   overhead 8 PPPoE 每包多 8 字节（6 字节 PPPoE 头 + 2 字节 PPP 协议），
+#              不加上这部分，整形速率会系统性偏高约 0.5%，延迟控制也跟着偏。
+# 两者都是"可选但应该开"的参数：先带 nat 试，失败就退回不带 nat 的写法——
+# 绝不能因为一个可选参数让整条整形没建起来（那等于 QoS 静默失效）。
+if [ "$WAN_DEV" = "ppp0" ]; then OH="overhead 8"; else OH=""; fi
+
+# shellcheck disable=SC2086  # $OH 需要按空格拆成两个词
+tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort nat $OH 2>/dev/null \
+  || tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort $OH 2>/dev/null || true
 # 入向：把 WAN 收到的包镜像到 ifb0，在 ifb0 上做 ingress cake（上方清扫已删，这里重建）
 tc qdisc add dev "$WAN_DEV" handle ffff: ingress 2>/dev/null || true
 tc filter del dev "$WAN_DEV" parent ffff: 2>/dev/null || true
 tc filter add dev "$WAN_DEV" parent ffff: protocol all u32 match u32 0 0 action mirred egress redirect dev ifb0 2>/dev/null || true
-tc qdisc replace dev ifb0 root cake bandwidth "${DOWN}mbit" besteffort ingress 2>/dev/null || true
+# shellcheck disable=SC2086
+tc qdisc replace dev ifb0 root cake bandwidth "${DOWN}mbit" besteffort ingress nat $OH 2>/dev/null \
+  || tc qdisc replace dev ifb0 root cake bandwidth "${DOWN}mbit" besteffort ingress $OH 2>/dev/null || true
 exit 0
