@@ -255,8 +255,20 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 不自己实现密码学；私钥不进 CI（存 Secret `DERT_SIGNING_KEY`）。
 实测四条路径：无签名警告放行 / 有效签名通过 / 篡改拒绝 / 强制验签拒绝。
 
-**仍需人工一步**：把私钥填进仓库 Secret；确认一次带签名的发布成功后再打开
-`upgrade.require_signature`。
+**设备端四条路径已全部真机验收（2026-11-13，v0.1.92）**：
+
+| 场景 | 结果 |
+|---|---|
+| 带有效签名 | 通过，journald 记 `签名校验通过` |
+| 无签名（默认策略） | 放行 + 记 `仅做 sha256 校验` |
+| 包被篡改、签名未换 | 拒绝 `UPG_SIG`，未做任何改动 |
+| `require_signature=true` 且无签名 | 拒绝 `UPG_SIG` |
+
+本地签名与仓库公钥已核对为同一密钥对（`openssl pkey -pubout | sha256` 一致）。
+
+**仍需人工一步**：把私钥填进仓库 Secret `DERT_SIGNING_KEY`（base64 的 PEM），
+让 CI 产出的 Release 自带 `.sig`；确认一次带签名的发布成功后再打开
+`upgrade.require_signature`。在此之前设备端按"警告放行"运行。
 
 ---
 
