@@ -417,7 +417,13 @@ for _mk, _label in (
 # 收敛路径必须保留生成器 stderr（否则只剩"配置生成失败"，hint 里的"上方错误信息"是空的）
 assert "netgen.err" in _priv_src, "P3-12 回归：收敛路径又丢弃了 netgen 的 stderr"
 # 备份恢复必须落盘前做结构预检（只校验 json.load 会把坏配置装进系统）
-assert "--schema --config" in _priv_src, "P3-12 回归：备份恢复缺结构预检"
+# v0.1.86：实现搬到 priv/backupops.py，断言跟着搬家；另加一条顺序断言——
+# 预检必须排在部署之前，否则"拦住了但已经写进去了"同样算失败
+_bk_src = open(os.path.join(ROOT, "priv", "backupops.py"), encoding="utf-8").read()
+assert '"--schema", "--config"' in _bk_src, "P3-12 回归：备份恢复缺结构预检"
+_restore_body = _bk_src.split("def backup_restore", 1)[1].split("\ndef ", 1)[0]
+assert _restore_body.index("_schema_ok") < _restore_body.index("_deploy_tree(stage)"), \
+    "P3-12 回归：备份恢复的结构预检被挪到落盘之后（拦住了也已经写进去了）"
 # P3-12b：两处 preflight 失败分支（config-set / apply-all）都必须把 pf_out
 # （nft -c / dnsmasq --test 的具体报错）透传出去，否则用户只看到"无法生成合法的系统配置"
 _pf = re.findall(r'if ! pf_out="\$\(preflight_stage "\$stage"\)"; then(.*?)\n  fi\n', _priv_src, re.S)

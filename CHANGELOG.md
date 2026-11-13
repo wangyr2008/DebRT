@@ -7,6 +7,43 @@
 
 ## [Unreleased]
 
+## [0.1.86] - 2026-11-13
+
+> 工业化重构 **P2-6**：备份 / 恢复 / 恢复出厂抽成独立模块。
+
+### Changed
+
+- **`priv/backupops.py`（约 300 行）**：`backup-create` / `backup-restore` /
+  `factory-reset` 三条不可逆路径。`dert-priv` 从 **1035 行降到 913 行**（−122）。
+
+  这次不是"搬代码"，重点是把**判定顺序**显式写出来（原来散在 140 行 bash 里，
+  读代码时很难确认"到底先校验还是先落盘"）：
+
+  1. 成员白名单（`backupcheck.py`，先 `normpath` 归一）
+  2. 拒绝 `[lh]` 链接条目（防包内软链指向 /etc 写穿）
+  3. `netgen --schema` 结构预检 —— **必须在落盘之前**
+  4. 原子落盘（已有文件沿用原 mode，新文件 600）
+  5. 按 secrets 真实内容重算 `wan.has_password`
+  6. 收敛；收敛失败**原样透传**输出（netgen 的 KeyError 不能被吞成"失败"）
+
+- **`apply-all` 改为子进程调用**：Python 侧用 `_DERT_LOCK_HELD=1` 让子进程跳过
+  重取锁（`lib.sh:acquire_lock` 本就为嵌套调用留了这个缝）。锁仍由外层持有，
+  没有引入第二个锁文件。
+
+### Added
+
+- `tests/test_backupops.py`（18 个用例）：临时数据根 + 构造 tar 包，覆盖
+  secrets 包 / `./` 归一绕过 / 白名单外成员 / 软链条目 / 空包 / 截断包 /
+  结构非法 / 收敛失败透传 / `has_password` 纠偏 / PPPoE 缺密码提示 /
+  出厂保留升级源且清宽带密码保留管理密码 / 网口发现。
+
+### Fixed
+
+- **macOS 上恢复必失败**：`tar --no-overwrite-dir` 是 GNU tar 选项，bsdtar 不认，
+  整条恢复直接报"文件可能损坏"。改为**能力探测**：支持就用，不支持少用一条，
+  而不是把选项写死（生产 Debian 行为不变）。
+
+
 ## [0.1.85] - 2026-11-12
 
 > 工业化重构 **P2-5**：sing-box 控制面域抽成独立模块。

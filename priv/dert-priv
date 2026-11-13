@@ -458,145 +458,23 @@ do_passwd_set() {
 # 备份 / 恢复 / 恢复出厂
 # ---------------------------------------------------------------------------
 do_backup_create() {
+  # v0.1.86（P2-6）：实现搬到 priv/backupops.py（tar 仍走 CLI，不重造解包）
   require_root
-  local out_path="${1:?缺少输出路径}"
-  tar -C / -czf "$out_path" \
-    --exclude='var/lib/dert/backups' --exclude='var/lib/dert/lastgood' \
-    --exclude='etc/dert/secrets.json' \
-    etc/dert var/lib/dert/notes.json 2>/dev/null || true
-  [ -s "$out_path" ] || die "BACKUP_FAIL" "备份打包失败" "请检查磁盘空间（df -h）"
-  # 备份不含 secrets（已剔除）：640 归面板用户，仅供下载
-  chown dert:dert "$out_path" 2>/dev/null || true
-  chmod 640 "$out_path"
-  ok_out "path" "$out_path"
+  exec python3 "${PRIV_DIR}/backupops.py" create "${1:-}"
 }
 
 do_backup_restore() {
+  # v0.1.86（P2-6）：实现搬到 priv/backupops.py
   require_root
   acquire_lock
-  local src="${1:?缺少备份文件路径}"
-  [ -f "$src" ] || die "NO_FILE" "备份文件不存在"
-  # 成员白名单校验——先 posixpath.normpath 归一再判断（复审 N-01：
-  # `etc/dert/./secrets.json`、`etc/dert//secrets.json` 曾同时绕过
-  # secrets 精确匹配与前缀白名单，而 tar 解压会自动规范化，端到端可写穿）
-  # v0.1.84：判定逻辑抽到 priv/backupcheck.py（可行为测试，见 tests/test_backupcheck.py）
-  verdict="$(tar -tzf "$src" 2>/dev/null | python3 "${PRIV_DIR}/backupcheck.py" 2>/dev/null)"
-  case "$verdict" in
-    OK) ;;
-    SECRETS) die "BACKUP_SECRETS" "备份包含 secrets.json，已拒绝恢复" "secrets（密码哈希/会话密钥）不随备份流转；如需重置密码请在控制台执行 dert-priv" ;;
-    *) die "BACKUP_BAD" "备份文件内容不符合 DebRT 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）" ;;
-  esac
-  # 拒绝符号/硬链接条目：防止"备份内软链指向 /etc"穿越写盘（审计 5.3）
-  if tar -tvzf "$src" 2>/dev/null | awk '{print substr($1,1,1)}' | grep -qE '^[lh]'; then
-    die "BACKUP_BAD" "备份包内含链接条目，已拒绝" "为防路径穿越，备份包只允许普通文件与目录"
-  fi
-  if ! tar -tzf "$src" 2>/dev/null | grep -q .; then
-    die "BACKUP_BAD" "备份文件内容不符合 DebRT 备份格式" "请确认上传的是本系统生成的备份包（.tar.gz）"
-  fi
-  snapshot_lastgood "r$(date +%s)"
-  local stage; stage="$(mktemp -d ${DERT_RUN}/restore.XXXXXX)"
-  # --no-same-owner：root 解压不保留包内属主；防软链/目录覆盖类穿越（审计 5.3）
-  tar -C "$stage" --no-same-owner --no-overwrite-dir -xzf "$src" 2>/dev/null \
-    || { rm -rf "$stage"; die "BACKUP_BAD" "备份文件解压失败（文件可能损坏）"; }
-  python3 -c 'import json;json.load(open("'"$stage"'/etc/dert/config.json"))' 2>/dev/null \
-    || { rm -rf "$stage"; die "BACKUP_BAD" "备份中的配置无法解析"; }
-  # P3-12：结构预检——"能 json.load" 不等于"能用"：残缺/裁剪过的配置落盘后会让收敛
-  # 在 netgen 里 traceback（stderr 曾被丢弃，用户只看到"配置生成失败"），或静默生成
-  # 空转配置（wan.mode 为空 → WAN 口无任何地址）。落盘前用生成器的 schema 检查拦住。
-  # 只查结构不查语义：存量 /25 掩码等由收敛期迁移负责，不能因噎废食拒绝恢复。
-  if ! _schema_out="$(python3 "${PRIV_DIR}/netgen.py" --schema --config "$stage/etc/dert/config.json")"; then
-    printf '%s\n' "$_schema_out"
-    rm -rf "$stage"
-    exit 1
-  fi
-  # 原子落盘
-  if [ -d "$stage/etc/dert" ]; then
-    while IFS= read -r -d '' f; do
-      rel="${f#$stage/}"
-      write_atomic "/${rel}" "$(stat -c %a "/$rel" 2>/dev/null || echo 600)" < "$f"
-    done < <(find "$stage/etc/dert" -type f -print0)
-  fi
-  [ -f "$stage/var/lib/dert/notes.json" ] && write_atomic "${DERT_VAR}/notes.json" 644 < "$stage/var/lib/dert/notes.json"
-  rm -rf "$stage"
-  chmod 600 "$SECRETS_JSON" 2>/dev/null || true
-  # 备份不含 secrets：按 secrets.json 实际内容重算 has_password（复审 N-04）
-  local pw_warn=""
-  python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json
-try:
-    cfg = json.load(open(E + "/config.json"))
-    sec = json.load(open(E + "/secrets.json"))
-except Exception:
-    raise SystemExit
-has = bool(sec.get("pppoe_password"))
-cfg.setdefault("wan", {})["has_password"] = has
-json.dump(cfg, open(E + "/config.json.new", "w"), ensure_ascii=False, indent=1)
-import os
-os.replace(E + "/config.json.new", E + "/config.json")
-PYEOF
-  if [ "$(python3 -c 'import json;c=json.load(open("'"$CONFIG_JSON"'"));print(c["wan"]["mode"]=="pppoe" and not c["wan"].get("has_password"))' 2>/dev/null)" = "True" ]; then
-    pw_warn="注意：备份不含宽带密码，PPPoE 拨号尚未可用——请在「网络设置 → 上网设置」重新填写宽带密码并保存"
-  fi
-  # 重新生成 + 应用（失败必须如实上报，审计 B-08）
-  local ap; ap="$(do_apply_all 2>&1)" || { printf '%s\n' "$ap"; exit 1; }
-  ok_out "message" "配置已从备份恢复并生效${pw_warn:+。}$pw_warn"
+  exec python3 "${PRIV_DIR}/backupops.py" restore "${1:-}"
 }
 
 do_factory_reset() {
+  # v0.1.86（P2-6）：实现搬到 priv/backupops.py
   require_root
   acquire_lock
-  snapshot_lastgood "f$(date +%s)"
-  local prebak
-  prebak="${DERT_VAR}/lastgood/pre-factory-$(date +%s).tar.gz"
-  tar -C / -czf "$prebak" --exclude='etc/dert/secrets.json' etc/dert 2>/dev/null || true
-  chmod 600 "$prebak" 2>/dev/null || true
-  # 发现网口：eth*/en* 排除 ppp/tun/br/veth
-  python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json, os, re
-ports = []
-for n in sorted(os.listdir("/sys/class/net")):
-    if re.match(r"^(eth\d+|en[psox]\S*)$", n):
-        ports.append({"name": n, "wan": len(ports) == 0, "lan": len(ports) > 0})
-if not ports:
-    ports = [{"name": "eth0", "wan": True, "lan": False}, {"name": "eth1", "wan": False, "lan": True}]
-cfg = {
-    "version": 1,
-    "ports": ports,
-    "wan": {"mode": "dhcp", "username": "", "dns_mode": "auto", "dns": [], "ip": "", "mask": "", "gw": "", "has_password": False},
-    "ipv6": {"enabled": False, "mode": "native", "dns_mode": "auto", "dns": [], "addr": "", "gw": "", "prefix": ""},
-    "lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
-    "dhcp": {"enabled": True, "pool_start": 100, "pool_end": 200, "lease": 120, "dns1": "", "dns2": "", "gw": ""},
-    "static": [],
-    "qos": {"enabled": False, "down": 0, "up": 0},
-    "firewall": {"wan_input_drop": True, "portfw": []},
-    "upgrade": {"source": ""},
-}
-try:
-    old = json.load(open(E + "/config.json"))
-    cfg["upgrade"]["source"] = old.get("upgrade", {}).get("source", "")  # 升级源保留
-except Exception:
-    pass
-json.dump(cfg, open(E + "/config.json.new", "w"), ensure_ascii=False, indent=1)
-PYEOF
-  mv -f "${CONFIG_JSON}.new" "$CONFIG_JSON"
-  # 宽带密码属于路由配置：一并清除；管理密码保留
-  python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json
-try:
-    s = json.load(open(E + "/secrets.json"))
-    s.pop("pppoe_password", None)
-    json.dump(s, open(E + "/.secrets.tmp", "w"), ensure_ascii=False, indent=1)
-    import os; os.chmod(E + "/.secrets.tmp", 0o600)
-    os.replace(E + "/.secrets.tmp", E + "/secrets.json")
-except Exception:
-    pass
-PYEOF
-  systemctl disable --quiet dert-pppoe.service 2>/dev/null || true
-  local ap; ap="$(do_apply_all 2>&1)" || { printf '%s\n' "$ap"; exit 1; }
-  ok_out "message" "已恢复出厂设置（LAN 192.168.10.1，DHCP 池 .100–.200）"
+  exec python3 "${PRIV_DIR}/backupops.py" factory
 }
 
 # ---------------------------------------------------------------------------

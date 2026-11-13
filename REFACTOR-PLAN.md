@@ -15,7 +15,7 @@
 | P0-2 配置删除回收 | ✅ 完成（改为按 manifest 对账） | v0.1.71 |
 | P0-3 补 `set -u` | ✅ 完成（20/20 脚本） | v0.1.73 |
 | P1-2 守卫分层 | ✅ 四阶段完成（含 dert-priv 测试缝） | v0.1.75~79 |
-| P2 结构分层 | 🔄 五域完成（1822→1035 行，−43%） | v0.1.80~85 |
+| P2 结构分层 | 🔄 六域完成（1822→913 行，−50%） | v0.1.80~86 |
 | P3 供应链签名 | ✅ 代码完成（待配 Secret） | v0.1.74 |
 | P4 可观测 | 🔄 health 完成；单元硬化待做 | v0.1.81 |
 
@@ -190,17 +190,18 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 | v0.1.83 | `authops.py`（190 行） | 字面搬迁 | 语义 + 副作用一致 |
 | v0.1.84 | `backupcheck.py`（60 行） | 抽取 | 11 个用例含两种绕过 |
 | v0.1.85 | `singbox.py`（405 行，10 个子动作） | 改写 | status 13 字段一致 |
+| v0.1.86 | `backupops.py`（备份/恢复/出厂） | 改写 | 18 个行为用例 + 判定顺序断言 |
 
 **剩余域**（都是**重写**而非搬迁，且风险递增，建议每个单独一版 + 双跑验证）：
 | 域 | 行数 | 形态 | 风险 |
 |---|---|---|---|
 | `config`（config_set/get） | 222 | bash 事务流水线 + 内联 Python | 高（写配置） |
 | `upgrade`（check/download/apply） | 366 | bash + 内联 Python | **最高**（升级通道） |
-| `singbox`（ops） | 240 | case 多分支 + 多个 heredoc | 中 |
-| `podman`（ops/update） | 175 | bash 调 podman CLI + 锁 | 中 |
-| `auth` / `passwd` | 140 | 内联 Python + 状态文件 | 中 |
-| `backup` / `factory` | 185 | bash + 内联 Python | 中 |
 | `apply_all` | 117 | bash 编排 | 高 |
+
+已完成域：`status` / `selftest`（v0.1.80）、`container`（v0.1.82）、
+`auth`（v0.1.83）、`backupcheck`（v0.1.84）、`singbox`（v0.1.85）、
+`backup` / `factory`（v0.1.86）。
 
 **为什么没一次做完**：上面每一个都是"把 bash 编排改写成 Python 编排"，
 不是移动代码。改写会引入新 bug，而验收手段只有真机双跑——一次改太多，
