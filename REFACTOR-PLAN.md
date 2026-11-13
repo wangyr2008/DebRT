@@ -1,6 +1,6 @@
 # DebRT 工业化重构方案
 
-> 状态：**执行中**（P0-4 / P1 已完成于 v0.1.69；P0.5 进行中）
+> 状态：**P0~P3 完成；P4 完成 2/3**（P4-2 结构化日志未做，见文末）
 > 依据：2026-11-12 全项目审计 + v0.1.65~v0.1.69 实测 + 第三方独立审计报告
 > 原则：**不推倒重来**，按"减少爆炸半径"排序，每阶段独立可发布、可回滚
 
@@ -16,8 +16,8 @@
 | P0-3 补 `set -u` | ✅ 完成（20/20 脚本） | v0.1.73 |
 | P1-2 守卫分层 | ✅ 四阶段完成（含 dert-priv 测试缝） | v0.1.75~79 |
 | P2 结构分层 | ✅ 完成（dert-priv 1822→**76**，−96%；lib.sh 395→86） | v0.1.80~91 |
-| P3 供应链签名 | ✅ 代码完成（待配 Secret） | v0.1.74 |
-| P4 可观测 | ✅ health + 单元硬化完成 | v0.1.81 / v0.1.92 |
+| P3 供应链签名 | ✅ 完成（Secret 已配、首个签名发布 v0.1.94、设备端强制验签已开） | v0.1.74 / v0.1.94 |
+| P4 可观测 | 🔶 health + 单元硬化完成；**P4-2 结构化日志未做** | v0.1.81 / v0.1.92 |
 
 > **2026-11-12 更新**：收到第三方独立审计报告（76 文件静态通读，逐条核对后
 > 结论可信、无编造）。它补充了本方案未覆盖的 4 类问题（字段级校验单点化、
@@ -179,7 +179,7 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 
 ---
 
-### P2 — 结构分层（进行中）
+### P2 — 结构分层（已完成）
 
 **已完成**（`dert-priv` 1822 → 1284 行）：
 
@@ -266,9 +266,12 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 
 本地签名与仓库公钥已核对为同一密钥对（`openssl pkey -pubout | sha256` 一致）。
 
-**仍需人工一步**：把私钥填进仓库 Secret `DERT_SIGNING_KEY`（base64 的 PEM），
-让 CI 产出的 Release 自带 `.sig`；确认一次带签名的发布成功后再打开
-`upgrade.require_signature`。在此之前设备端按"警告放行"运行。
+**已完成（2026-11-13）**：Secret `DERT_SIGNING_KEY` 已配置，v0.1.94 是首个
+带 `.sig` 的发布；设备端 `upgrade-check → upgrade-download → upgrade-apply`
+整链验签通过，`upgrade.require_signature` 已置 `true`（无签名包实测被拒）。
+
+> 发版踩坑：`git push --follow-tags` 只推**附注标签**，轻量标签不会上传，
+> `release` 工作流一次都不会触发（而 `smoke` 照常跑绿）。已写进 CONTRIBUTING。
 
 ---
 
@@ -277,8 +280,8 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 | 项 | 做法 |
 |---|---|
 | P4-1 `dert-priv health` | 一条命令返回结构化健康状态（各服务 / nft 表 / 前缀一致性 / DNS 双路径），供面板和外部监控调用 |
-| P4-2 关键事件结构化日志 | 现有 `logger -t dert-*` 保留，统一字段格式（`key=value`），便于 grep 与聚合 |
-| P4-3 root 单元硬化 | `dert-netwatch` / `dert-apply` / `dert-converge` 加 `ProtectSystem` + `ReadWritePaths` 精确放行。**注意**：`ProtectSystem=strict` 会连带锁死子进程的 `/etc` 写入，`CapabilityBoundingSet` 会让 setuid sudo 失败 —— 这两条已真机验证过，不能照抄 |
+| P4-2 关键事件结构化日志 | **未做**。现有 `logger -t dert-*` 保留，统一字段格式（`key=value`），便于 grep 与聚合 |
+| P4-3 root 单元硬化 | ✅ 完成（v0.1.92）。实际用的是 **`ProtectSystem=true`**（只锁 `/usr`、`/boot`），**没有** `ReadWritePaths`——`full`/`strict` 会把 `/etc` 挂只读，而这三个单元的整条流水线都在写 `/etc`，sudo 子进程还会继承同一命名空间。`CapabilityBoundingSet` 同样不能加（会废掉 setuid sudo）。面板单元相反：两个都不能加（升级要整目录替换 `/usr/local/lib/dert`）。 |
 
 ---
 
