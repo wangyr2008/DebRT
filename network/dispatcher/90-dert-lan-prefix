@@ -107,6 +107,19 @@ fi
 printf '%s\n' "$NEW" > "$REC"
 logger -t dert-lan "event=prefix_change old=$OLD new=$NEW"
 
+# ①' 把旧前缀登记为「已撤销」：networkd 会通过 drop-in 持续把它们以
+#     valid/preferred = 0 塞进每一条 RA，客户端（包括当时在睡眠、后来才醒的）
+#     下一次收到 RA 或自己发 RS 时就会停用旧地址。
+#
+#     为什么必须做：旧前缀的地址不会自己失效——最后一次 RA 给的是 1 小时 valid。
+#     macOS 12 会继续拿旧 GUA 当源地址发包，而上游早已不路由该前缀，表现就是
+#     "重拨后 IPv6 打不开，断开 Wi-Fi 重连才好"。重连之所以有效，是因为 RS 让
+#     networkd 立刻回一条 RA；但那条 RA 只含新前缀，**并不会废弃旧前缀**。
+#     （真机 2026-11-13 复现；一上午重拨 4 次，换了 4 个前缀。）
+#
+#     $OLD 不加引号是故意的：它可能是多个前缀，按空格拆成多个参数传给脚本。
+python3 /usr/local/lib/dert/prefix-retire.py "$NEW" $OLD 2>/dev/null || true
+
 # ① 清旧前缀路由：只删 br-lan 上带 expires（RA/地址派生）且不在当前前缀集合里的，
 #    静态路由（无 expires）一律不碰
 for r in $(ip -6 route show dev br-lan 2>/dev/null \
