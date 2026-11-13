@@ -14,6 +14,7 @@
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -111,6 +112,52 @@ def pod_lock(timeout=600):
             if time.time() >= deadline:
                 die("BUSY", "另一个容器操作正在进行中，请稍后重试")
             time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
+# 配置快照 / 回滚（v0.1.99）
+# ---------------------------------------------------------------------------
+# 这段逻辑原来在三个地方各写了一遍：configops（保存前）、applyops（存量迁移前）、
+# backupops（恢复/出厂前）。三份实现当时是一致的，但"一致"是靠人盯着的——
+# 本项目已经因为"清理条件与生成器各写一遍"出过一次 LAN→WAN 的事故。
+# 轮转规则（只留最近 5 份）尤其容易改漏一处，所以统一到这里。
+def snapshot(tag, keep=5):
+    """快照 config.json + secrets.json 到 lastgood/，只保留最近 keep 份。"""
+    d = VAR + "/lastgood"
+    os.makedirs(d, exist_ok=True)
+    for src, name in ((CONFIG_JSON, "config.json"), (SECRETS_JSON, "secrets.json")):
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, "%s/%s.pre-%s" % (d, name, tag))
+            except OSError:
+                pass
+    try:
+        snaps = sorted((f for f in os.listdir(d) if f.startswith("config.json.pre-")),
+                       key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
+    except OSError:
+        return
+    for f in snaps[keep:]:
+        for name in ("config.json.pre-", "secrets.json.pre-"):
+            try:
+                os.unlink(os.path.join(d, name + f[len("config.json.pre-"):]))
+            except OSError:
+                pass
+
+
+def restore(tag):
+    """从 lastgood 回滚。没有对应快照时返回 False——调用方不能当成功。"""
+    d = VAR + "/lastgood"
+    cfg = "%s/config.json.pre-%s" % (d, tag)
+    if not os.path.isfile(cfg):
+        return False
+    try:
+        shutil.copy2(cfg, CONFIG_JSON)
+        sec = "%s/secrets.json.pre-%s" % (d, tag)
+        if os.path.isfile(sec):
+            shutil.copy2(sec, SECRETS_JSON)
+    except OSError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,28 @@
 
 ## [Unreleased]
 
+## [0.1.99] - 2026-11-13
+
+> 复查遗留项 1：`snapshot` / `restore` 三份实现合并到 `privlib`。
+
+### Changed
+
+- **快照/回滚逻辑从三处合并成一份**。原来 `configops`（保存前）、`applyops`
+  （存量迁移前）、`backupops`（恢复/出厂前）各写了一遍，逻辑当时一致——但
+  "一致"是靠人盯着的，轮转规则（只留最近 5 份）尤其容易改漏一处。本项目已经
+  因为"清理条件与生成器各写一遍"出过一次 LAN→WAN 的事故，同类问题不再留。
+  现在实现在 `privlib.snapshot()` / `privlib.restore()`，三处都是三行委托。
+
+  行为不变：`shutil.copy2`（等价 bash 的 `cp -a`，保留 mode/mtime）、按 mtime
+  轮转到 5 份、`restore` 没有快照时返回 `False`（调用方不能当成功）。
+
+### Changed（测试）
+
+- `test_lib_functions.Lastgood` 改为直接测 `privlib` 的那份实现；三个调用点的
+  行为仍由各自的用例覆盖（configops 回滚断言 `pre-s`、applyops 迁移断言 `pre-m`、
+  backupops 出厂断言 `pre-factory-`）。
+
+
 ## [0.1.98] - 2026-11-13
 
 > 全量复查（pyflakes + 逐模块对照 bash 原实现 + 真机跑未覆盖路径）修掉的问题。

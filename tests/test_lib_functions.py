@@ -81,7 +81,12 @@ class AtomicWrite(unittest.TestCase):
 
 
 class Lastgood(unittest.TestCase):
-    """快照 / 回滚：配置事务失败后能退回上一份可用配置，全靠这两个函数。"""
+    """快照 / 回滚：配置事务失败后能退回上一份可用配置，全靠这两个函数。
+
+    v0.1.99 起实现在 `privlib`（configops / applyops / backupops 三处共用），
+    这里直接测那份实现；三个调用点各自的行为由各自的用例覆盖
+    （configops 回滚、applyops 迁移、backupops 出厂前备份都断言了快照文件存在）。
+    """
 
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="dert-lg-")
@@ -93,7 +98,7 @@ class Lastgood(unittest.TestCase):
         self.sec = os.path.join(self.etc, "secrets.json")
         self.write(self.cfg, '{"v": 1}')
         self.write(self.sec, '{"pw": "x"}')
-        self.c = load(self.root, "configops")
+        self.c = load(self.root, "privlib")
 
     def write(self, path, body):
         with open(path, "w", encoding="utf-8") as f:

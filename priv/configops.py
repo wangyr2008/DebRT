@@ -89,48 +89,14 @@ def wait_wan(seconds):
 
 
 def snapshot(tag):
-    """配置快照（config.json + secrets.json，只留最近 5 份）。"""
-    d = privlib.VAR + "/lastgood"
-    os.makedirs(d, exist_ok=True)
-    for src, name in ((CONFIG_JSON, "config.json"), (SECRETS_JSON, "secrets.json")):
-        if os.path.isfile(src):
-            try:
-                with open(src, "rb") as f:
-                    data = f.read()
-                privlib.write_bytes("%s/%s.pre-%s" % (d, name, tag), data,
-                                    os.stat(src).st_mode & 0o777)
-            except OSError:
-                pass
-    snaps = sorted((f for f in os.listdir(d) if f.startswith("config.json.pre-")),
-                   key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
-    for f in snaps[5:]:
-        for name in ("config.json.pre-", "secrets.json.pre-"):
-            try:
-                os.unlink(os.path.join(d, name + f[len("config.json.pre-"):]))
-            except OSError:
-                pass
+    """配置快照——实现在 privlib（三处调用共用一份，见那里的注释）。"""
+    return privlib.snapshot(tag)
 
 
 def restore(tag):
-    d = privlib.VAR + "/lastgood"
-    src = "%s/config.json.pre-%s" % (d, tag)
-    if not os.path.isfile(src):
-        return False
-    try:
-        with open(src, "rb") as f:
-            privlib.write_bytes(CONFIG_JSON, f.read(), 0o644)
-        sec = "%s/secrets.json.pre-%s" % (d, tag)
-        if os.path.isfile(sec):
-            with open(sec, "rb") as f:
-                privlib.write_bytes(SECRETS_JSON, f.read(), 0o600)
-    except OSError:
-        return False
-    return True
+    return privlib.restore(tag)
 
 
-# ---------------------------------------------------------------------------
-# 校验与合并
-# ---------------------------------------------------------------------------
 def normalize(section, body):
     """跑 validate.py。返回 (ok, norm 或 错误 JSON 文本)。"""
     env = dict(os.environ)

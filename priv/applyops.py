@@ -396,24 +396,8 @@ def _migrate_mask():
 
 
 def _snapshot(tag):
-    """迁移前快照（与 lib.sh:snapshot_lastgood 等价，只留最近 5 份）。"""
-    d = privlib.VAR + "/lastgood"
-    os.makedirs(d, exist_ok=True)
-    for src, name in ((CONFIG_JSON, "config.json"),
-                      (privlib.SECRETS_JSON, "secrets.json")):
-        if os.path.isfile(src):
-            try:
-                shutil.copy2(src, "%s/%s.pre-%s" % (d, name, tag))
-            except OSError:
-                pass
-    snaps = sorted((f for f in os.listdir(d) if f.startswith("config.json.pre-")),
-                   key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
-    for f in snaps[5:]:
-        for name in ("config.json.pre-", "secrets.json.pre-"):
-            try:
-                os.unlink(os.path.join(d, name + f[len("config.json.pre-"):]))
-            except OSError:
-                pass
+    """配置快照——实现在 privlib（与 configops/backupops 共用一份）。"""
+    return privlib.snapshot(tag)
 
 
 # ---------------------------------------------------------------------------
