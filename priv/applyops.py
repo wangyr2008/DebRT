@@ -403,6 +403,19 @@ def _snapshot(tag):
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+def retire_old_prefixes():
+    """把「见过但现在不是当前」的 IPv6 前缀登记为已废弃（自愈兜底）。
+
+    换前缀的 netlink 事件可能漏收——真机 2026-11-14 01:58 之后那一次
+    a54:13e0 → a54:1c10 就没触发钩子，旧前缀没被登记，macOS 继续拿它当源
+    地址发包 → 黑洞，表现为"重拨后 IPv6 打不开，重连 Wi-Fi 才好"。
+    这里每次收敛兜一次底：最坏 6 小时（converge.timer）自愈，配置变更时立刻。
+    """
+    script = os.path.join(LIB, "prefix-retire.py")
+    if os.path.isfile(script):
+        _sh([sys.executable, script], timeout=30)
+
+
 def apply_all(convergent=False):
     privlib.require_root()
     os.makedirs(_fs("/run/dert-dns"), exist_ok=True)
@@ -482,6 +495,7 @@ def apply_all(convergent=False):
             # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/dert 留一份完整生成物，
             # 其中 etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 实测）。
             shutil.rmtree(stage, ignore_errors=True)
+            retire_old_prefixes()
             ok_out(message="无漂移，运行时已确认", converged=True)
             return
 
@@ -504,6 +518,7 @@ def apply_all(convergent=False):
     wait_dnsmasq(15)
     sync_dns_upstream()
     maintain_singbox_dropin()
+    retire_old_prefixes()
     clear_converge_failed()
     ok_out(message="已按配置完成系统收敛" + ("。" + migrated if migrated else ""))
 

@@ -29,6 +29,11 @@ import time
 
 FS = os.environ.get("DERT_FSROOT", "")
 STATE = FS + "/var/lib/dert/retired-prefixes"
+# 「见过的前缀」持久化记录。为什么要它：换前缀的事件可能漏收——真机 2026-11-14
+# 01:58 之后那一次 a54:13e0 → a54:1c10 就没有触发钩子，于是旧前缀没被登记，
+# macOS 继续拿它当源地址 → 黑洞。改成"记住所有见过的前缀，凡是当前之外的都
+# 登记为废弃"，只要任何一次调用（钩子事件、apply-all、开机）跑过就能自愈。
+SEEN = FS + "/var/lib/dert/seen-prefixes"
 DROPIN_DIR = FS + "/etc/systemd/network/20-lan.network.d"
 DROPIN = os.path.join(DROPIN_DIR, "90-retired-prefixes.conf")
 
@@ -51,6 +56,49 @@ def load():
     except OSError:
         pass
     return items
+
+
+def load_seen():
+    items = []
+    try:
+        with open(SEEN, encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[0].isdigit():
+                    items.append((int(parts[0]), parts[1]))
+    except OSError:
+        pass
+    return items
+
+
+def save_seen(items):
+    d = os.path.dirname(SEEN)
+    os.makedirs(d, exist_ok=True)
+    tmp = SEEN + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for ts, prefix in items:
+            f.write("%d %s\n" % (ts, prefix))
+    os.replace(tmp, SEEN)
+
+
+def current_prefix():
+    """br-lan 当前的全局 /64；没有则返回空串（v6 关闭或还没拿到 PD）。"""
+    try:
+        out = subprocess.run(["ip", "-6", "addr", "show", "dev", "br-lan",
+                              "scope", "global"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ""
+    for line in out.splitlines():
+        if "inet6" not in line:
+            continue
+        addr = line.split()[1].split("/")[0]
+        try:
+            import ipaddress
+            return str(ipaddress.ip_interface(addr + "/64").network)
+        except Exception:
+            continue
+    return ""
 
 
 def save(items):
@@ -95,21 +143,29 @@ def reload_networkd():
 
 
 def main(argv):
-    new = argv[1].strip() if len(argv) > 1 else ""
+    # 不带参数时自动探测 br-lan 当前前缀——apply-all 每次收敛都调它，
+    # 用来兜住"事件漏收"的换前缀。
+    new = argv[1].strip() if len(argv) > 1 else current_prefix()
     olds = [a.strip() for a in argv[2:] if a.strip()]
     now = int(time.time())
 
-    items = [(ts, p) for ts, p in load() if now - ts < TTL]
-    # 同一前缀又变回"当前"了（运营商把同一段重新分下来）→ 撤销登记，
-    # 否则会同时以"正常"和"已废弃"两种身份出现在 RA 里，客户端直接停用。
-    items = [(ts, p) for ts, p in items if p != new]
-    seen = {p for _ts, p in items}
+    seen = [(ts, p) for ts, p in load_seen() if now - ts < TTL]
+    # 迁移：v0.1.107 只有 retired-prefixes，升级后不能把已有的撤销记录丢掉
+    # （那些前缀对应的客户端地址可能还没过期）。
+    for ts, p in load():
+        if now - ts < TTL and p not in {x for _t, x in seen}:
+            seen.append((ts, p))
+    if new:
+        seen = [(ts, p) for ts, p in seen if p != new] + [(now, new)]
     for p in olds:
-        if p == new or p in seen:
-            continue
-        items.append((now, p))
-        seen.add(p)
-    items = items[-MAX:]
+        if p and p != new and p not in {x for _t, x in seen}:
+            seen.append((now, p))
+    seen = seen[-32:]
+    save_seen(seen)
+
+    # 非当前的前缀全部登记为「已废弃」；当前前缀绝不能出现在这里，
+    # 否则客户端会把正在用的地址停掉。
+    items = [(ts, p) for ts, p in seen if p != new][-MAX:]
 
     save(items)
     body = render(items)

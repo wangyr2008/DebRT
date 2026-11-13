@@ -22,6 +22,7 @@ class Retire(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
         os.makedirs(os.path.join(self.root, "var/lib/dert"), exist_ok=True)
         self.state = os.path.join(self.root, "var/lib/dert/retired-prefixes")
+        self.seen = os.path.join(self.root, "var/lib/dert/seen-prefixes")
         self.dropin = os.path.join(
             self.root, "etc/systemd/network/20-lan.network.d/90-retired-prefixes.conf")
 
@@ -36,8 +37,8 @@ class Retire(unittest.TestCase):
         with open(self.dropin, encoding="utf-8") as f:
             return f.read()
 
-    def write_state(self, items):
-        with open(self.state, "w", encoding="utf-8") as f:
+    def write_seen(self, items):
+        with open(self.seen, "w", encoding="utf-8") as f:
             for ts, p in items:
                 f.write("%d %s\n" % (ts, p))
 
@@ -69,13 +70,27 @@ class Retire(unittest.TestCase):
 
     def test_expired_entries_dropped(self):
         old = int(time.time()) - 25 * 3600
-        self.write_state([(old, "2409:8a5e:a50:5b20::/64")])
+        self.write_seen([(old, "2409:8a5e:a50:5b20::/64")])
         out = self.run_retire("2409:8a5e:a57:8570::/64", "2409:8a5e:a56:a2f1::/64")
         self.assertNotIn("2409:8a5e:a50:5b20::/64", out["retired"], "超过 24 小时应淘汰")
 
+    def test_missed_event_self_heals(self):
+        """事件漏收也能自愈：见过但已不是当前的前缀会被登记为已废弃。
+
+        真机 2026-11-14：a54:13e0 → a54:1c10 这次换前缀没触发钩子，旧前缀
+        没登记，macOS 继续拿它当源地址 → 黑洞。收敛时兜底即可自愈。
+        """
+        now = int(time.time())
+        self.write_seen([(now, "2409:8a5e:a54:13e0::/64"),
+                         (now, "2409:8a5e:a54:1c10::/64")])
+        out = self.run_retire("2409:8a5e:a54:1c10::/64")   # 故意不传旧前缀
+        self.assertIn("2409:8a5e:a54:13e0::/64", out["retired"])
+        self.assertNotIn("2409:8a5e:a54:1c10::/64", out["retired"])
+        self.assertIn("Prefix=2409:8a5e:a54:13e0::/64", self.dropin_text())
+
     def test_capped_at_eight(self):
         items = [(int(time.time()) - i, "2409:8a5e:%x::/64" % i) for i in range(12)]
-        self.write_state(items)
+        self.write_seen(items)
         out = self.run_retire("2409:8a5e:a57:8570::/64")
         self.assertLessEqual(len(out["retired"]), 8)
 
