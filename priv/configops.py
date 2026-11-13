@@ -252,9 +252,11 @@ def config_set(section):
     # P2-2：改账号此前不重拨，pppd 仍持旧凭据会话
     if section == "bind" and new_mode == "pppoe":
         pppoe_needed = True
-    # PPPoE 下 IPv6 变更需要重拨：+ipv6/IPv6CP 与 ppp0 上的 DHCPv6 随重拨生效
-    if section == "ipv6" and new_mode == "pppoe":
-        pppoe_needed = True
+    # v0.1.110：开关 IPv6 不再重拨。peer 文件的 +ipv6 已改成常开（IPv6CP 与
+    # "要不要地址"是两件事），ppp0 的 DHCP=ipv6 由 25-ppp0.network 按开关生成，
+    # 只靠 networkd 重启就能生效。
+    # 真机 2026-11-14：一次"关→开"触发两次重拨、换了两批 PD 前缀，Mac 攒下
+    # 三组地址（每组稳定+隐私两条），表现为"开关一次 IPv6 就多出一堆地址"。
     if section == "wan" and had_pwd:
         pppoe_needed = True
     if not pppoe_needed:

@@ -198,34 +198,35 @@ def gen_wan_network(cfg):
 
 def gen_ppp_network(cfg):
     # PPPoE 的 IPv6：pppd 只协商 IPv6CP（链路本地），地址与前缀由 networkd 在 ppp0 上
-    # 跑 DHCPv6 客户端获取（IA_NA 出口地址 / IA_PD 委派前缀）——国内家宽标准形态
+    # 跑 DHCPv6 客户端获取（IA_NA 出口地址 / IA_PD 委派前缀）——国内家宽标准形态。
     # DHCP=ipv6 是客户端的启动开关：只写 DHCPPrefixDelegation=yes 不会拉起 DHCPv6
     # 客户端（真机 ppp0 抓 546/547 为零已证实），没有它 WithoutRA/UplinkInterface
-    # 都无从生效
-    # [Route] ::/0 是必需的：国内运营商在 PPPoE 链路上不发 RA（真机抓 22 秒 RA 为零），
-    # DHCPv6 又不携带默认路由，缺它就只有地址没有出口——表现为"能拿到 IPv6 地址但
-    # ping6 报 Network is unreachable"。
+    # 都无从生效。
+    # [Route] ::/0 是必需的：国内运营商在 PPPoE 链路上不发 RA，DHCPv6 又不携带
+    # 默认路由，缺它就只有地址没有出口——表现为"能拿到 IPv6 地址但 ping6 报
+    # Network is unreachable"。
     # 但**不能**写 Scope=link：IPv6 路由没有 scope 概念，networkd 每次开机都会报
     # "/etc/systemd/network/25-ppp0.network:17: Scope= is specified for IPv6 route.
-    #  It will be ignored."，而默认路由实际是靠 Destination=::/0 建起来的
-    # （ip -6 route 可见 default dev ppp0 proto static）。写它纯属噪音。
-    return ("# 由 DebRT 生成 — 请勿手工修改\n[Match]\nName=ppp0\n\n[Network]\n"
-            "IPv6AcceptRA=no\n"
-            "DHCP=ipv6\n"
-            "DHCPPrefixDelegation=yes\n"
-            # KeepConfiguration=yes 是必需的，否则 pppd 分配的 IPv4 会被 networkd 清掉。
-            # networkd 重新配置/重启某个 link 时，默认（KeepConfiguration=no）会把
-            # "不是自己配的" 地址一并删除；而 ppp0 的 IPv4 是 pppd 用 ioctl 加的，
-            # 对 networkd 来说是外来配置。真机 2026-11-12 实测：`networkctl reconfigure
-            # ppp0` 之后 ppp0 只剩 DHCPv6 地址、IPv4 与默认路由全消失，v4 出网直接 000，
-            # 必须重拨才能恢复（pppd 进程始终存活，它自己不会重加地址）。
-            # 触发场景不止手工命令：apply-all 在网络设置变更时会重启 networkd，
-            # 同样会踩到——用户改个 LAN IP 就把 WAN 弄断，很难联想到根因。
-            # 加上它之后 reconfigure 保留 IPv4，v4/v6 出网均正常。
-            "KeepConfiguration=yes\n\n"
-            "[DHCPv6]\nWithoutRA=solicit\nUseDNS=yes\n\n"
-            "[DHCPPrefixDelegation]\nUplinkInterface=:self\n\n"
-            "[Route]\nDestination=::/0\n")
+    #  It will be ignored."，而默认路由实际是靠 Destination=::/0 建起来的。
+    #
+    # v0.1.110：DHCPv6 相关段落随「IPv6 开关」生成。关闭时不启动 DHCPv6 客户端，
+    # 也就不会去要前缀——这一步只靠 networkd 重启生效，**不需要重拨**。
+    v6_on = bool(cfg.get("ipv6", {}).get("enabled"))
+    lines = ["# 由 DebRT 生成 — 请勿手工修改", "[Match]", "Name=ppp0", "",
+             "[Network]", "IPv6AcceptRA=no"]
+    if v6_on:
+        lines += ["DHCP=ipv6", "DHCPPrefixDelegation=yes"]
+    # KeepConfiguration=yes 是必需的，否则 pppd 分配的 IPv4 会被 networkd 清掉。
+    # networkd 重新配置/重启某个 link 时，默认（KeepConfiguration=no）会把
+    # "不是自己配的"地址一并删除；而 ppp0 的 IPv4 是 pppd 用 ioctl 加的，
+    # 对 networkd 来说是外来配置。真机 2026-11-12 实测：`networkctl reconfigure
+    # ppp0` 之后 ppp0 只剩 DHCPv6 地址、IPv4 与默认路由全消失，v4 出网直接 000。
+    lines += ["KeepConfiguration=yes", ""]
+    if v6_on:
+        lines += ["[DHCPv6]", "WithoutRA=solicit", "UseDNS=yes", "",
+                  "[DHCPPrefixDelegation]", "UplinkInterface=:self", "",
+                  "[Route]", "Destination=::/0"]
+    return "\n".join(lines) + "\n"
 
 
 def gen_lan_netdev(cfg):
@@ -523,8 +524,11 @@ def gen_pppd(cfg, password):
         "novjccomp",
         "linkname dert",
     ]
-    if v6.get("enabled") and v6.get("mode") in ("native", "nat6"):
-        lines.append("+ipv6")
+    # +ipv6 常开。IPv6CP 协商只是把链路本地能力建起来，"要不要分配地址"由
+    # networkd 的 DHCP=ipv6 决定（见 gen_ppp_network）。常开之后，开关 IPv6
+    # 不必重拨——真机 2026-11-14 实测：一次"关→开"触发两次重拨、换了两批 PD
+    # 前缀，客户端因此攒下三组地址（每组稳定+隐私两条）。
+    lines.append("+ipv6")
     return "\n".join(lines) + "\n"
 
 
@@ -720,10 +724,14 @@ def main():
         files.append(("etc/ppp/chap-secrets", 0o600, gen_chap(cfg, password)))
         files.append(("etc/ppp/pap-secrets", 0o600, gen_chap(cfg, password)))
         # PPPoE 的 IPv6 走 networkd：25-ppp0.network 的 [DHCPPrefixDelegation]
-        # UplinkInterface=:self 段是客户端启动的必要条件（man 257 语义），见 gen_ppp_network
-        _v6 = cfg.get("ipv6", {})
-        if _v6.get("enabled") and _v6.get("mode") in ("native", "nat6"):
-            files.append(("etc/systemd/network/25-ppp0.network", 0o644, gen_ppp_network(cfg)))
+        # UplinkInterface=:self 段是客户端启动的必要条件（man 257 语义），见 gen_ppp_network。
+        #
+        # **这个文件必须始终生成**，不能只在 IPv6 开启时生成：里面的
+        # KeepConfiguration=yes 是 ppp0 的 IPv4 保护伞——networkd 重配/重启时
+        # 默认会把"不是自己配的"地址删掉，而 ppp0 的 IPv4 是 pppd 用 ioctl 加的。
+        # 真机 2026-11-12 踩过：改个 LAN 设置就断 WAN。关闭 IPv6 时这个文件仍要
+        # 存在（此时内容只有 IPv6AcceptRA=no + KeepConfiguration=yes）。
+        files.append(("etc/systemd/network/25-ppp0.network", 0o644, gen_ppp_network(cfg)))
 
     # 变更影响面
     wan_changed_if = cfg["wan"]["mode"] == "pppoe"

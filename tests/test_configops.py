@@ -107,6 +107,23 @@ class Wan(Base):
         self.assertFalse(any("restart dert-pppoe" in c for c in self.s.calls()),
                          "只改 DNS 不应重拨 PPPoE")
 
+    def test_ipv6_toggle_does_not_redial(self):
+        """开关 IPv6 不该重拨。
+
+        真机 2026-11-14：一次"关→开"触发两次重拨、换了两批 PD 前缀，客户端
+        因此攒下三组地址（每组稳定+隐私两条），表现为"开关一次 IPv6 就多出
+        一堆地址"。+ipv6 改成常开、DHCPv6 段落按开关生成后，只需重启 networkd。
+        """
+        cfg = self.cfg()
+        cfg["wan"].update(mode="pppoe", username="13800000000")
+        self.s.write_cfg(cfg)
+        self.fake_ip("ppp0")
+        self.s.clear_calls()
+        rc, out = self.set_section("ipv6", {"enabled": True, "mode": "native"})
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(any("restart dert-pppoe" in c for c in self.s.calls()),
+                         "开关 IPv6 不应重拨 PPPoE（每次重拨都会换一个 PD 前缀）")
+
     def test_mode_change_redials(self):
         self.fake_ip("ppp0")
         self.s.clear_calls()

@@ -7,6 +7,53 @@
 
 ## [Unreleased]
 
+## [0.1.111] - 2026-11-14
+
+> 0.1.110 引入的回归：关闭 IPv6 时 `25-ppp0.network` 会被删掉。
+
+### Fixed
+
+- `25-ppp0.network` 此前只在 IPv6 启用（native/nat6）时生成。0.1.110 让
+  「关闭 IPv6 只重启 networkd、不重拨」之后，关闭那一步会让这个文件从清单里
+  消失 → `cleanup.py` 按清单对账把它删掉 → ppp0 失去
+  `KeepConfiguration=yes`。后果是**下一次 networkd 重启会把 pppd 加的 IPv4
+  一起清掉，WAN 直接断**（真机 2026-11-12 踩过同样的坑）。
+
+  现在 PPPoE 下始终生成该文件；关闭 IPv6 时内容只剩
+  `IPv6AcceptRA=no` + `KeepConfiguration=yes`。
+
+
+## [0.1.110] - 2026-11-14
+
+> 开关一次 IPv6 就多出一堆地址：不是客户端的问题，是我们让它换了两轮前缀。
+
+### Fixed
+
+- **开关 IPv6 不再重拨**。真机日志（一次"关→开"）：
+
+  ```
+  01:58:34 config-set ipv6（关闭）→ 01:58:39 重拨 → 01:58:59 前缀 a54:13e0
+  01:58:58 config-set ipv6（打开）→ 01:59:03 重拨 → 01:59:03 前缀 a54:1c10
+  ```
+
+  两次重拨换了两批 PD 前缀，客户端每个前缀生成 2 条地址（稳定 + 隐私，
+  RFC 4941），于是三组共 6 条。用户看到的就是"开关一次，地址翻一倍"。
+
+  三处改动：
+
+  1. `peers/dert` 的 `+ipv6` **常开**——IPv6CP 协商与"要不要分配地址"是两件事；
+  2. `25-ppp0.network` 的 `DHCP=ipv6` / `DHCPPrefixDelegation` / `[Route] ::/0`
+     只在 IPv6 启用时生成，关闭时连 DHCPv6 客户端都不启动（此前关了 IPv6
+     仍在向运营商要前缀）；
+  3. `configops` 去掉「`section=ipv6` 且 PPPoE → 重拨」这条规则。
+
+  现在开关只重启 networkd，PPP 会话不动，前缀不变，客户端不会再新增地址。
+
+### Added
+
+- `test_ipv6_toggle_does_not_redial`：开关 IPv6 时不得出现 `restart dert-pppoe`。
+
+
 ## [0.1.109] - 2026-11-14
 
 > 按 RFC 7084 补齐 IPv6 前缀变更的处理：补上 L-14，把 L-13 的窗口收回 2 小时。
