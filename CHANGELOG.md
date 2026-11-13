@@ -7,6 +7,30 @@
 
 ## [Unreleased]
 
+## [0.1.105] - 2026-11-13
+
+> 按实测恢复 MTU 1480，并保留已验证有效的 RA 参数。
+
+### Changed
+
+- `PPPOE_MTU` 1492 → **1480**，br-lan 同步 `IPv6MTUBytes=1480`。
+  用 `ping6 -M do` 从 LAN 源地址测阿里与 Cloudflare，1492 是**通**的，
+  所以这不是"路径 MTU 更小"；真正的原因是 1480 让客户端从一开始就不发接近
+  上限的包——QUIC/UDP 没有 MSS 钳制，1500 字节的包只能靠 PTB 纠正，
+  重传一次就足以让人感觉"慢"。
+- 保留 `MaxRtrAdvIntervalSec=200` / `RouterLifetimeSec=1800`。
+
+### 更正（v0.1.103/104 的错误结论）
+
+- "设 `IPv6MTUBytes` 会导致 networkd 停发 RA"是**误判**。当时设备上没装
+  tcpdump，`timeout 30 tcpdump ...` 直接 `No such file or directory` 失败，
+  空输出被我当成了"没有 RA"。装上 tcpdump 后实测：RA 每 200 秒一条、
+  lifetime 1800s、报文长度 80 字节（若有 MTU 选项会是 88），
+  与 `IPv6MTUBytes` 无关。
+- 15:51 那次全屋 v6 断，最可能的原因是 `RouterLifetimeSec=600` 与发送间隔
+  上限 600 秒相同：客户端在下一条 RA 到达前就把默认路由过期了。
+
+
 ## [0.1.104] - 2026-11-13
 
 > 真正的元凶：**RA 的寿命和发送间隔都是 600 秒**，客户端在下一条 RA 到达前

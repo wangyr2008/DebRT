@@ -21,13 +21,13 @@ _FS = os.environ.get("DERT_FSROOT", "")
 CONFIG_PATH = _FS + "/etc/dert/config.json"
 SECRETS_PATH = _FS + "/etc/dert/secrets.json"
 ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
-# PPPoE 链路的 MTU。保持 1492（PPPoE 理论值）——v0.1.102 曾降到 1480 并给
-# br-lan 加 IPv6MTUBytes=1480，结果 networkd 不再发 RA，客户端 600 秒后默认
-# 路由过期，**所有设备的 v6 一起断**（真机 2026-11-13 15:51，断开 Wi-Fi 重连
-# 才恢复，因为 RS 会触发一次 RA）。已回滚。
-# 真正要修的是"每条新连接白丢一个 RTT"：那是 v6 的 MSS 钳制失效导致的，
-# 与 MTU 取值无关，见 gen_nft 里的 v6 分支。
-PPPOE_MTU = 1492
+# PPPoE 链路的 MTU。取 1480 而不是 1492，是**实测偏好**：
+#   同一台设备、同一批客户端，1480 时网页打开明显更快，1492 时偏慢。
+# 用 ping6 -M do 从 LAN 源测到阿里/Cloudflare，1492 是通的，所以这不是
+# "路径 MTU 更小"，而是 1480 让客户端从一开始就不发接近上限的包——
+# QUIC/UDP 没有 MSS 钳制，1500 字节的包只能靠 PTB 纠正，重传一次就够慢。
+# 代价：v4 每包少 12 字节（包数约多 0.8%），实测无感。
+PPPOE_MTU = 1480
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
 
@@ -240,9 +240,13 @@ def gen_lan_network(cfg):
              "[Network]",
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
              "IPForward=yes"]
-    # 不要给 br-lan 设 IPv6MTUBytes：v0.1.102 试过 1480，networkd 随即不再发
-    # RA（/run/systemd/netif/links 里连 IPV6_SEND_RA 都没有），客户端 600 秒后
-    # 默认路由过期 → 全屋 v6 断，只有重新连 Wi-Fi（发 RS）才恢复。已回滚。
+    # 让 br-lan 的 v6 MTU 与 ppp0 对齐（1480）。注意：systemd-networkd **不会**
+    # 把 IPv6MTUBytes 写进 RA 的 MTU 选项（真机抓包验证：RA 长度 80 字节，
+    # 有选项时会变成 88），所以它只影响本机转发与 PTB 里报的 MTU，不影响客户端
+    # 从 RA 读到的值。RA 照常发送——早前"设了它就不发 RA"的判断是抓包工具
+    # 不可用造成的误判。
+    if cfg["wan"].get("mode") == "pppoe" and v6.get("enabled"):
+        lines.append(f"IPv6MTUBytes={PPPOE_MTU}")
     # LAN 桥成员口由 30-<name>.network 绑定（见 gen_port_networks）
     # IPv6：RA 统一由 networkd 发布（dnsmasq 不再发 RA，避免双 RA 源，见审计 B-21）
     if v6.get("enabled") and v6.get("mode") == "static" and not v6.get("prefix"):

@@ -53,10 +53,10 @@ class TestPppdPeer(unittest.TestCase):
         self.assertIn("mtu %d" % self.ng.PPPOE_MTU, body)
         self.assertIn("mru %d" % self.ng.PPPOE_MTU, body)
 
-    def test_mtu_is_pppoe_default(self):
-        # v0.1.102 曾降到 1480，结果 networkd 停发 RA、全屋 v6 断（见 PPPOE_MTU 注释）。
-        # 别再降 MTU——真正要修的是 MSS 钳制。
-        self.assertEqual(self.ng.PPPOE_MTU, 1492)
+    def test_mtu_is_1480(self):
+        # 实测偏好：1480 时网页明显更快，1492 时偏慢（ping -M do 证明 1492 可通，
+        # 所以不是路径 MTU 问题，而是别让客户端发接近上限的包）。
+        self.assertEqual(self.ng.PPPOE_MTU, 1480)
 
 
 class TestLANNetwork(unittest.TestCase):
@@ -95,15 +95,15 @@ class TestLANNetwork(unittest.TestCase):
         self.assertGreaterEqual(life, gap * 3,
                                 "RA 寿命 %d 秒 vs 间隔 %d 秒，余量不足" % (life, gap))
 
-    def test_no_ipv6_mtu_override(self):
-        """不要给 br-lan 设 IPv6MTUBytes。
+    def test_ipv6_mtu_matches_pppoe(self):
+        """br-lan 的 v6 MTU 要与 ppp0 对齐。
 
-        v0.1.102 实测：设成 1480 后 networkd 不再发 RA（/run/systemd/netif/links
-        里连 IPV6_SEND_RA 都没有），客户端 600 秒后默认路由过期 → 全屋 v6 断，
-        只有重新连 Wi-Fi（发 RS 触发一次 RA）才恢复。已回滚，别再"顺手"加回来。
+        注意它**不会**进 RA 的 MTU 选项（抓包验证：RA 长度 80，有选项会是 88），
+        只影响本机转发和 PTB 里报的值。RA 照常发送——早前"设了它就不发 RA"
+        是抓包工具不可用导致的误判。
         """
         body = self.ng.gen_lan_network(support.pppoe_config())
-        self.assertNotIn("IPv6MTUBytes", body)
+        self.assertIn("IPv6MTUBytes=%d" % self.ng.PPPOE_MTU, body)
 
 
 class TestDnsmasq(unittest.TestCase):
