@@ -17,6 +17,6 @@ set -u
 # 表会一直残留 —— 真机首测就踩到这个，DNS 无法回落。
 if nft list tables 2>/dev/null | grep -q "dert_dns"; then
     nft delete table inet dert_dns 2>/dev/null \
-        && logger -t dert-dns-split "sing-box 已停止，DNS 分流表已删除（回落 dnsmasq）"
+        && logger -t dert-dns-split "event=table_removed reason=singbox_stopped"
 fi
 exit 0

@@ -51,7 +51,7 @@ fi
 
 # 服务没在跑：直接拉起
 if ! systemctl is-active --quiet "$UNIT"; then
-  logger -t dert-pppoe-watchdog "拨号服务未运行，拉起"
+  logger -t dert-pppoe-watchdog "event=service_not_running action=start unit=$UNIT"
   systemctl start "$UNIT" 2>/dev/null || true
   rm -f "$FLAG" 2>/dev/null
   exit 0
@@ -74,7 +74,7 @@ fi
 
 AGE=$(( $(date +%s) - $(cat "$FLAG" 2>/dev/null || echo 0) ))
 if [ "$AGE" -ge 180 ]; then
-  logger -t dert-pppoe-watchdog "ppp0 缺失 ${AGE}s（服务 active 但无会话），重启拨号"
+  logger -t dert-pppoe-watchdog "event=ppp0_missing age_s=$AGE action=restart"
   systemctl restart "$UNIT" 2>/dev/null || true
   rm -f "$FLAG" 2>/dev/null
 fi

@@ -113,6 +113,48 @@ def pod_lock(timeout=600):
             time.sleep(0.5)
 
 
+# ---------------------------------------------------------------------------
+# 结构化事件日志（v0.1.95 / P4-2）
+# ---------------------------------------------------------------------------
+# 统一格式：`event=<snake_case> key=value …`
+#
+# 为什么改：原来全是自由文本（"已清理陈旧的生成文件：/etc/..."），想回答
+# "最近 24 小时签名失败几次""哪些生成物被清理过"只能靠正则猜，而且中文标点
+# 一变就猜不到。改成固定字段后 `journalctl -t dert-apply | grep event=cleanup`
+# 就能直接聚合。人类可读的说明仍保留在 msg= 字段里，不丢信息。
+_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:@%+-,=")
+
+
+def _kv(value):
+    """值转成单行 token：安全字符原样，其余加双引号（日志里不能出现换行）。"""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    if text and all(c in _SAFE for c in text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _emit(tag, line):
+    """真正写 journald。抽出来是为了测试能替换掉（不污染本机 syslog）。"""
+    try:
+        subprocess.run(["logger", "-t", "dert-" + tag, line],
+                       timeout=10, capture_output=True)
+    except Exception:
+        pass
+
+
+def log_event(tag, event, **fields):
+    """写一条结构化事件日志。tag 会自动加 `dert-` 前缀。
+
+    字段按字母序输出，保证同样的内容永远得到同一行——便于 diff 与断言。
+    """
+    parts = ["event=" + _kv(event)]
+    for key in sorted(fields):
+        if fields[key] is None:
+            continue
+        parts.append("%s=%s" % (key, _kv(fields[key])))
+    _emit(tag, " ".join(parts))
+
+
 def write_bytes(path, data, mode=0o644):
     """字节级原子写：备份包里的文件按原样落盘，不经文本编解码。"""
     d = os.path.dirname(path) or "."

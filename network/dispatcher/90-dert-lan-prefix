@@ -65,7 +65,7 @@ lan_prefix() {
 restart_singbox() {
     if systemctl is-active --quiet sing-box.service 2>/dev/null; then
         systemctl try-restart sing-box.service 2>/dev/null \
-            && logger -t dert-lan "$1"
+            && logger -t dert-lan "event=singbox_restart if=$1"
     else
         # 没在跑就不会触发 ExecStartPost，手动刷 nft 表让白名单 v6 目标跟上新前缀
         /usr/local/lib/dert/dns-split-sync 2>/dev/null || true
@@ -105,7 +105,7 @@ fi
 [ "$OLD" = "$NEW" ] && exit 0
 
 printf '%s\n' "$NEW" > "$REC"
-logger -t dert-lan "LAN IPv6 前缀变更：$OLD -> $NEW"
+logger -t dert-lan "event=prefix_change old=$OLD new=$NEW"
 
 # ① 清旧前缀路由：只删 br-lan 上带 expires（RA/地址派生）且不在当前前缀集合里的，
 #    静态路由（无 expires）一律不碰
@@ -113,7 +113,7 @@ for r in $(ip -6 route show dev br-lan 2>/dev/null \
            | awk '/expires/ && $1 ~ /:/ {print $1}'); do
     case " $NEW " in *" $r "*) continue ;; esac
     ip -6 route del "$r" dev br-lan 2>/dev/null \
-        && logger -t dert-lan "已清理旧前缀路由 $r"
+        && logger -t dert-lan "event=stale_route_removed route=$r"
 done
 
 # ② 前缀变了，先重新生成 DNS 分流配置。

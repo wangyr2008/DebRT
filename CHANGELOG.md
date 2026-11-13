@@ -7,6 +7,38 @@
 
 ## [Unreleased]
 
+## [0.1.95] - 2026-11-13
+
+> 工业化重构 **P4-2**：关键事件结构化日志。
+
+### Changed
+
+- 所有事件日志统一成 **`event=<snake_case> key=value …`**，前缀仍是
+  `dert-<域>`。Python 侧新增 `privlib.log_event(tag, event, **fields)`
+  （字段按字母序、值含空格/中文自动加引号、换行替换成空格），bash 侧手写同格式。
+
+  为什么值得改：原来全是自由文本（`"DNS 分流表已重建：白名单 3 台"`），
+  想回答"最近 24 小时重建了几次分流表""哪些生成物被清理过"只能拿正则猜中文，
+  标点一改就猜不到。现在：
+
+  ```sh
+  journalctl -t dert-dns-split --since -24h | grep -c 'event=table_rebuilt'
+  journalctl -t dert-upgrade  --since -7d  | grep 'event=sig_reject'
+  ```
+
+  改动覆盖 9 个文件、16 个日志点：`applyops`（清理/ifupdown）、`upgradeops`
+  （验签通过/拒绝/无签名/selftest/收敛）、`netwatch`、`dns-split-sync`、
+  `dns-split-teardown`、`pppoe-watchdog`、`singbox-cleanup`、
+  `90-dert-lan-prefix`。
+
+### Added
+
+- 守卫 **P3-35**：任何 `logger -t dert-*` 行必须带 `event=`，自由文本不许回潮。
+- `tests/test_lib_functions.py::LogEvent`（6 个用例）：字段序稳定、含空格加引号、
+  换行不能漏进日志、空值/None、数字不加引号。
+- `CONTRIBUTING.md` 新增「日志约定」：格式、三条硬规则、聚合示例。
+
+
 ## [0.1.94] - 2026-11-13
 
 > 修 CI：`upgradeops` 的暂存目录没走测试缝，本地绿、CI 红。

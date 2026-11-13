@@ -73,9 +73,9 @@ def _read(path):
         return ""
 
 
-def _log(msg):
-    """写 journald（与 bash 的 `logger -t dert-apply` 等价）。"""
-    _sh(["logger", "-t", "dert-apply", msg], timeout=10)
+def _log(event, **fields):
+    """结构化事件日志（格式见 privlib.log_event）。"""
+    privlib.log_event("apply", event, **fields)
 
 
 def mark_converge_failed():
@@ -145,7 +145,7 @@ def cleanup_stale(man_path):
     """按 manifest 对账删陈旧生成物（逻辑在 cleanup.py，这里只记日志）。"""
     script = os.path.join(LIB, "cleanup.py")
     if not os.path.isfile(script):
-        _log("清理脚本缺失，跳过陈旧文件清理：%s" % script)
+        _log("cleanup_skipped", reason="script_missing", path=script)
         return
     cmd = [sys.executable, script, man_path, "--apply"]
     if ROOT != "/":
@@ -155,7 +155,7 @@ def cleanup_stale(man_path):
         return
     for line in (r.stdout or "").split("\n"):
         if line.strip():
-            _log("已清理陈旧的生成文件：%s" % line.strip())
+            _log("cleanup", path=line.strip())
 
 
 def preflight(stage):
@@ -208,7 +208,7 @@ def cleanup_ifupdown():
     if out != lines:
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(out))
-        _log("ifupdown: removed stale config for managed ports")
+        _log("ifupdown_cleanup", ports=len(names))
     _sh(["pkill", "-x", "dhcpcd"], timeout=10)
 
 

@@ -167,6 +167,50 @@ class PlanForSection(unittest.TestCase):
         self.assertNotIn("cake", self.c.plan_for_section("ipv6"))
 
 
+class LogEvent(unittest.TestCase):
+    """结构化事件日志（v0.1.95 / P4-2）。
+
+    格式不统一就没法聚合——"最近 24h 签名失败几次"只能靠正则猜中文。
+    这里锁三件事：字段序稳定、值该加引号时加引号、换行不能漏进日志。
+    """
+
+    def setUp(self):
+        self.td = tempfile.mkdtemp(prefix="dert-log-")
+        self.addCleanup(lambda: shutil.rmtree(self.td, True))
+        self.addCleanup(lambda: os.environ.pop("DERT_FSROOT", None))
+        self.p = load(self.td, "privlib")
+        self.got = []
+        self.p._emit = lambda tag, line: self.got.append((tag, line))
+
+    def test_plain_values_and_tag_prefix(self):
+        self.p.log_event("apply", "cleanup", path="/etc/dnsmasq.d/dert.conf")
+        self.assertEqual(self.got, [
+            ("apply", "event=cleanup path=/etc/dnsmasq.d/dert.conf")])
+
+    def test_fields_are_sorted(self):
+        self.p.log_event("apply", "x", b="2", a="1", c="3")
+        self.assertEqual(self.got[0][1], "event=x a=1 b=2 c=3")
+
+    def test_value_with_space_is_quoted(self):
+        self.p.log_event("upgrade", "sig_reject", pkg="/tmp/a b.tar.gz")
+        self.assertEqual(self.got[0][1], 'event=sig_reject pkg="/tmp/a b.tar.gz"')
+
+    def test_newline_cannot_break_one_line_format(self):
+        # 值来自文件内容/报错输出，可能带换行——漏进去会破坏"一行一事件"
+        self.p.log_event("apply", "x", msg="第一行\n第二行")
+        line = self.got[0][1]
+        self.assertNotIn("\n", line)
+        self.assertIn("第一行 第二行", line)
+
+    def test_empty_and_none(self):
+        self.p.log_event("apply", "x", empty="", skip=None)
+        self.assertEqual(self.got[0][1], 'event=x empty=""')
+
+    def test_number_rendered_without_quotes(self):
+        self.p.log_event("apply", "cleanup", ports=3)
+        self.assertEqual(self.got[0][1], "event=cleanup ports=3")
+
+
 class JsonProtocol(unittest.TestCase):
     """面板靠这两个函数的输出通信，字段少一个就白屏。"""
 

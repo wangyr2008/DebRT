@@ -39,7 +39,7 @@ SYNC=/usr/local/lib/dert/dns-split-sync
 WATCHDOG=/usr/local/lib/dert/pppoe-watchdog
 MISS_FLAG=/run/dert/pppoe-watchdog-miss
 
-log() { logger -t dert-netwatch "$*" 2>/dev/null || true; }
+log_event() { local e="$1"; shift; logger -t dert-netwatch "event=$e $*" 2>/dev/null || true; }
 
 # 是否 PPPoE 上网（只有 PPPoE 才有 ppp0 可看）
 is_pppoe() {
@@ -114,7 +114,7 @@ reconcile() {
     # ② 分流表存在、但目标还是旧地址 → 重建。
     #    sing-box 的 ExecStartPost 建表时地址可能还没就绪，靠这里补。
     if dns_table_stale; then
-        log "DNS 分流表目标与 br-lan 当前地址不符，重建"
+        log_event dns_table_rebuild reason=addr_mismatch
         "$SYNC" >/dev/null 2>&1 || true
     fi
 
@@ -129,7 +129,7 @@ reconcile() {
     #    也不会像 1 分钟 timer 那样每天空转 1440 次。
     if is_pppoe && ! ip link show ppp0 >/dev/null 2>&1; then
         if [ ! -f "$MISS_FLAG" ]; then
-            log "ppp0 消失，标记缺失并安排 180s 后复查"
+            log_event ppp0_missing action=mark recheck_after_s=180
             "$WATCHDOG" >/dev/null 2>&1 || true
             systemd-run --on-active=180s --collect "$WATCHDOG" >/dev/null 2>&1 || true
         fi
@@ -149,5 +149,5 @@ ip monitor address link 2>/dev/null | while read -r line; do
 done
 
 # ip monitor 退出（网络栈异常 / 被 kill）→ 交给 systemd Restart=always 拉起
-log "ip monitor 退出，等待 systemd 重启"
+log_event ipmonitor_exit action=await_restart
 exit 1

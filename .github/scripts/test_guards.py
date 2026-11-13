@@ -5,6 +5,7 @@
 3) IPv6 矩阵：WAN 模式 × IPv6 模式的可用/拒绝组合（A-01/A-02/N-02 类回归）
 4) PPPoE IPv6：光猫桥接 + 拨号场景（IA_NA/IA_PD 经 networkd DHCPv6 客户端获取）
 """
+import glob
 import os
 import re
 import sys
@@ -468,6 +469,26 @@ assert _unit_bad("dert-panel.service", "ProtectSystem=") == [], \
     "P3-34 回归：面板加了 ProtectSystem（升级要写 /usr/local/lib/dert，会必失败）"
 assert _unit_bad("dert-panel.service", "NoNewPrivileges=") == [], \
     "P3-34 回归：面板加了 NoNewPrivileges（会废掉 setuid sudo）"
+
+# P3-35：事件日志必须是结构化格式（v0.1.95 / P4-2）
+# 统一成 `event=<snake_case> k=v …` 才能聚合（"最近 24h 签名失败几次"）。
+# 自由文本一旦混回来，grep 就只能靠中文标点猜。
+_log_bad = []
+for _p in ([os.path.join(ROOT, "install.sh"), os.path.join(ROOT, "uninstall.sh")]
+           + glob.glob(os.path.join(ROOT, "priv", "*"))
+           + glob.glob(os.path.join(ROOT, "network", "**", "*"), recursive=True)):
+    if not os.path.isfile(_p):
+        continue
+    try:
+        _lines = open(_p, encoding="utf-8").read().split("\n")
+    except (OSError, UnicodeDecodeError):
+        continue
+    for _i, _l in enumerate(_lines, 1):
+        if _l.strip().startswith("#") or "logger -t dert-" not in _l:
+            continue
+        if "event=" not in _l:
+            _log_bad.append("%s:%d" % (os.path.relpath(_p, ROOT), _i))
+assert _log_bad == [], "P3-35 回归：这些日志点没走结构化格式：%s" % _log_bad
 
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
 # 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"

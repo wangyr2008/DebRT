@@ -75,7 +75,7 @@ PYEOF
 # 但没有 fakeip 就反查不出域名，只能靠 IP 规则——属退化组合，保持现状不特殊处理。
 if [ -z "$WLS" ]; then
     nft delete table inet dert_dns 2>/dev/null
-    logger -t dert-dns-split "include_mac_address 为空，不建分流表（DNS 全部走 dnsmasq）"
+    logger -t dert-dns-split "event=table_skipped reason=no_whitelist fallback=dnsmasq"
     exit 0
 fi
 
@@ -168,11 +168,11 @@ EOF
 then
     # 建表失败：删掉可能的残留，让所有 DNS 回落到 dnsmasq（安全方向）
     nft delete table inet dert_dns 2>/dev/null
-    logger -t dert-dns-split "建表失败，已回落 dnsmasq"
+    logger -t dert-dns-split "event=table_build_failed fallback=dnsmasq"
     exit 0
 fi
 
 # 用 awk 数字段：tr | wc -l 数的是换行符，最后一项没有换行会少算一台（真机首测踩到）
 COUNT=$(printf '%s' "$WLS" | awk -F, '{print NF}')
-logger -t dert-dns-split "DNS 分流表已重建：白名单 $COUNT 台"
+logger -t dert-dns-split "event=table_rebuilt whitelist=$COUNT"
 exit 0

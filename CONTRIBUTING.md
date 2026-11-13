@@ -112,6 +112,38 @@ ip netns exec t1 dig +short github.com @192.168.10.1
 ip netns del t1 && ip link del t1h                   # 用完清理
 ```
 
+## 日志约定
+
+所有事件日志统一成**一行一个 key=value**，前缀固定：
+
+```
+event=<snake_case> key=value … [msg="人类可读说明"]
+```
+
+```sh
+# bash
+logger -t dert-dns-split "event=table_rebuilt whitelist=3"
+# python
+privlib.log_event("apply", "cleanup", path="/etc/dnsmasq.d/dert.conf")
+```
+
+为什么要这么死板：原来全是自由文本（`"DNS 分流表已重建：白名单 3 台"`），
+想知道"最近 24 小时重建了几次分流表""哪些生成物被清理过"，只能拿正则猜中文，
+标点一改就猜不到。固定字段之后：
+
+```sh
+journalctl -t dert-dns-split --since -24h | grep -c 'event=table_rebuilt'
+journalctl -t dert-upgrade --since -7d  | grep 'event=sig_reject'
+```
+
+三条硬规则（守卫 **P3-35** 会检查）：
+
+1. `logger -t dert-*` 那一行必须带 `event=`；
+2. 事件名用小写下划线（`sig_ok` / `ppp0_missing`），不要写成句子；
+3. 值里不能有换行——Python 侧 `log_event` 会替换成空格，bash 侧由调用方保证。
+
+人类可读的那句话别丢，放 `msg=` 里。
+
 ## 发版
 
 `release.yml` 由 **tag** 触发（`on: push: tags: ["v*"]`），所以推送方式很关键：

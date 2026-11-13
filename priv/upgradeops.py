@@ -61,8 +61,9 @@ def _sh(cmd, timeout=60, **kw):
         return None
 
 
-def _log(msg):
-    _sh(["logger", "-t", "dert-upgrade", msg], timeout=10)
+def _log(event, **fields):
+    """结构化事件日志（格式见 privlib.log_event）。"""
+    privlib.log_event("upgrade", event, **fields)
 
 
 def _cfg():
@@ -280,17 +281,17 @@ def _verify_signature(pkg):
         r = _sh(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", pub, "-rawin",
                  "-in", pkg, "-sigfile", pkg + ".sig"], timeout=60)
         if r is None or r.returncode != 0:
-            _log("签名校验失败，拒绝安装：%s" % pkg)
+            _log("sig_reject", pkg=pkg)
             die("UPG_SIG", "升级包签名校验失败",
                 "包可能被篡改，或不是用 DebRT 官方密钥签发的；已拒绝安装（未做任何改动）")
-        _log("签名校验通过：%s" % pkg)
+        _log("sig_ok", pkg=pkg)
         return "已验签"
     # 没带签名：默认只警告（存量发布尚无签名，一刀切会锁死升级通道）
     need = bool((_cfg().get("upgrade") or {}).get("require_signature"))
     if need:
         die("UPG_SIG", "升级源未提供签名，已拒绝",
             "当前配置要求必须验签（upgrade.require_signature=true）；请使用带 .sig 的官方发布")
-    _log("升级包未带签名，仅做 sha256 校验（可通过 upgrade.require_signature 强制要求）：%s" % pkg)
+    _log("sig_absent", pkg=pkg, policy="warn")
     return "未签名"
 
 
@@ -612,7 +613,7 @@ def apply(pkg):
     except OSError:
         pass
     if r is None or r.returncode != 0:
-        _log("selftest 有失败项，详见 /var/log/dert-upgrade-selftest.log")
+        _log("selftest_failed", log=_fs("/var/log/dert-upgrade-selftest.log"))
 
     # 升级后立即收敛：生成物是 netgen 的产物，等最长 6h 的 timer 才重生成，
     # 期间旧键/旧语法还在跑（真机实录：v0.1.44 升级后 IPv6"升级了也没修好"）
@@ -627,9 +628,9 @@ def apply(pkg):
             with open(_fs("/var/log/dert-upgrade-selftest.log"), "a", encoding="utf-8") as f:
                 f.write((r.stdout or "") + (r.stderr or ""))
             if r.returncode != 0:
-                _log("升级后收敛有报错，详见 /var/log/dert-upgrade-selftest.log")
+                _log("converge_failed", log=_fs("/var/log/dert-upgrade-selftest.log"))
         except Exception:
-            _log("升级后收敛未能执行，详见 /var/log/dert-upgrade-selftest.log")
+            _log("converge_error", log=_fs("/var/log/dert-upgrade-selftest.log"))
 
     # 5) 延迟重启（先让本次响应送达客户端）
     _sh(["systemctl", "daemon-reload"], timeout=60)
