@@ -415,7 +415,9 @@ for _mk, _label in (
     _mk(_c)
     _schema_fail(_c, _label)
 # 收敛路径必须保留生成器 stderr（否则只剩"配置生成失败"，hint 里的"上方错误信息"是空的）
-assert "netgen.err" in _priv_src, "P3-12 回归：收敛路径又丢弃了 netgen 的 stderr"
+# v0.1.87：收敛流水线搬到 priv/applyops.py，断言跟着搬家
+_ap_src = open(os.path.join(ROOT, "priv", "applyops.py"), encoding="utf-8").read()
+assert "netgen.err" in _ap_src, "P3-12 回归：收敛路径又丢弃了 netgen 的 stderr"
 # 备份恢复必须落盘前做结构预检（只校验 json.load 会把坏配置装进系统）
 # v0.1.86：实现搬到 priv/backupops.py，断言跟着搬家；另加一条顺序断言——
 # 预检必须排在部署之前，否则"拦住了但已经写进去了"同样算失败
@@ -424,20 +426,12 @@ assert '"--schema", "--config"' in _bk_src, "P3-12 回归：备份恢复缺结�
 _restore_body = _bk_src.split("def backup_restore", 1)[1].split("\ndef ", 1)[0]
 assert _restore_body.index("_schema_ok") < _restore_body.index("_deploy_tree(stage)"), \
     "P3-12 回归：备份恢复的结构预检被挪到落盘之后（拦住了也已经写进去了）"
-# P3-12b：两处 preflight 失败分支（config-set / apply-all）都必须把 pf_out
-# （nft -c / dnsmasq --test 的具体报错）透传出去，否则用户只看到"无法生成合法的系统配置"
-_pf = re.findall(r'if ! pf_out="\$\(preflight_stage "\$stage"\)"; then(.*?)\n  fi\n', _priv_src, re.S)
-assert _pf and all("printf" in g for g in _pf), "P3-12b 回归：预检失败又吞掉了具体原因"
-
-# P3-13：收敛"无漂移"分支必须清理 stage——它在全量路径的 rm -rf 之前就 exit 0，
-# 漏了就是每次开机 / 6h 收敛 / 每次升级在 /run/dert 留一份完整生成物，其中
-# etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 开机后实测到 stage.XXXXXX）
-# 注意：必须按"整行命令"匹配——块里的注释也提到过这条命令，子串匹配会假绿
-# （本守卫第一版就是这么写错的，变异测试当场抓到）
-_nodrift = re.search(r'if \[ "\$drift" = "0" \]; then(.*?)\n    fi\n', _priv_src, re.S)
-assert _nodrift, "P3-13 回归：找不到无漂移分支（源码结构变了？）"
-assert re.search(r'^ +rm -rf "\$stage" *$', _nodrift.group(1), re.M), \
-    "P3-13 回归：无漂移分支未清理 stage（每次收敛泄漏一份含凭据的生成物）"
+# P3-12b / P3-13（v0.1.87 起改为行为断言，见 tests/test_applyops.py）：
+#   test_preflight_failure_passthrough —— 预检失败必须原样透传 nft/dnsmasq 的报错
+#   test_no_drift_skips_restarts_and_cleans_stage —— 无漂移分支必须删 stage、
+#   且不得重启 networkd/dnsmasq
+# 这两条原来是对 bash 源码做正则匹配（还踩过"注释里提到命令导致假绿"的坑）。
+# 搬到 Python 后可以直接把流水线跑一遍再断言副作用，比看源码文本可靠。
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
 # 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"
 _dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-dert-restart.conf"),
@@ -728,10 +722,15 @@ assert "cleanup_stale_generated" in _lib_src, \
 assert 'cleanup.py" "$man" --apply' in _lib_src, \
     "P3-28 回归：清理没有调用 cleanup.py --apply"
 
-_cl_dp = [l for l in open(os.path.join(ROOT, "priv", "dert-priv"),
-                          encoding="utf-8").read().split("\n")
-          if not l.strip().startswith("#")]
-assert sum(1 for l in _cl_dp if "cleanup_stale_generated" in l) == 3, \
+# 三个调用点：config-set 正常路径 / 回滚路径（都在 dert-priv）+ apply-all
+# （v0.1.87 起 apply-all 搬到 priv/applyops.py，所以按两个文件一起数）
+def _calls(path, name):
+    return sum(1 for l in open(path, encoding="utf-8").read().split("\n")
+               if not l.strip().startswith("#") and name in l)
+
+
+assert _calls(os.path.join(ROOT, "priv", "dert-priv"), "cleanup_stale_generated") \
+    + _calls(os.path.join(ROOT, "priv", "applyops.py"), "cleanup_stale(man)") == 3, \
     "P3-28 回归：清理调用点不是 3 处（config-set 正常路径 / 回滚路径 / apply-all）"
 
 assert os.path.isfile(os.path.join(ROOT, "priv", "cleanup.py")), \

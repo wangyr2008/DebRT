@@ -7,6 +7,51 @@
 
 ## [Unreleased]
 
+## [0.1.87] - 2026-11-13
+
+> 工业化重构 **P2-7**：系统收敛流水线（apply-all）抽成独立模块。
+> 这是**开机路径**——`dert-apply.service` 每次启动跑一遍，`dert-converge.timer`
+> 每 6 小时跑一遍，config-set / 备份恢复 / 升级后也各跑一遍。所以这一版的原则
+> 是逐条对齐，不是顺手优化。
+
+### Changed
+
+- **`priv/applyops.py`（约 420 行）**：生成 → 漂移判定 → 预检 → 部署 → 清理 →
+  重启 → 复检的完整流水线，连带 `run_actions` / `svc_*` / `preflight` /
+  `cleanup_ifupdown` / `sync_dns_upstream` / `maintain_singbox_dropin`。
+  `dert-priv` 从 **913 行降到 809 行**（−104）。
+
+  逐条保留的规则（每条都对应一次真机事故）：
+  - 生成器 stderr 留档（`netgen.err`）：结构损坏时 manifest 是空的，没 stderr
+    就只剩"配置生成失败"和一句指向空白的 hint
+  - **无漂移分支绝不重启 networkd/dnsmasq**：开机全量重启会让 LAN 客户端闪断
+  - **无漂移分支必须删 stage**：漏了就在 `/run/dert` 留一份完整生成物，
+    其中 `etc/ppp/chap-secrets` 是明文宽带密码（真机 2026-11-09 实测）
+  - **无漂移分支不能 start dnsmasq**：收敛单元 `Before=dnsmasq`，同步 start 会与
+    排序中的启动任务互相等待形成死锁（真机实测）
+  - 预检失败透传 `nft -c` / `dnsmasq --test` 原文
+  - 存量 `/26` 掩码自动迁回 `/24` 后重试，迁移前留快照
+  - 锁与 root 检查留在 bash 入口：`exec` 后子进程继承 fd，`_DERT_LOCK_HELD`
+    让嵌套调用跳过重取，锁语义与拆分前完全一致
+
+- **`priv/netgen.py` 支持 `DERT_FSROOT`**：数据路径跟随测试缝（未设时逐字符等价）。
+  有了它，"生成 → 预检 → 部署"整条流水线能在临时根里真跑，不必把 CONFIG_PATH
+  打桩（打桩就绕过了真实入口的 schema_check）。
+
+### Added
+
+- `tests/test_applyops.py`（17 个用例）：临时根 + 假 `systemctl`/`nft`/`dnsmasq`，
+  真跑 netgen 与 cleanup，覆盖预检两种失败、部署 mode、ifupdown 残留清理、
+  动作顺序与失败归集、PPPoE 启停、全量部署、生成失败打标记、预检透传、
+  `/26` 迁移、无漂移（断言**没有**重启 networkd/dnsmasq 且 stage 已删）、
+  有漂移触发全量。
+
+### Changed（守卫）
+
+- P3-12b / P3-13 两条"对 bash 源码做正则"的断言**行为化**：直接跑流水线再断言
+  副作用。字符串断言棘轮 134 → 132。
+
+
 ## [0.1.86] - 2026-11-13
 
 > 工业化重构 **P2-6**：备份 / 恢复 / 恢复出厂抽成独立模块。

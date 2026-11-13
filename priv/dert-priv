@@ -272,117 +272,13 @@ PYEOF
 # 幂等收敛（开机 / 定时）
 # ---------------------------------------------------------------------------
 do_apply_all() {
+  # v0.1.87（P2-7）：实现搬到 priv/applyops.py
+  # 锁与 root 检查留在 bash 侧：exec 之后子进程继承 fd，_DERT_LOCK_HELD 让
+  # 嵌套调用（backup-restore 等）跳过重取，锁语义与拆分前完全一致。
   require_root
-  local convergent=""; [ "${1:-}" = "--convergent" ] && convergent="1"
   mkdir -p "${FSROOT}/run/dert-dns" "${DERT_RUN}"
   acquire_lock
-  local stage man_json migrated=""
-  stage="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
-  man_json="$stage/manifest.json"
-  if ! python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
-    # P3-12：生成器的 stderr 不再丢弃——结构损坏（KeyError / AddressValueError）时
-    # man_json 是空的，此前只剩"配置生成失败"+"请按上方错误信息修正"，而上方什么都没有
-    local gen_err=""
-    [ -s "$stage/netgen.err" ] && gen_err="$(tail -n 2 "$stage/netgen.err" | tr '\n' ' ' | cut -c1-240)"
-    # 存量不兼容配置的自动纠正（四审 M-01/M-02/M-03）：
-    #   LAN_MASK_TOO_WIDE → 掩码迁回 /24（保留 IP 与地址池）
-    # 注：原先还有一条 "V6_NATIVE_PPPPOE_UNSUPPORTED → 改 NAT6" 的迁移，v0.1.41 起
-    # PPPoE 已真支持 IPv6（ppp0 上跑 DHCPv6 客户端），该错误码不再产生，迁移已删除
-    # ——留着会让后来者误以为"PPPoE 只能用 NAT6"，与现行规则相反。
-    # 迁移成功则重试一次生成；任何其他失败原样透传错误并中止（保证不部署半套配置）。
-    if grep -qE 'LAN_MASK_TOO_WIDE' "$man_json" 2>/dev/null; then
-      snapshot_lastgood "m$(date +%s)"
-      MIGFIX="$(python3 - <<'INNERPYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json, os
-cfg = json.load(open(E + "/config.json"))
-fixes = []
-if cfg.get("lan", {}).get("mask") != "255.255.255.0":
-    cfg["lan"]["mask"] = "255.255.255.0"
-    fixes.append("LAN 掩码迁移为 /24")
-json.dump(cfg, open(E + "/.config.tmp", "w"), ensure_ascii=False, indent=1)
-os.replace(E + "/.config.tmp", E + "/config.json")
-print("；".join(fixes))
-INNERPYEOF
-)"
-      if [ -n "$MIGFIX" ]; then
-        migrated="已自动修正不兼容的存量配置（$MIGFIX）"
-        rm -rf "$stage"
-        stage="$(mktemp -d ${DERT_RUN}/stage.XXXXXX)"
-        man_json="$stage/manifest.json"
-        if python3 "${PRIV_DIR}/netgen.py" --stage "$stage" > "$man_json" 2>"$stage/netgen.err"; then
-          # 迁移成功：继续正常流程（跳过下方 die）
-          :
-        else
-          cat "$man_json" 2>/dev/null
-          local gen_err2=""
-          [ -s "$stage/netgen.err" ] && gen_err2="$(tail -n 2 "$stage/netgen.err" | tr '\n' ' ' | cut -c1-240)"
-          mark_converge_failed
-          rm -rf "$stage"
-          die "CONFIG_CORRUPT" "自动迁移后仍无法生成配置" "请按上方错误信息在管理页面修正${gen_err2:+。生成器输出：$gen_err2}"
-        fi
-      fi
-    fi
-    if [ -z "$migrated" ]; then
-      cat "$man_json" 2>/dev/null   # 透传 netgen 的可操作错误（复审 R-03）
-      mark_converge_failed
-      rm -rf "$stage"
-      die "CONFIG_CORRUPT" "配置生成失败" "请按上方错误信息在管理页面修正；或从 /var/lib/dert/lastgood 恢复上一份可用配置${gen_err:+。生成器输出：$gen_err}"
-    fi
-  fi
-
-  if [ -n "$convergent" ]; then
-    # 收敛模式：无漂移则只保证运行时状态（nft 表 / cake / 服务存活）
-    local drift=0 line rel mode
-    while IFS=$'\t' read -r rel mode; do
-      [ -f "/${rel}" ] || { drift=1; break; }
-      cmp -s "/${rel}" "${stage}/${rel}" || { drift=1; break; }
-    done < <(python3 - "$man_json" <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json, sys
-for f in json.load(open(sys.argv[1]))["files"]:
-    print(f"{f['path']}\t{f['mode']:04o}")
-PYEOF
-)
-    if [ "$drift" = "0" ]; then
-      # 无漂移：nft 规则不跨重启，缺表则只重建防火墙+QoS；绝不重启 networkd/dnsmasq
-      # （开机全量重启会让 LAN 客户端闪断——真机实测），dnsmasq 稍后带着有效配置自行启动
-      nft list table $NFT_TABLE >/dev/null 2>&1 || svc_nft
-      svc_cake
-      cleanup_ifupdown_for_ports
-      sync_dns_upstream
-      # 注意：收敛单元 Before=dnsmasq，此处同步 start dnsmasq 会与排序中的启动任务
-      # 互相等待形成死锁（真机实测）——崩溃恢复由 dnsmasq 的 Restart=on-failure 负责
-      maintain_singbox_dropin
-      clear_converge_failed
-      # 暂存目录必须清：这里是"无漂移"的提前返回，早于下方全量路径的清理语句。
-      # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/dert 留一份完整生成物，
-      # 其中 etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 实测：开机后
-      # /run/dert/stage.XXXXXX 里躺着 chap-secrets/pap-secrets，重启才清）
-      rm -rf "$stage"
-      ok_out "message" "无漂移，运行时已确认" "converged" "true"
-      exit 0
-    fi
-  fi
-
-  if ! pf_out="$(preflight_stage "$stage")"; then
-      mark_converge_failed
-      rm -rf "$stage"
-      # 透传预检的具体原因（nft -c / dnsmasq --test 的报错行）——此前 pf_out 被直接丢弃，
-      # 用户只看到"现有配置无法生成合法的系统配置"，无从下手（与 P3-12 同一类：错误详情被吞）
-      if [ -n "$pf_out" ]; then printf '%s\n' "$pf_out"; exit 1; fi
-      die "STAGE_BROKEN" "现有配置无法生成合法的系统配置" "请在管理页面检查网络设置；或恢复出厂设置"
-  fi
-  apply_stage_files "$stage" "$man_json"
-  cleanup_stale_generated "$man_json"
-  cleanup_ifupdown_for_ports
-  rm -rf "$stage"
-  run_actions "networkd pppoe dnsmasq nft cake" >/dev/null 2>&1 || true
-  wait_dnsmasq 15 || true
-  sync_dns_upstream
-  maintain_singbox_dropin
-  clear_converge_failed
-  ok_out "message" "已按配置完成系统收敛${migrated:+。}$migrated"
+  exec python3 "${PRIV_DIR}/applyops.py" "${1:-}"
 }
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,11 @@ GUARDS = os.path.join(ROOT, ".github", "scripts", "test_guards.py")
 # 这是部署通道的架构约束（改成逐个列举就会漏装新模块），没有不跑安装脚本的
 # 行为测试办法。同批还加了"dert-priv 引用的 priv 文件必须存在"的结构检查
 # （那条不走字符串断言，不计入）。
-STRING_ASSERT_BUDGET = 134
+# v0.1.87：134 → 133（只降不升）。apply-all 搬进 applyops.py 时，P3-12b / P3-13
+# 两条"对 bash 源码做正则"的断言被**行为化**了：现在直接跑一遍收敛流水线，
+# 断言"预检报错原样透传""无漂移分支删了 stage 且没重启 networkd/dnsmasq"。
+# 这比看源码文本可靠——那两条原本就踩过"注释里提到命令导致假绿"的坑。
+STRING_ASSERT_BUDGET = 132
 
 
 def count():

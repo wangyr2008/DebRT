@@ -14,8 +14,12 @@ import os
 import re
 import sys
 
-CONFIG_PATH = "/etc/dert/config.json"
-SECRETS_PATH = "/etc/dert/secrets.json"
+# 数据路径跟随 DERT_FSROOT 测试缝（v0.1.87）：未设时与生产路径逐字符相同。
+# 加这个是为了让"生成 → 预检 → 部署"整条流水线能在临时根里真跑一遍，
+# 而不是只能把 CONFIG_PATH 打桩（打桩就绕过了真实入口的 schema_check）。
+_FS = os.environ.get("DERT_FSROOT", "")
+CONFIG_PATH = _FS + "/etc/dert/config.json"
+SECRETS_PATH = _FS + "/etc/dert/secrets.json"
 ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
