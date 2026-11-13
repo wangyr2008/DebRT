@@ -7,6 +7,33 @@
 
 ## [Unreleased]
 
+## [0.1.100] - 2026-11-13
+
+> 复查遗留项 2、3：漂移判定补上权限；恢复/出厂失败会回滚。
+
+### Fixed
+
+- **漂移判定只看内容，不看权限**。`apply-all --convergent` 逐文件 `cmp` 内容，
+  权限被改坏（比如 `chap-secrets` 从 600 变 644——那是明文宽带密码）会一直报
+  "无漂移"，永远不修。现在同时比 `st_mode & 0o777`，不一致就按漂移走全量部署
+  （部署本身会 `chmod` 回清单里的 mode）。
+
+- **`backup-restore` / `factory-reset` 收敛失败时不回滚**。配置已经换成备份里
+  那份（或出厂默认），但没生效——下次开机会拿它去收敛，设备停在半坏状态。
+  现在失败会：退回快照 → 重新生成并部署 → 重启受影响服务；仍失败才报
+  `APPLY_FAIL` 并指向 `lastgood`。
+
+  报错格式也修了：原来把 apply-all 的 JSON 原样 `print` 出去，与自己的错误
+  JSON 叠成两行，面板 `json.loads` 会直接失败（`PRIV_MALFORMED`）。现在只输出
+  一条 JSON，底层原因（`NETGEN：网口 enp9s0 不存在`）放进 `hint`，信息不丢。
+
+### Added
+
+- `test_mode_drift_triggers_full_deploy`：只改权限也要被判定为漂移并修回。
+- `test_apply_failure_rolls_back` / `test_factory_apply_failure_rolls_back`：
+  收敛失败后配置必须回到操作前，且 `hint` 里带底层错误码。
+
+
 ## [0.1.99] - 2026-11-13
 
 > 复查遗留项 1：`snapshot` / `restore` 三份实现合并到 `privlib`。

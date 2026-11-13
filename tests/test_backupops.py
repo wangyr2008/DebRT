@@ -212,12 +212,23 @@ class RestoreApply(unittest.TestCase):
         with open(self.s.cfg, encoding="utf-8") as f:
             self.assertTrue(json.load(f)["ports"])  # 仍是原来的配置
 
-    def test_apply_failure_propagates(self):
-        self.s.b._apply_all = lambda: (False, '{"ok": false, "code": "NETGEN"}')
-        pkg = self.s.make_pkg({"etc/dert/config.json": json.dumps(support.dhcp_config())})
+    def test_apply_failure_rolls_back(self):
+        """恢复后收敛失败 → 必须回滚到恢复前的配置，并把底层原因带在 hint 里。
+
+        只报错不回滚的话，配置已经换成备份里那份，下次开机会拿它去收敛，
+        设备就停在半坏状态。
+        """
+        with open(self.s.cfg, encoding="utf-8") as f:
+            old_cfg = json.load(f)
+        self.s.b._apply_all = lambda: (False, '{"ok": false, "code": "NETGEN", '
+                                              '"message": "网口 enp9s0 不存在"}')
+        pkg = self.s.make_pkg({"etc/dert/config.json": json.dumps(support.pppoe_config())})
         rc, out = run(self.s.b.backup_restore, pkg)
         self.assertEqual(rc, 1)
-        self.assertEqual(out["code"], "NETGEN")  # 收敛失败的细节要原样透传
+        self.assertEqual(out["code"], "APPLY_ROLLED_BACK")
+        self.assertIn("NETGEN", out["hint"])          # 底层原因不丢
+        with open(self.s.cfg, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["wan"]["mode"], old_cfg["wan"]["mode"])
 
 
 class BackupCreate(unittest.TestCase):
@@ -270,6 +281,17 @@ class Factory(unittest.TestCase):
         self.assertNotIn("pppoe_password", sec)
         self.assertIn("passwd_hash", sec)  # 管理密码保留
         self.assertEqual(len(self.s.applied), 1)
+
+    def test_factory_apply_failure_rolls_back(self):
+        self.s.write_cfg(support.dhcp_config())      # 出厂前必须已有一份配置
+        with open(self.s.cfg, encoding="utf-8") as f:
+            old_cfg = json.load(f)
+        self.s.b._apply_all = lambda: (False, '{"ok": false, "code": "STAGE_BROKEN"}')
+        rc, out = run(self.s.b.factory_reset)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out["code"], "APPLY_ROLLED_BACK")
+        with open(self.s.cfg, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["lan"]["ip"], old_cfg["lan"]["ip"])
 
     def test_pre_factory_backup_written(self):
         self.s.write_cfg(support.dhcp_config())

@@ -446,12 +446,18 @@ def apply_all(convergent=False):
         # 也不能因为读不到清单就宣布"无漂移"（那样等于什么都没做还说成功了）。
         drift = files is None
         files = files or []
-        for rel, _mode in files:
+        for rel, mode in files:
             dest = _fs("/" + rel)
             if not os.path.isfile(dest):
                 drift = True
                 break
             try:
+                # 内容与权限都比：只改 chmod 不改内容也是一次漂移。
+                # 以前只比内容，权限被改坏（比如 chap-secrets 从 600 变 644）
+                # 会一直"无漂移"地跑下去——那是明文宽带密码。
+                if (os.stat(dest).st_mode & 0o777) != (mode & 0o777):
+                    drift = True
+                    break
                 with open(dest, "rb") as f1, open(os.path.join(stage, rel), "rb") as f2:
                     if f1.read() != f2.read():
                         drift = True

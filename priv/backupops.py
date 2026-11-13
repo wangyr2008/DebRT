@@ -33,8 +33,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
+import applyops
 import privlib
 from privlib import CONFIG_JSON, RUN, SECRETS_JSON, VAR, die, ok_out
 
@@ -93,6 +95,46 @@ def _extract(stage, src):
                               capture_output=True, timeout=300)
     except Exception:
         return None
+
+
+def _why(out):
+    """从 apply-all 的输出里抠出可读原因（它是 JSON；解析不了就取最后一行）。"""
+    for line in reversed((out or "").strip().split("\n")):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            return ("%s：%s" % (d.get("code", ""), d.get("message", ""))).strip("：")[:240]
+    tail = (out or "").strip().split("\n")
+    return tail[-1][:240] if tail and tail[-1] else ""
+
+
+def _reapply():
+    """用当前 config.json 重新生成并部署（回滚后重放用）。
+
+    失败不抛：调用方已经在报错路径上，再抛只会把真正的原因盖掉。
+    """
+    os.makedirs(RUN, exist_ok=True)
+    stage = tempfile.mkdtemp(prefix="stage.", dir=RUN)
+    man = os.path.join(stage, "manifest.json")
+    ok, _out, _err = applyops.generate(stage)
+    if ok:
+        try:
+            applyops.apply_stage_files(stage, man)
+            applyops.cleanup_stale(man)
+            applyops.run_actions(applyops.ACTIONS)
+        except SystemExit:
+            ok = False
+    shutil.rmtree(stage, ignore_errors=True)
+    return ok
+
+
+def _rollback(tag):
+    """把配置退回快照并重放。返回 True 表示回滚成功。"""
+    if not privlib.restore(tag):
+        return False
+    return _reapply()
 
 
 def _apply_all():
@@ -240,7 +282,8 @@ def backup_restore(src):
         die("BACKUP_BAD", "备份包内含链接条目，已拒绝",
             "为防路径穿越，备份包只允许普通文件与目录")
 
-    _snapshot("r%d" % int(time.time()))
+    tag = "r%d" % int(time.time())
+    _snapshot(tag)
     stage = os.path.join(RUN, "restore." + os.urandom(4).hex())
     os.makedirs(stage, exist_ok=True)
     try:
@@ -278,8 +321,14 @@ def backup_restore(src):
 
     ok, out = _apply_all()
     if not ok:
-        sys.stdout.write(out if out.endswith("\n") else out + "\n")
-        sys.exit(1)
+        # 配置已经换成备份里的那份，但没能生效。只报错不回滚的话，下次开机会
+        # 拿这份"能解析但跑不起来"的配置去收敛，等于把设备留在半坏状态。
+        why = _why(out)
+        if _rollback(tag):
+            die("APPLY_ROLLED_BACK", "从备份恢复后收敛失败，已回滚到恢复前的配置",
+                why or "请检查备份包与当前硬件是否匹配（网口名、WAN 方式）")
+        die("APPLY_FAIL", "从备份恢复后收敛失败，且回滚未成功",
+            why or "请从 /var/lib/dert/lastgood 手工恢复，或重新运行 install.sh")
     ok_out(message="配置已从备份恢复并生效" + ("。" + warn if warn else ""))
 
 
@@ -335,7 +384,8 @@ def _drop_pppoe_password():
 
 def factory_reset():
     privlib.require_root()
-    _snapshot("f%d" % int(time.time()))
+    tag = "f%d" % int(time.time())
+    _snapshot(tag)
     prebak = f"{VAR}/lastgood/pre-factory-{int(time.time())}.tar.gz"
     os.makedirs(os.path.dirname(prebak), exist_ok=True)
     subprocess.run(["tar", "-C", ROOT, "-czf", prebak,
@@ -359,8 +409,14 @@ def factory_reset():
 
     ok, out = _apply_all()
     if not ok:
-        sys.stdout.write(out if out.endswith("\n") else out + "\n")
-        sys.exit(1)
+        # 与备份恢复同理：配置已重置但没生效，必须退回快照并重放，
+        # 否则设备停在"出厂配置 + 没生效"的状态，下次开机才炸。
+        why = _why(out)
+        if _rollback(tag):
+            die("APPLY_ROLLED_BACK", "恢复出厂后收敛失败，已回滚到出厂前的配置",
+                why or "请检查硬件是否满足出厂配置（至少一个可用网口）")
+        die("APPLY_FAIL", "恢复出厂后收敛失败，且回滚未成功",
+            why or "请从 /var/lib/dert/lastgood 手工恢复，或重新运行 install.sh")
     ok_out(message="已恢复出厂设置（LAN %s，DHCP 池 .100–.200）" % DEFAULT_LAN)
 
 

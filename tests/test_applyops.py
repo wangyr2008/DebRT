@@ -333,6 +333,19 @@ class Convergent(unittest.TestCase):
         self.assertFalse([d for d in os.listdir(os.path.join(self.s.td, "run/dert"))
                           if d.startswith("stage.")], "无漂移提前返回前必须删 stage")
 
+    def test_mode_drift_triggers_full_deploy(self):
+        """只改权限不改内容，也算漂移。
+
+        以前只比内容：有人把 chap-secrets 从 600 改成 644（明文宽带密码），
+        收敛会一直报"无漂移"，永远不修。
+        """
+        target = os.path.join(self.s.td, "etc/dnsmasq.d/dert.conf")
+        os.chmod(target, 0o600)
+        rc, out = run(self.s.a.apply_all, convergent=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("已按配置完成系统收敛", out["message"])
+        self.assertEqual(os.stat(target).st_mode & 0o777, 0o644, "权限没有被修回")
+
     def test_drift_triggers_full_deploy(self):
         target = os.path.join(self.s.td, "etc/dnsmasq.d/dert.conf")
         w(target, "# 被改坏了\n")
