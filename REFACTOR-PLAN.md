@@ -15,7 +15,7 @@
 | P0-2 配置删除回收 | ✅ 完成（改为按 manifest 对账） | v0.1.71 |
 | P0-3 补 `set -u` | ✅ 完成（20/20 脚本） | v0.1.73 |
 | P1-2 守卫分层 | ✅ 四阶段完成（含 dert-priv 测试缝） | v0.1.75~79 |
-| P2 结构分层 | 🔄 七域完成（1822→809 行，−56%） | v0.1.80~87 |
+| P2 结构分层 | 🔄 八域完成（dert-priv 1822→617，lib.sh 395→86） | v0.1.80~88 |
 | P3 供应链签名 | ✅ 代码完成（待配 Secret） | v0.1.74 |
 | P4 可观测 | 🔄 health 完成；单元硬化待做 | v0.1.81 |
 
@@ -192,16 +192,17 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 | v0.1.85 | `singbox.py`（405 行，10 个子动作） | 改写 | status 13 字段一致 |
 | v0.1.86 | `backupops.py`（备份/恢复/出厂） | 改写 | 18 个行为用例 + 判定顺序断言 |
 | v0.1.87 | `applyops.py`（收敛流水线 + 运行时动作） | 改写 | 17 个行为用例 + 真机新旧双跑 |
+| v0.1.88 | `configops.py`（config-set）+ lib.sh 瘦身 | 改写 | 14 个行为用例 + 真机保存实测 |
 
 **剩余域**（都是**重写**而非搬迁，且风险递增，建议每个单独一版 + 双跑验证）：
 | 域 | 行数 | 形态 | 风险 |
 |---|---|---|---|
-| `config`（config_set/get） | 222 | bash 事务流水线 + 内联 Python | 高（写配置） |
 | `upgrade`（check/download/apply） | 366 | bash + 内联 Python | **最高**（升级通道） |
 
 已完成域：`status` / `selftest`（v0.1.80）、`container`（v0.1.82）、
 `auth`（v0.1.83）、`backupcheck`（v0.1.84）、`singbox`（v0.1.85）、
-`backup` / `factory`（v0.1.86）、`apply_all` + 运行时动作（v0.1.87）。
+`backup` / `factory`（v0.1.86）、`apply_all` + 运行时动作（v0.1.87）、
+`config_set` + `lib.sh` 瘦身（v0.1.88）。
 
 **为什么没一次做完**：上面每一个都是"把 bash 编排改写成 Python 编排"，
 不是移动代码。改写会引入新 bug，而验收手段只有真机双跑——一次改太多，

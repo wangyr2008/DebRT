@@ -7,6 +7,52 @@
 
 ## [Unreleased]
 
+## [0.1.88] - 2026-11-13
+
+> 工业化重构 **P2-8**：配置写入流水线（config-set）抽成独立模块，
+> 并把 `lib.sh` 里已经没人调用的 apply 副本**整段删掉**。
+
+### Changed
+
+- **`priv/configops.py`（约 300 行）**：校验 → 快照 → 合并 → 落盘 → 生成 →
+  预检 → 部署 → 重启 → 验证 → 失败回滚。`dert-priv` 从 **809 行降到 617 行**。
+
+  逐条保留的判断（每条都对应一次事故或一次投诉）：
+  - **先落盘再生成**：netgen 读固定路径，不先写盘就会用上一版配置生成
+    （复审 v0.1.2 P-01：改了不生效，界面却显示保存成功）
+  - **`pre_wan` 在写盘前采样**，语义是"改动前 WAN 是否可用"；`section == wan`
+    时无条件验证（首次配 PPPoE 时 pre_wan=no，恰恰最需要报错）
+  - **PPPoE 只在必要时重拨**：模式变 / 账号变 / 重绑网口 / PPPoE 下改 IPv6 /
+    本次填了新密码。改个 DNS 就断线重连是不可接受的
+  - **失败回滚并重放旧配置**，PPPoE 失败还要从 journald 区分"认证被拒"与
+    "服务器无响应"——这两种的处理动作完全不同
+  - 密码只进 `secrets.json`（不进 config.json、不进 argv）
+
+- **`priv/lib.sh` 395 → 86 行**：只剩「JSON 协议 + root 检查 + 排他锁」。
+  apply 流水线（`apply_stage_files` / `preflight_stage` / `run_actions` / `svc_*` /
+  `wait_wan` / `plan_for_section` / `snapshot_lastgood` / `cleanup_*` 等）在
+  v0.1.87 搬到 Python 后已无调用方，**故意不保留 bash 副本**：同一套判断留两份
+  实现，迟早漂移——本项目就因为"清理条件与生成器各写一遍"出过 LAN→WAN 事故。
+
+- `privlib.write_bytes()`：字节级原子写，`backupops` 与 `configops` 共用。
+
+### Fixed
+
+- **重绑网口后不重拨 PPPoE**（重构时照出来的既有缺陷）。`plan_for_section("bind")`
+  的动作串里没有 `pppoe`，而代码里又有「bind + PPPoE → pppoe_needed」的判断——
+  判了却执行不到。后果：`/etc/ppp/peers/dert` 里的 `nic-<口>` 已按新绑定改写，
+  pppd 仍握旧口（`pppd call dert` 只在启动时读 peer 文件）。已把 `pppoe` 补进
+  bind 的动作串，重拨仍由 `pppoe_needed` 把关，非 PPPoE 模式不会多一次重启。
+
+### Added
+
+- `tests/test_configops.py`（14 个用例）：密码只进 secrets、只改 DNS 不重拨、
+  改账号/模式/重绑要重拨、WAN 不通回滚、firewall 部分提交、升级源只保存不应用、
+  服务失败回滚到修改前配置并留快照。
+- `tests/test_lib_functions.py` 改写：原子写/快照/轮转/动作计划的断言迁到
+  Python 侧（`privlib` / `configops`），bash 侧只留协议与路径测试。
+
+
 ## [0.1.87] - 2026-11-13
 
 > 工业化重构 **P2-7**：系统收敛流水线（apply-all）抽成独立模块。

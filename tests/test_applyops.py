@@ -40,7 +40,7 @@ class Sandbox:
         self.old_fs = os.environ.get("DERT_FSROOT")
         self.old_path = os.environ.get("PATH")
         os.environ["DERT_FSROOT"] = self.td
-        for m in ("applyops", "privlib", "netgen"):
+        for m in ("applyops", "privlib", "netgen", "configops"):
             sys.modules.pop(m, None)
         if support.PRIV not in sys.path:
             sys.path.insert(0, support.PRIV)
@@ -57,7 +57,7 @@ class Sandbox:
                 f.write(FAKE)
             os.chmod(p, 0o755)
         # 真实的生成器与清理器用软链接进来：让整条流水线真跑，而不是打桩
-        for name in ("netgen.py", "cleanup.py"):
+        for name in ("netgen.py", "cleanup.py", "validate.py"):
             os.symlink(os.path.join(support.PRIV, name), os.path.join(self.bindir, name))
         os.environ["PATH"] = self.bindir + ":" + (self.old_path or "")
 
@@ -67,6 +67,11 @@ class Sandbox:
         self.etc = os.path.join(self.td, "etc/dert")
         os.makedirs(self.etc, exist_ok=True)
         self.write_cfg(cfg or support.dhcp_config())
+
+    def write_sec(self, sec):
+        p = os.path.join(self.td, "etc/dert/secrets.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(sec, f)
 
     def write_cfg(self, cfg):
         with open(os.path.join(self.etc, "config.json"), "w", encoding="utf-8") as f:
@@ -97,7 +102,7 @@ class Sandbox:
             os.environ["DERT_FSROOT"] = self.old_fs
         if self.old_path is not None:
             os.environ["PATH"] = self.old_path
-        for m in ("applyops", "privlib", "netgen"):
+        for m in ("applyops", "privlib", "netgen", "configops"):
             sys.modules.pop(m, None)
         shutil.rmtree(self.td, ignore_errors=True)
 

@@ -714,23 +714,26 @@ assert "xargs -0 shellcheck" in _smoke, \
 # 旧实现按配置重算「30-<口>.network 的口名是否还在 ports 里」，但生成器对
 # WAN 口不产出该文件 → 端口从 LAN 改成 WAN 时旧文件不删 → WAN 口被塞进 LAN 桥。
 # 真机 2026-11-12 踩到过。现在改成按 manifest 对账。
+# v0.1.88：清理实现整体搬到 priv/applyops.py，bash 侧不再保留副本
+# （两份实现迟早漂移，而这正是本条守卫当初要防的事）
 _lib_src = open(os.path.join(ROOT, "priv", "lib.sh"), encoding="utf-8").read()
-assert "cleanup_stale_port_networks" not in _lib_src, \
+assert "cleanup_stale_port_networks" not in _lib_src + _ap_src, \
     "P3-28 回归：又出现了按配置重算的清理函数（会漏掉 LAN→WAN 的端口角色变更）"
-assert "cleanup_stale_generated" in _lib_src, \
+assert "cleanup_stale" in _ap_src, \
     "P3-28 回归：陈旧生成物清理不见了（旧 30-*.network 会永久残留）"
-assert 'cleanup.py" "$man" --apply' in _lib_src, \
+assert '"--apply"' in _ap_src, \
     "P3-28 回归：清理没有调用 cleanup.py --apply"
 
-# 三个调用点：config-set 正常路径 / 回滚路径（都在 dert-priv）+ apply-all
-# （v0.1.87 起 apply-all 搬到 priv/applyops.py，所以按两个文件一起数）
+
+# 三个调用点：config-set 正常路径 / 回滚路径（configops.py）+ apply-all（applyops.py）
 def _calls(path, name):
+    """数调用点：排除注释行与 def 定义行（只数真正会执行到的地方）。"""
     return sum(1 for l in open(path, encoding="utf-8").read().split("\n")
-               if not l.strip().startswith("#") and name in l)
+               if not l.strip().startswith(("#", "def ")) and name in l)
 
 
-assert _calls(os.path.join(ROOT, "priv", "dert-priv"), "cleanup_stale_generated") \
-    + _calls(os.path.join(ROOT, "priv", "applyops.py"), "cleanup_stale(man)") == 3, \
+assert _calls(os.path.join(ROOT, "priv", "configops.py"), "cleanup_stale(") \
+    + _calls(os.path.join(ROOT, "priv", "applyops.py"), "cleanup_stale(") == 3, \
     "P3-28 回归：清理调用点不是 3 处（config-set 正常路径 / 回滚路径 / apply-all）"
 
 assert os.path.isfile(os.path.join(ROOT, "priv", "cleanup.py")), \

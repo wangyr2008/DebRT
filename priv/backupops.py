@@ -198,26 +198,6 @@ def _schema_ok(cfg_path):
     return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
 
 
-def _write_bytes(path, data, mode):
-    """字节级原子写（备份里的文件按原样落盘，不经文本编解码）。"""
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = os.path.join(d, ".dert-tmp." + os.urandom(4).hex())
-    try:
-        with open(tmp, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except Exception as e:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        die("IO", "写入失败：%s" % e, "请检查 %s 的权限与磁盘空间" % d)
-
-
 def _deploy_tree(stage):
     """把 stage/etc/dert 下的文件原子落盘；已有文件沿用原 mode，新文件 600。"""
     base = os.path.join(stage, BACKUP_ALLOW_DIR)
@@ -233,7 +213,7 @@ def _deploy_tree(stage):
             except OSError:
                 mode = 0o600
             with open(src, "rb") as f:
-                _write_bytes(dest, f.read(), mode)
+                privlib.write_bytes(dest, f.read(), mode)
 
 
 def _sync_has_password():
@@ -300,7 +280,7 @@ def backup_restore(src):
         notes = os.path.join(stage, "var/lib/dert/notes.json")
         if os.path.isfile(notes):
             with open(notes, "rb") as f:
-                _write_bytes(NOTES, f.read(), 0o644)
+                privlib.write_bytes(NOTES, f.read(), 0o644)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

@@ -113,6 +113,26 @@ def pod_lock(timeout=600):
             time.sleep(0.5)
 
 
+def write_bytes(path, data, mode=0o644):
+    """字节级原子写：备份包里的文件按原样落盘，不经文本编解码。"""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, ".dert-tmp." + os.urandom(4).hex())
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die("IO", "写入失败：%s" % e, "请检查 %s 的权限与磁盘空间" % d)
+
+
 def write_atomic(path, content, mode=0o644):
     """同目录临时文件 → rename。与 bash 版 write_atomic 等价。"""
     d = os.path.dirname(path) or "."
