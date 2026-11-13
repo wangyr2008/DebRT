@@ -7,6 +7,28 @@
 
 ## [Unreleased]
 
+## [0.1.96] - 2026-11-13
+
+> **P4-3 收尾**：剩下 4 个 root 单元也硬化，`dert-pppoe` 是唯一碰 WAN 的。
+
+### Changed
+
+- `dert-pppoe` / `dert-dns-sync` / `dert-pppoe-watchdog` / `dert-singbox-cleanup`
+  补上同一套硬化（`ProtectSystem=true`、`ProtectHome`、`PrivateTmp`、
+  `NoNewPrivileges`、`RestrictSUIDSGID`、`LockPersonality`、`ProtectControlGroups`、
+  `ProtectKernelLogs`）。到此前 7 个 root 单元全部覆盖，面板按设计仍不硬化。
+
+  `dert-pppoe` 的风险点单独确认过：`pppd` 只读 `/etc/ppp/peers/dert` 与
+  `chap-secrets`，写的是 `/run/ppp*.pid`；`ProtectSystem=true` 只锁 `/usr`、`/boot`，
+  不影响读 `/etc`、也不影响 netlink。真机重启拨号验证：ppp0 正常回来。
+
+### Changed（守卫）
+
+- **P3-34 改为自动枚举**：任何没有 `User=` 的 `.service` 都算 root 单元，
+  必须带 `ProtectSystem=true` + `NoNewPrivileges=true` 且不得用 `strict`/`full`。
+  新增单元忘了硬化会直接红——不用再手工维护名单。
+
+
 ## [0.1.95] - 2026-11-13
 
 > 工业化重构 **P4-2**：关键事件结构化日志。

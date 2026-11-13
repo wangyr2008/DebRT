@@ -443,31 +443,42 @@ _cg = open(os.path.join(ROOT, "systemd", "dert-converge.service"), encoding="utf
 assert "Restart=on-failure" in _cg and "RestartSec=" in _cg, \
     "P3-33 回归：收敛单元不再重试（升级/保存撞锁时会被标成 failed）"
 
-# P3-34：root 单元硬化只许 ProtectSystem=true（v0.1.92 / P4-3）
-# full/strict 会把 /etc 挂成只读，而 apply-all 整条流水线都在写 /etc
+# P3-34：root 单元硬化只许 ProtectSystem=true（v0.1.92 / v0.1.96）
+# full/strict 会把 /etc 挂成只读，而 root 单元的整条流水线都在写 /etc
 # （networkd / dnsmasq / nft / ppp）——真机验证过，strict 会让部署全失败，
 # 而且 sudo 子进程继承同一命名空间，等于把配置写入整条断掉。
-def _unit_lines(name):
-    return [l.strip() for l in open(os.path.join(ROOT, "systemd", name),
-                                    encoding="utf-8").read().split("\n")
+# v0.1.96 起**自动枚举**：任何没有 User= 的 .service 都是 root 单元，
+# 新增单元忘了硬化会直接红，不用再手工往名单里加。
+def _unit_lines(path):
+    return [l.strip() for l in open(path, encoding="utf-8").read().split("\n")
             if l.strip() and not l.strip().startswith(("#", ";"))]
 
 
-def _unit_bad(name, banned):
-    return [l for l in _unit_lines(name) if l.startswith(banned)]
+def _unit_bad(path, banned):
+    return [l for l in _unit_lines(path) if l.startswith(banned)]
 
 
-for _u in ("dert-apply.service", "dert-converge.service", "dert-netwatch.service"):
-    _ul = _unit_lines(_u)
+_root_units = []
+for _d in ("systemd", os.path.join("network", "systemd")):
+    for _f in sorted(glob.glob(os.path.join(ROOT, _d, "*.service"))):
+        _lines = _unit_lines(_f)
+        if [l for l in _lines if l.startswith("User=")]:
+            continue          # 非 root 单元（面板）单独断言
+        _root_units.append((os.path.basename(_f), _lines))
+
+assert len(_root_units) >= 7, "P3-34：root 单元数量异常（%d）" % len(_root_units)
+for _u, _ul in _root_units:
     assert {"ProtectSystem=true", "NoNewPrivileges=true"} <= set(_ul), \
         "P3-34 回归：%s 的硬化丢了（二进制/单元可被改写）" % _u
-    assert _unit_bad(_u, "ProtectSystem=strict") + _unit_bad(_u, "ProtectSystem=full") == [], \
+    assert [l for l in _ul
+            if l in ("ProtectSystem=strict", "ProtectSystem=full")] == [], \
         "P3-34 回归：%s 用了 ProtectSystem=strict/full（/etc 变只读，部署会全失败）" % _u
 # 面板相反：不能有 ProtectSystem（sudo 调起的升级要整目录替换 /usr/local/lib/dert），
 # 也不能有 NoNewPrivileges（会废掉 setuid sudo，登录与全部特权操作断链）
-assert _unit_bad("dert-panel.service", "ProtectSystem=") == [], \
+_panel_unit = os.path.join(ROOT, "systemd", "dert-panel.service")
+assert _unit_bad(_panel_unit, "ProtectSystem=") == [], \
     "P3-34 回归：面板加了 ProtectSystem（升级要写 /usr/local/lib/dert，会必失败）"
-assert _unit_bad("dert-panel.service", "NoNewPrivileges=") == [], \
+assert _unit_bad(_panel_unit, "NoNewPrivileges=") == [], \
     "P3-34 回归：面板加了 NoNewPrivileges（会废掉 setuid sudo）"
 
 # P3-35：事件日志必须是结构化格式（v0.1.95 / P4-2）

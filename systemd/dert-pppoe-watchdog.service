@@ -9,3 +9,16 @@ ConditionPathExists=/etc/dert/config.json
 Type=oneshot
 ExecStart=/usr/local/lib/dert/pppoe-watchdog
 TimeoutStartSec=30
+
+# ---- 硬化（v0.1.96 / P4-3 收尾）----
+# 与 dert-apply 同一套：只做**不把 /etc 挂成只读**的那几条。
+# ProtectSystem=true 只锁 /usr 与 /boot；full/strict 会把 /etc 挂只读，
+# 而这些单元都要写 /etc 或读 pppd 的 peer/chap-secrets 之外的东西。
+ProtectSystem=true
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
