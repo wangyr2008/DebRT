@@ -37,6 +37,26 @@ class TestPPPoENetwork(unittest.TestCase):
         self.assertNotIn("Scope=", self.body)
 
 
+class TestPppdPeer(unittest.TestCase):
+    """peers/dert 的 MTU。
+
+    1492 是 PPPoE 理论上限，但 RA 宣告 1500 + v6 的 MSS 钳制失效，会让每个
+    新连接都先吃一次 PTB（真机 2026-11-13：PTB 20 秒 +5，改后 30 秒 +0）。
+    """
+
+    def setUp(self):
+        self.ng = support.load_netgen()
+
+    def test_mtu_matches_pppoe_constant(self):
+        body = self.ng.gen_pppd(support.pppoe_config(), "pw")
+        self.assertIn("mtu %d" % self.ng.PPPOE_MTU, body)
+        self.assertIn("mru %d" % self.ng.PPPOE_MTU, body)
+
+    def test_mtu_leaves_margin_below_pppoe_limit(self):
+        # 留 12 字节余量：部分运营商链路的 v6 路径更小且会过滤 PTB
+        self.assertLess(self.ng.PPPOE_MTU, 1492)
+
+
 class TestLANNetwork(unittest.TestCase):
 
     def setUp(self):
@@ -58,6 +78,18 @@ class TestLANNetwork(unittest.TestCase):
         body = self.ng.gen_lan_network(cfg)
         self.assertNotIn("IPv6SendRA=yes", body)
         self.assertNotIn("DHCPPrefixDelegation=yes", body)
+
+    def test_ipv6_mtu_advertised(self):
+        # 不宣告 MTU 时客户端按 1500 发包 → 超过真实路径上限 → 静默丢包，
+        # 表现是"v6 访问很慢/卡住"（真机 2026-11-13）
+        body = self.ng.gen_lan_network(support.pppoe_config())
+        self.assertIn("IPv6MTUBytes=%d" % self.ng.PPPOE_MTU, body)
+
+    def test_ipv6_mtu_not_advertised_for_non_pppoe(self):
+        # DHCP/静态 WAN 的链路 MTU 就是 1500，没有这个问题，不该凭空压低
+        cfg = support.pppoe_config()
+        cfg["wan"]["mode"] = "dhcp"
+        self.assertNotIn("IPv6MTUBytes", self.ng.gen_lan_network(cfg))
 
 
 class TestDnsmasq(unittest.TestCase):
@@ -112,6 +144,13 @@ class TestNftBase(unittest.TestCase):
 
     def test_forward_mss_clamp(self):
         self.assertIn("chain forward_mss", self.body)
+        # v4 沿用 rt mtu；v6 必须显式给值——rt mtu 在 v6 下压不住客户端的 1440，
+        # 结果就是每个连接都靠 PTB 纠一次，而部分路径连 PTB 都没有
+        self.assertIn("meta nfproto ipv4 oifname $WAN_IFS tcp flags syn "
+                      "tcp option maxseg size set rt mtu", self.body)
+        self.assertIn("meta nfproto ipv6 oifname $WAN_IFS tcp flags syn "
+                      "tcp option maxseg size set %d" % (self.ng.PPPOE_MTU - 60),
+                      self.body)
 
     def test_port_forward_dnat(self):
         cfg = support.pppoe_config()

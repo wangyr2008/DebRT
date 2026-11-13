@@ -21,6 +21,14 @@ _FS = os.environ.get("DERT_FSROOT", "")
 CONFIG_PATH = _FS + "/etc/dert/config.json"
 SECRETS_PATH = _FS + "/etc/dert/secrets.json"
 ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
+# PPPoE 链路的 MTU。1492 是 PPPoE 的理论上限，但问题不在上限本身：
+#   · br-lan 的 RA 之前宣告的是链路 MTU（1500），客户端就按 1500 发包；
+#   · v6 的 MSS 钳制用 `rt mtu`，压不住客户端自己的 1440（见 gen_nft）；
+#   于是**每条新连接**都要先挨一次 ICMPv6 PTB 才降到 1492，白付一个 RTT。
+#   真机 2026-11-13 实测：改前 PTB 计数 20 秒 +5，改后 30 秒 +0。
+# 取 1480 而不是 1492：留 12 字节余量给少数路径更小的目的地（PTB 过滤在部分
+# 运营商链路上很常见），代价是 v4 每包少 12 字节（包数约多 0.8%）。
+PPPOE_MTU = 1480
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
 
@@ -233,6 +241,12 @@ def gen_lan_network(cfg):
              "[Network]",
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
              "IPForward=yes"]
+    # v6 的 MTU 必须在 RA 里宣告：不宣告时客户端按链路 MTU（1500）发包，
+    # 而 ppp0 只有 1492，路由器就得给每个新连接回一次 PTB，白丢一个 RTT
+    # （见 PPPOE_MTU 的注释）。IPv6MTUBytes 同时设置 br-lan 的 v6 MTU 并写进
+    # RA 的 MTU 选项，客户端从第一个包起就用 1480，不必再等 PTB。
+    if cfg["wan"].get("mode") == "pppoe" and v6.get("enabled"):
+        lines.append(f"IPv6MTUBytes={PPPOE_MTU}")
     # LAN 桥成员口由 30-<name>.network 绑定（见 gen_port_networks）
     # IPv6：RA 统一由 networkd 发布（dnsmasq 不再发 RA，避免双 RA 源，见审计 B-21）
     if v6.get("enabled") and v6.get("mode") == "static" and not v6.get("prefix"):
@@ -367,6 +381,9 @@ def gen_nft(cfg):
     else:
         wifs = wan_ifaces(cfg)
     wan_set = ", ".join(f'"{i}"' for i in wifs)
+    # v6 的 MSS 上限 = MTU - IPv6 头(40) - TCP 头(20)。PPPoE 用 PPPOE_MTU（见其注释），
+    # 其他接入方式按 1500 算。
+    v6_mss = (PPPOE_MTU if cfg["wan"].get("mode") == "pppoe" else 1500) - 60
     net = lan_net(cfg)
     fw = cfg.get("firewall", {})
     v6 = cfg.get("ipv6", {})
@@ -427,7 +444,11 @@ def gen_nft(cfg):
         "",
         "  chain forward_mss {",
         "    type filter hook forward priority mangle - 5; policy accept;",
-        "    oifname $WAN_IFS tcp flags syn tcp option maxseg size set rt mtu",
+        "    meta nfproto ipv4 oifname $WAN_IFS tcp flags syn tcp option maxseg size set rt mtu",
+        # v6 单独算：MSS = MTU - 40(IPv6 头) - 20(TCP 头)。用显式值而不是 rt mtu，
+        # 是因为 rt mtu 在 v6 下取的是路由 MTU，实测没能把客户端的 1440 压下来
+        # （PTB 计数一直在涨）。显式 1420 让 SYN 一落地就定死。
+        f"    meta nfproto ipv6 oifname $WAN_IFS tcp flags syn tcp option maxseg size set {v6_mss}",
         "  }",
         "",
         "  # dnsmasq 的上游 DNS 查询必须绕过 sing-box 的 auto_redirect。",
@@ -481,8 +502,8 @@ def gen_pppd(cfg, password):
         "holdoff 5",
         "lcp-echo-interval 20",
         "lcp-echo-failure 3",
-        "mtu 1492",
-        "mru 1492",
+        f"mtu {PPPOE_MTU}",
+        f"mru {PPPOE_MTU}",
         "nopcomp",
         "novj",
         "novjccomp",
