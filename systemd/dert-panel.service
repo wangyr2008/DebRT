@@ -18,11 +18,18 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/python3 /usr/local/lib/dert/panel/dert_panel.py --port 80
 Restart=on-failure
 RestartSec=3
-ReadWritePaths=/var/lib/dert /run/dert
+# ---- 硬化（v0.1.92 / P4-3）----
+# 这里能做的只有"不挡子进程"的那几条。**不能**加 ProtectSystem：面板经 sudo
+# 调起的 upgrade-apply 要整目录替换 /usr/local/lib/dert，挂成只读会让升级必失败
+# ——升级通道本身不能成为风险点。同理不能加 NoNewPrivileges（会废掉 setuid sudo）。
+# 原先这里有一条 ReadWritePaths=/var/lib/dert /run/dert，但**没有 ProtectSystem
+# 时它是空操作**（ReadWritePaths 只对已被挂成只读的路径生效），属于给了假的安全感，
+# 已删除；真要放开写权限，靠的是文件系统属主（dert:dert）而不是这条指令。
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
+ProtectKernelLogs=yes
 RestrictSUIDSGID=no
 
 [Install]

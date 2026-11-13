@@ -442,6 +442,33 @@ _cg = open(os.path.join(ROOT, "systemd", "dert-converge.service"), encoding="utf
 assert "Restart=on-failure" in _cg and "RestartSec=" in _cg, \
     "P3-33 回归：收敛单元不再重试（升级/保存撞锁时会被标成 failed）"
 
+# P3-34：root 单元硬化只许 ProtectSystem=true（v0.1.92 / P4-3）
+# full/strict 会把 /etc 挂成只读，而 apply-all 整条流水线都在写 /etc
+# （networkd / dnsmasq / nft / ppp）——真机验证过，strict 会让部署全失败，
+# 而且 sudo 子进程继承同一命名空间，等于把配置写入整条断掉。
+def _unit_lines(name):
+    return [l.strip() for l in open(os.path.join(ROOT, "systemd", name),
+                                    encoding="utf-8").read().split("\n")
+            if l.strip() and not l.strip().startswith(("#", ";"))]
+
+
+def _unit_bad(name, banned):
+    return [l for l in _unit_lines(name) if l.startswith(banned)]
+
+
+for _u in ("dert-apply.service", "dert-converge.service", "dert-netwatch.service"):
+    _ul = _unit_lines(_u)
+    assert {"ProtectSystem=true", "NoNewPrivileges=true"} <= set(_ul), \
+        "P3-34 回归：%s 的硬化丢了（二进制/单元可被改写）" % _u
+    assert _unit_bad(_u, "ProtectSystem=strict") + _unit_bad(_u, "ProtectSystem=full") == [], \
+        "P3-34 回归：%s 用了 ProtectSystem=strict/full（/etc 变只读，部署会全失败）" % _u
+# 面板相反：不能有 ProtectSystem（sudo 调起的升级要整目录替换 /usr/local/lib/dert），
+# 也不能有 NoNewPrivileges（会废掉 setuid sudo，登录与全部特权操作断链）
+assert _unit_bad("dert-panel.service", "ProtectSystem=") == [], \
+    "P3-34 回归：面板加了 ProtectSystem（升级要写 /usr/local/lib/dert，会必失败）"
+assert _unit_bad("dert-panel.service", "NoNewPrivileges=") == [], \
+    "P3-34 回归：面板加了 NoNewPrivileges（会废掉 setuid sudo）"
+
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
 # 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"
 _dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-dert-restart.conf"),

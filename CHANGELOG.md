@@ -7,6 +7,36 @@
 
 ## [Unreleased]
 
+## [0.1.92] - 2026-11-13
+
+> 工业化重构 **P4-3**：root 单元硬化。
+
+### Changed
+
+- **`dert-apply` / `dert-converge` / `dert-netwatch` 加硬化**：
+  `ProtectSystem=true`、`ProtectHome=true`、`PrivateTmp=true`、
+  `NoNewPrivileges=true`、`RestrictSUIDSGID=true`、`LockPersonality=true`、
+  `ProtectControlGroups=true`、`ProtectKernelLogs=true`。
+
+  **为什么只到 `ProtectSystem=true`**：`full`/`strict` 会把 `/etc` 挂成只读，
+  而这三个单元的整条流水线就是在写 `/etc`（networkd / dnsmasq / nft / ppp）；
+  更麻烦的是 sudo 调起的子进程会继承同一挂载命名空间，等于把配置写入整条断掉
+  （这条此前真机验证过）。`true` 只锁 `/usr` 与 `/boot`，挡的是"改二进制/改单元"，
+  不碰配置——收益明确，风险为零。
+
+- **面板单元删掉了一条空操作**。`ReadWritePaths=/var/lib/dert /run/dert` 在没有
+  `ProtectSystem` 时**不生效**（该指令只对已被挂成只读的路径起作用），留着等于
+  给了假的安全感。面板**不能**加 `ProtectSystem`：sudo 调起的升级要整目录替换
+  `/usr/local/lib/dert`；也不能加 `NoNewPrivileges`：会废掉 setuid sudo。
+  这两条都写进注释和守卫了，避免以后有人"顺手补齐"。
+
+### Added
+
+- 守卫 **P3-34**：三个 root 单元必须带 `ProtectSystem=true` + `NoNewPrivileges=true`
+  且**不得**出现 `strict`/`full`；面板反之（不得出现这两个指令）。按"非注释行"
+  匹配——注释里解释过这些值，子串匹配会假绿。
+
+
 ## [0.1.91] - 2026-11-13
 
 > **P2 收官**：入口脚本只剩分发、权限与锁。

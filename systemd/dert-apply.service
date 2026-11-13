@@ -12,5 +12,20 @@ Type=oneshot
 ExecStart=/usr/local/lib/dert/dert-priv apply-all --convergent
 TimeoutStartSec=180
 
+# ---- 硬化（v0.1.92 / P4-3）----
+# 只做**不把 /etc 挂成只读**的那几条。为什么不用 ProtectSystem=full/strict：
+# 这两个会把 /etc 挂成只读，而本单元的整条流水线就是在写 /etc（networkd /
+# dnsmasq / nft / ppp）——真机验证过，strict 会让部署全部失败；sudo 调用的
+# 子进程还会继承这个命名空间，等于把配置写入整条断掉。
+# ProtectSystem=true 只锁 /usr 与 /boot：挡的是"改二进制/改单元"，不碰配置。
+ProtectSystem=true
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+
 [Install]
 WantedBy=multi-user.target
