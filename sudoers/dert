@@ -1,8 +1,46 @@
-# DebRT：面板用户仅可经此唯一入口执行特权操作（子命令白名单在脚本内部再校验）
+# DebRT：面板用户仅可经此唯一入口执行特权操作。
+#
+# 本文件由 .github/scripts/gen_sudoers.py 从 priv/dert-priv 的分发表生成，
+# **请勿手工编辑**——CI 守卫 P3-36 会比对生成结果，改了就红。
+# 新增子命令后跑一次：python3 .github/scripts/gen_sudoers.py --write
+#
+# 为什么不用 `dert-priv *`：那样任何子命令、任何参数都放行，子命令白名单只在
+# 脚本内部；逐个列举把"能跑什么"提前到内核前的策略层。带参数的子命令同时保留
+# 裸形式与 ` *`，避免面板传空参时反而匹配不上（真机上出现过）。
 Defaults:dert !requiretty
 # sudo 审计写入专用日志文件（/etc/logrotate.d/dert 负责轮转）。
 # 注意：不能写 "!syslog, logfile=..." —— sudoers 里 syslog 是取值选项而非布尔旗标，
 # 加 ! 会被 visudo 拒绝（CI 冒烟实测），因此采用双重记录；面板轮询已放宽到 8 秒。
 Defaults:dert logfile=/var/log/dert-sudo.log
-Cmnd_Alias DERT_PRIV = /usr/local/lib/dert/dert-priv *
+Cmnd_Alias DERT_PRIV = /usr/local/lib/dert/dert-priv auth-verify, \
+    /usr/local/lib/dert/dert-priv passwd-set, \
+    /usr/local/lib/dert/dert-priv session-secret, \
+    /usr/local/lib/dert/dert-priv config-get, \
+    /usr/local/lib/dert/dert-priv config-set, \
+    /usr/local/lib/dert/dert-priv config-set *, \
+    /usr/local/lib/dert/dert-priv apply-all, \
+    /usr/local/lib/dert/dert-priv apply-all *, \
+    /usr/local/lib/dert/dert-priv service-ctl, \
+    /usr/local/lib/dert/dert-priv service-ctl *, \
+    /usr/local/lib/dert/dert-priv podman-ops, \
+    /usr/local/lib/dert/dert-priv podman-ops *, \
+    /usr/local/lib/dert/dert-priv podman-update, \
+    /usr/local/lib/dert/dert-priv podman-update *, \
+    /usr/local/lib/dert/dert-priv singbox-ops, \
+    /usr/local/lib/dert/dert-priv singbox-ops *, \
+    /usr/local/lib/dert/dert-priv backup-create, \
+    /usr/local/lib/dert/dert-priv backup-create *, \
+    /usr/local/lib/dert/dert-priv backup-restore, \
+    /usr/local/lib/dert/dert-priv backup-restore *, \
+    /usr/local/lib/dert/dert-priv factory-reset, \
+    /usr/local/lib/dert/dert-priv upgrade-check, \
+    /usr/local/lib/dert/dert-priv upgrade-download, \
+    /usr/local/lib/dert/dert-priv upgrade-download *, \
+    /usr/local/lib/dert/dert-priv upgrade-apply, \
+    /usr/local/lib/dert/dert-priv upgrade-apply *, \
+    /usr/local/lib/dert/dert-priv status, \
+    /usr/local/lib/dert/dert-priv selftest, \
+    /usr/local/lib/dert/dert-priv health, \
+    /usr/local/lib/dert/dert-priv health *
+
 dert ALL=(root) NOPASSWD: DERT_PRIV

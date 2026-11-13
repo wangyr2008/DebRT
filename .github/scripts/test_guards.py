@@ -501,6 +501,20 @@ for _p in ([os.path.join(ROOT, "install.sh"), os.path.join(ROOT, "uninstall.sh")
             _log_bad.append("%s:%d" % (os.path.relpath(_p, ROOT), _i))
 assert _log_bad == [], "P3-35 回归：这些日志点没走结构化格式：%s" % _log_bad
 
+# P3-36：sudoers 白名单必须与分发表一致（v0.1.97）
+# 手写白名单会漂移：新增子命令忘了同步，面板就整条断链（而"新增子命令"正好
+# 发生在升级通道里，用户没法从面板自救）。所以改成从 priv/dert-priv 的
+# case 分发表生成，这里比对"仓库里的文件是否等于生成结果"。
+sys.path.insert(0, os.path.join(ROOT, ".github", "scripts"))
+import gen_sudoers  # noqa: E402
+
+_sudo_expect = gen_sudoers.render(gen_sudoers.subcommands())
+_sudo_actual = open(os.path.join(ROOT, "sudoers", "dert"), encoding="utf-8").read()
+assert _sudo_actual == _sudo_expect, \
+    "P3-36 回归：sudoers/dert 与分发表不一致——跑 gen_sudoers.py --write"
+_sudo_subs = [n for n, _a in gen_sudoers.subcommands()]
+assert len(_sudo_subs) >= 19, "P3-36：分发表解析异常（只认出 %d 个子命令）" % len(_sudo_subs)
+
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
 # 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"
 _dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-dert-restart.conf"),
