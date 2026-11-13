@@ -422,6 +422,10 @@ def gen_nft(cfg):
         "  # 当前 WAN IPv4 地址集合：由 priv/wan-addr-sync（钩子/apply 调用）维护，",
         "  # hairpin DNAT 仅对「目的地址 = 本机 WAN IP」的 LAN 流量生效，绝不劫持其他出站流量",
         "  set wan_v4 { type ipv4_addr; }",
+        # RFC 7084 L-14：用已失效前缀作源地址的转发包必须回 ICMPv6 不可达，
+        # 让客户端立刻把该源地址判为不可用并重新选源，而不是等它自己老化。
+        # 集合由 priv/prefix-retire.py 维护（前缀变更时同步）。
+        "  set retired_v6 { type ipv6_addr; flags interval; }",
         "",
         "  chain input {",
         "    type filter hook input priority filter; policy accept;",
@@ -444,6 +448,7 @@ def gen_nft(cfg):
         "",
         "  chain forward {",
         "    type filter hook forward priority filter; policy accept;",
+        "    ip6 saddr @retired_v6 reject with icmpx type no-route",
         "    ct state established,related accept",
         "    ct state invalid drop",
         "    ct status dnat accept",

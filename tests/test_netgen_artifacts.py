@@ -166,6 +166,20 @@ class TestNftBase(unittest.TestCase):
                       "tcp option maxseg size set %d" % (self.ng.PPPOE_MTU - 60),
                       self.body)
 
+    def test_rejects_retired_v6_source(self):
+        """RFC 7084 L-14：用已失效前缀作源地址的转发包要回 ICMPv6 不可达。
+
+        只有 L-13（废弃旧前缀）不够——客户端可以一直装作没看见，继续拿旧地址
+        发包，而包到上游就被丢。L-14 让它立刻失败并重新选源。
+        """
+        self.assertIn("set retired_v6", self.body)
+        self.assertIn("ip6 saddr @retired_v6 reject with icmpx type no-route", self.body)
+        # 必须排在 established 之前：否则旧源地址上的既有连接会被 conntrack 放行，
+        # 永远收不到这条纠正。（input 链里也有同样的 accept，所以要截取 forward 段比较）
+        fwd = self.body.split("chain forward {", 1)[1]
+        self.assertLess(fwd.index("@retired_v6 reject"),
+                        fwd.index("ct state established,related accept"))
+
     def test_port_forward_dnat(self):
         cfg = support.pppoe_config()
         cfg["firewall"]["portfw"] = [

@@ -37,9 +37,10 @@ SEEN = FS + "/var/lib/dert/seen-prefixes"
 DROPIN_DIR = FS + "/etc/systemd/network/20-lan.network.d"
 DROPIN = os.path.join(DROPIN_DIR, "90-retired-prefixes.conf")
 
-# 保留 24 小时：覆盖"笔记本关机过夜"这种最常见的错过场景。
-# 旧地址自身最多 1 小时就过期，24 小时是充裕的余量。
-TTL = 24 * 3600
+# 保留 2 小时：RFC 7084 L-13 允许 Valid Lifetime 取 min(当前值, 2h)。
+# 更长时间没有意义——L-14 才是兜底：客户端就算错过全部 RA，只要还在用旧前缀
+# 发包，路由器会直接回 ICMPv6 不可达，连接立刻失败并重新选源。
+TTL = 2 * 3600
 # 上限 8 条：一天重拨十几次也不会把 drop-in 撑爆，最老的自然淘汰。
 MAX = 8
 MARKER = "# 由 DebRT 生成"
@@ -128,6 +129,23 @@ def read_text(path):
         return ""
 
 
+def sync_nft(retired):
+    """把已撤销前缀同步到 dert_base 的 retired_v6 集合（RFC 7084 L-14）。
+
+    集合不存在（还没跑过 apply）就跳过——那是启动早期，等下一次收敛再补。
+    """
+    if FS:
+        return
+    body = "flush set inet dert_base retired_v6\n"
+    if retired:
+        body += "add element inet dert_base retired_v6 { %s }\n" % ", ".join(retired)
+    try:
+        subprocess.run(["nft", "-f", "-"], input=body, text=True,
+                       timeout=15, capture_output=True)
+    except Exception:
+        pass
+
+
 def reload_networkd():
     """让新的 drop-in 生效并立刻重发 RA。
 
@@ -168,6 +186,7 @@ def main(argv):
     items = [(ts, p) for ts, p in seen if p != new][-MAX:]
 
     save(items)
+    sync_nft([p for _ts, p in items])
     body = render(items)
     changed = body != read_text(DROPIN)
     if changed:

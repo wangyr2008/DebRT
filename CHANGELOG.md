@@ -7,6 +7,43 @@
 
 ## [Unreleased]
 
+## [0.1.109] - 2026-11-14
+
+> 按 RFC 7084 补齐 IPv6 前缀变更的处理：补上 L-14，把 L-13 的窗口收回 2 小时。
+
+### 背景
+
+工业界（RFC 7084，IPv6 CE Router Requirements）对"委派前缀变了"有两条 MUST：
+
+- **L-13**：立即用 RA 通告旧前缀，Preferred Lifetime = 0，Valid Lifetime 取 0
+  或 min(当前值, 2 小时)。
+- **L-14**：对**使用已失效前缀作源地址**的转发包，回 ICMPv6 Destination
+  Unreachable（code 5，源地址未通过出入口策略）。
+
+我们此前只做了 L-13，而且是"持续广播 24 小时"的加强版；L-14 完全没做——
+这解释了为什么客户端可以一直拿旧地址发包：路由器只是"通知"过它，没有纠正。
+
+### Added
+
+- **L-14**：`dert_base` 新增集合 `retired_v6`（interval），forward 链**最前面**
+  加 `ip6 saddr @retired_v6 reject with icmpx type no-route`。必须排在
+  `ct state established,related accept` 之前，否则旧源地址上的既有连接会被
+  conntrack 放行，永远收不到纠正。集合由 `priv/prefix-retire.py` 在每次
+  前缀变更/收敛时同步。
+
+### Changed
+
+- L-13 的保留窗口 24 小时 → **2 小时**（RFC 允许的 min(当前值, 2h)）。
+  有 L-14 兜底后不需要长窗口：客户端就算错过全部 RA，只要还在用旧前缀发包，
+  立刻会收到 ICMPv6 不可达，连接失败后按 RFC 6724 重新选源。
+
+### 已知偏差
+
+- 本机 nft 不支持 `icmpx type policy-fail`（对应 code 5），用的是
+  `no-route`（ICMPv6 type 1 code 0）。对客户端的实际效果一致：连接立刻失败
+  并重试，而不是静默丢包等超时。
+
+
 ## [0.1.108] - 2026-11-14
 
 > v0.1.107 的废弃机制只在"事件准时到达"时生效，真机漏了一次。
