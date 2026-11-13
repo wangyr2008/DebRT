@@ -7,6 +7,35 @@
 
 ## [Unreleased]
 
+## [0.1.91] - 2026-11-13
+
+> **P2 收官**：入口脚本只剩分发、权限与锁。
+
+### Changed
+
+- **`dert-priv` 246 → 76 行**（相对最初的 1,822 行是 **−96%**）。剩下的内容只有：
+  子命令分发表、`require_root`、`acquire_lock`、每个子命令一行 `exec`。
+- **`priv/miscops.py`（约 130 行）**：`session-secret` / `config-get` /
+  `service-ctl`（podman / tailscale 的服务开关）。这三段此前是内联 Python 与
+  case 分支，现在是可测试的模块。
+  - `session-secret` 缺失时**报错而不是返回空串**：空密钥签出的 cookie 谁都能伪造
+  - `config-get` 派生 `wan.has_password`（明文密码不在 config.json 里），
+    并剔除 `notes`（备注只随备份流转，不回显给前端）
+  - `service-ctl podman stop` 先停容器再停服务，否则先关 socket 会留下孤儿容器
+
+### Added
+
+- `tests/test_miscops.py`（12 个用例）：会话密钥缺失报错、`has_password` 派生、
+  `notes` 不外泄、podman 启停顺序、enable 覆盖 `podman-restart.service`、
+  未安装 Tailscale 的明确错误码。
+
+### 说明
+
+- 为什么不把入口也换成 Python：sudoers 白名单、升级通道的自我替换、真机已部署
+  的路径都指向这个文件——**入口本身不能成为重构的风险点**。这一层的存在是设计，
+  不是没做完。
+
+
 ## [0.1.90] - 2026-11-13
 
 > 升级通道换 Python 实现后的第一轮真机验收，抓到一个**跨版本的既有缺陷**。

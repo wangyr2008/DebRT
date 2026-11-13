@@ -2,15 +2,23 @@
 # ============================================================================
 # DebRT 特权入口 —— 面板经 sudo 白名单唯一直达的 root 脚本。
 #
+# v0.1.91 起这里只剩**分发 + 权限 + 锁**：所有域的实现都在 priv/*.py
+# （configops / applyops / upgradeops / backupops / container / singbox /
+#   authops / miscops / status / selftest / health）。
+# 为什么不把这一层也换成 Python：sudoers 白名单、升级通道的自我替换、
+# 真机已部署的路径都指向这个文件——**入口本身不能成为重构的风险点**。
+#
 # 安全设计：
 #   * 子命令白名单分发，绝不 eval 用户输入；
 #   * 敏感数据（密码）只经 stdin 传递，不出现在参数/日志/回显；
-#   * 所有配置变更：校验 → lastgood 快照 → 原子写 → 语法预检 → 应用 → 验证 →
-#     失败自动回滚，并以可操作的 JSON 错误返回；
+#   * 配置变更一律「校验 → 快照 → 原子写 → 预检 → 应用 → 验证 → 失败回滚」，
+#     并以可操作的 JSON 错误返回（协议见 priv/lib.sh）；
 #   * 与 sing-box / podman 的共存契约见 COEXISTENCE.md（tailscale 自 0.1.32 起
-#     以 sing-box endpoint 托管，本层不再管理 tailscaled）：
-#     本脚本只操作自己的 nft 表 inet dert_base，永不 flush ruleset，
-#     永不 restart sing-box。
+#     以 sing-box endpoint 托管，本层不再管理 tailscaled）：本脚本只操作自己的
+#     nft 表 inet dert_base，永不 flush ruleset，永不 restart sing-box。
+#
+# 锁为什么留在这层：exec 之后子进程继承 fd 9，嵌套调用（备份恢复内部再跑
+# apply-all、升级后内联收敛）靠 _DERT_LOCK_HELD 跳过重取——语义与拆分前逐字一致。
 # ============================================================================
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -20,227 +28,49 @@ source "${PRIV_DIR}/lib.sh"
 
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 
-# 管理密码哈希记录解析：兼容 "pbkdf2$iters$salt$hash"（旧4段）与
-# "pbkdf2$sha256$iters$salt$hash"（新5段，算法显式）。历史缺陷：4 段格式的
-# 首段"pbkdf2"曾被当成摘要算法名传给 pbkdf2_hmac → 必抛异常 → 永远登录失败（五审 P-02）。
-# 密码记录解析/校验见 priv/pwhash.py（Python 模块，auth-verify / passwd-set / install.sh 共用；
-# 此前曾误写成 Bash 函数并在 Python heredoc 里调用 → NameError → 登录必失败，六审 P-02）
-
-# ---------------------------------------------------------------------------
-# 认证
-# ---------------------------------------------------------------------------
-do_auth_verify() {
-  # v0.1.83：实现搬到 priv/authops.py（密码仍只经 stdin，不进 argv）
-  exec python3 "${PRIV_DIR}/authops.py" verify
-}
-
-do_session_secret() {
-  python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json
-try:
-    s = json.load(open(E + "/secrets.json")).get("session_secret", "")
-    print(json.dumps({"ok": True, "secret": s}))
-except Exception:
-    print(json.dumps({"ok": False, "code": "NO_SECRET", "message": "secrets.json 缺失或损坏", "hint": "请重新运行 install.sh"}))
-PYEOF
-}
-
-# ---------------------------------------------------------------------------
-# 配置读取（不含任何明文密码）
-# ---------------------------------------------------------------------------
-do_config_get() {
-  python3 - <<'PYEOF'
-import os as _o; E = _o.environ.get("DERT_ETC", "/etc/dert"); V = _o.environ.get("DERT_VAR", "/var/lib/dert"); R = _o.environ.get("DERT_RUN", "/run/dert")
-import json
-cfg = json.load(open(E + "/config.json"))
-try:
-    has_pw = bool(json.load(open(E + "/secrets.json")).get("pppoe_password"))
-except Exception:
-    has_pw = False
-cfg.setdefault("wan", {})["has_password"] = has_pw
-cfg.pop("notes", None)
-print(json.dumps({"ok": True, "config": cfg}, ensure_ascii=False))
-PYEOF
-}
-
-# ---------------------------------------------------------------------------
-# 配置写入 + 应用（核心流水线）
-# ---------------------------------------------------------------------------
-do_config_set() {
-  # v0.1.88（P2-8）：实现搬到 priv/configops.py（body 仍只经 stdin）
-  local section="${1:-}"
-  [ -n "$section" ] || die "USAGE" "缺少配置段名称"
-  require_root
-  acquire_lock
-  exec python3 "${PRIV_DIR}/configops.py" set "$section"
-}
-
-# ---------------------------------------------------------------------------
-# 幂等收敛（开机 / 定时）
-# ---------------------------------------------------------------------------
-do_apply_all() {
-  # v0.1.87（P2-7）：实现搬到 priv/applyops.py
-  # 锁与 root 检查留在 bash 侧：exec 之后子进程继承 fd，_DERT_LOCK_HELD 让
-  # 嵌套调用（backup-restore 等）跳过重取，锁语义与拆分前完全一致。
-  require_root
-  mkdir -p "${FSROOT}/run/dert-dns" "${DERT_RUN}"
-  acquire_lock
-  exec python3 "${PRIV_DIR}/applyops.py" "${1:-}"
-}
-
-# ---------------------------------------------------------------------------
-# 服务控制（podman / tailscale）
-# ---------------------------------------------------------------------------
-do_service_ctl() {
-  require_root
-  local name="${1:-}" action="${2:-}"
-  case "$name" in
-    podman)
-      case "$action" in
-        start)   systemctl start podman.socket podman.service 2>/dev/null; podman start --all >/dev/null 2>&1 || true ;;
-        stop)    podman stop --all >/dev/null 2>&1 || true; systemctl stop podman.service podman.socket 2>/dev/null || true ;;
-        enable)  systemctl enable --quiet podman.socket podman.service podman-restart.service 2>/dev/null || die "SVC" "设置开机自启失败" "请确认已安装 podman：apt install podman" ;;
-        disable) systemctl disable --quiet podman.socket podman.service podman-restart.service 2>/dev/null || true ;;
-        *) die "USAGE" "service-ctl podman 需要 start|stop|enable|disable" ;;
-      esac ;;
-    tailscale)
-      command -v tailscale >/dev/null 2>&1 || die "TS_NOT_INSTALLED" "Tailscale 尚未安装" "请在「其他工具」中先一键安装"
-      case "$action" in
-        start)   systemctl start tailscaled.service ;;
-        stop)    systemctl stop tailscaled.service ;;
-        enable)  systemctl enable --quiet tailscaled.service ;;
-        disable) systemctl disable --quiet tailscaled.service ;;
-        *) die "USAGE" "service-ctl tailscale 需要 start|stop|enable|disable" ;;
-      esac ;;
-    *) die "USAGE" "不支持的服务：${name}" ;;
-  esac
-  ok_out "message" "已完成 ${name} ${action}"
-}
-
-# ---------------------------------------------------------------------------
-# podman-ops
-# ---------------------------------------------------------------------------
-POD_LOCK=0
-pod_lock() { exec 8>/run/dert/podman.lock; flock -w 600 8 || die "BUSY" "另一个容器操作正在进行中，请稍后重试"; }
-
-podman_json() { python3 -c "$1"; }
-
-do_podman_ops() {
-  # v0.1.82：实现搬到 priv/container.py（可行为测试：假 podman 命令）
-  exec python3 "${PRIV_DIR}/container.py" "$@"
-}
-
-# 容器"更新"：拉最新镜像并按原端口/卷/环境重建
-do_podman_update() {
-  # 兼容旧调用点：等价于 container update
-  exec python3 "${PRIV_DIR}/container.py" container "${1:-}" update
-}
-
-# ---------------------------------------------------------------------------
-# singbox-ops（sing-box 服务 / 配置更新 / Tailscale endpoint 只读信息）
-# 事实源仍是 sb.sh（/usr/local/bin/sb）：内核安装/升级、配置拉取、cron 都由它管；
-# 本层只做白名单封装、状态读取与 cron 时间设定，永不直接改写 sing-box 配置。
-# Tailscale 自 v0.1.32 起以 sing-box endpoint 托管：Debian 直装方案已移除。
-# ---------------------------------------------------------------------------
-do_singbox_ops() {
-  # v0.1.85：实现搬到 priv/singbox.py（10 个子动作，可行为测试）
-  exec python3 "${PRIV_DIR}/singbox.py" "$@"
-}
-
-# ---------------------------------------------------------------------------
-# 管理密码
-# ---------------------------------------------------------------------------
-do_passwd_set() {
-  require_root
-  acquire_lock
-  # v0.1.83：实现搬到 priv/authops.py（body 仍只经 stdin）
-  exec python3 "${PRIV_DIR}/authops.py" passwd-set
-}
-
-# ---------------------------------------------------------------------------
-# 备份 / 恢复 / 恢复出厂
-# ---------------------------------------------------------------------------
-do_backup_create() {
-  # v0.1.86（P2-6）：实现搬到 priv/backupops.py（tar 仍走 CLI，不重造解包）
-  require_root
-  exec python3 "${PRIV_DIR}/backupops.py" create "${1:-}"
-}
-
-do_backup_restore() {
-  # v0.1.86（P2-6）：实现搬到 priv/backupops.py
-  require_root
-  acquire_lock
-  exec python3 "${PRIV_DIR}/backupops.py" restore "${1:-}"
-}
-
-do_factory_reset() {
-  # v0.1.86（P2-6）：实现搬到 priv/backupops.py
-  require_root
-  acquire_lock
-  exec python3 "${PRIV_DIR}/backupops.py" factory
-}
-
-# ---------------------------------------------------------------------------
-# 升级（GitHub releases / 清单 URL）
-# ---------------------------------------------------------------------------
-do_upgrade_check() {
-  # v0.1.89（P2-9）：实现搬到 priv/upgradeops.py
-  exec python3 "${PRIV_DIR}/upgradeops.py" check
-}
-
-do_upgrade_download() {
-  # v0.1.89（P2-9）：实现搬到 priv/upgradeops.py
-  exec python3 "${PRIV_DIR}/upgradeops.py" download "${1:-}"
-}
-
-do_upgrade_apply() {
-  # v0.1.89（P2-9）：实现搬到 priv/upgradeops.py
-  # 锁与 root 检查留在 bash 侧（同 config-set / backup-restore）：
-  # exec 后子进程继承 fd 9，嵌套的 apply-all 靠 _DERT_LOCK_HELD 跳过重取。
-  require_root
-  acquire_lock
-  exec python3 "${PRIV_DIR}/upgradeops.py" apply "${1:-}"
-}
-
-# ---------------------------------------------------------------------------
-# 状态（/api/status 的特权部分）
-# ---------------------------------------------------------------------------
-do_status() {
-  # v0.1.80：实现搬到 priv/status.py（纯 Python，可行为测试）
-  exec python3 "${PRIV_DIR}/status.py"
-}
-
-# ---------------------------------------------------------------------------
-# 自检（安装后验证，不改系统）
-# ---------------------------------------------------------------------------
-do_selftest() {
-  # v0.1.80：实现搬到 priv/selftest.py（纯 Python，可行为测试）
-  exec python3 "${PRIV_DIR}/selftest.py"
-}
-
-# ---------------------------------------------------------------------------
-# 分发
-# ---------------------------------------------------------------------------
 case "$CMD" in
-  auth-verify)     do_auth_verify ;;
-  session-secret)  do_session_secret ;;
-  config-get)      do_config_get ;;
-  config-set)      do_config_set "$@" ;;
-  apply-all)       do_apply_all "$@" ;;
-  service-ctl)     do_service_ctl "$@" ;;
-  podman-ops)      do_podman_ops "$@" ;;
-  singbox-ops)     do_singbox_ops "$@" ;;
-  passwd-set)      do_passwd_set ;;
-  backup-create)   do_backup_create "$@" ;;
-  backup-restore)  do_backup_restore "$@" ;;
-  factory-reset)   do_factory_reset ;;
-  upgrade-check)   do_upgrade_check ;;
-  upgrade-download) do_upgrade_download "$@" ;;
-  upgrade-apply)   do_upgrade_apply "$@" ;;
-  status)          do_status ;;
-  selftest)        do_selftest ;;
-  # v0.1.81（P4）：结构化健康检查，退出码 0/1，供监控直接消费
-  health)          exec python3 "${PRIV_DIR}/health.py" "$@" ;;
-  *)               die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;
+  # ---- 认证 / 密码（密码只经 stdin）----
+  auth-verify)      exec python3 "${PRIV_DIR}/authops.py" verify ;;
+  passwd-set)       require_root; acquire_lock
+                    exec python3 "${PRIV_DIR}/authops.py" passwd-set ;;
+  session-secret)   exec python3 "${PRIV_DIR}/miscops.py" session-secret ;;
+
+  # ---- 配置 ----
+  config-get)       exec python3 "${PRIV_DIR}/miscops.py" config-get ;;
+  config-set)       [ -n "${1:-}" ] || die "USAGE" "缺少配置段名称"
+                    require_root; acquire_lock
+                    exec python3 "${PRIV_DIR}/configops.py" set "$1" ;;
+
+  # ---- 收敛（开机 / 定时 / 保存后）----
+  apply-all)        require_root
+                    mkdir -p "${FSROOT}/run/dert-dns" "${DERT_RUN}"
+                    acquire_lock
+                    exec python3 "${PRIV_DIR}/applyops.py" "${1:-}" ;;
+
+  # ---- 外部件的服务开关 ----
+  service-ctl)      exec python3 "${PRIV_DIR}/miscops.py" service-ctl "${1:-}" "${2:-}" ;;
+  podman-ops)       exec python3 "${PRIV_DIR}/container.py" "$@" ;;
+  podman-update)    exec python3 "${PRIV_DIR}/container.py" container "${1:-}" update ;;
+  singbox-ops)      exec python3 "${PRIV_DIR}/singbox.py" "$@" ;;
+
+  # ---- 备份 / 恢复 / 出厂 ----
+  backup-create)    require_root
+                    exec python3 "${PRIV_DIR}/backupops.py" create "${1:-}" ;;
+  backup-restore)   require_root; acquire_lock
+                    exec python3 "${PRIV_DIR}/backupops.py" restore "${1:-}" ;;
+  factory-reset)    require_root; acquire_lock
+                    exec python3 "${PRIV_DIR}/backupops.py" factory ;;
+
+  # ---- 升级（唯一会替换自身的路径）----
+  upgrade-check)    exec python3 "${PRIV_DIR}/upgradeops.py" check ;;
+  upgrade-download) exec python3 "${PRIV_DIR}/upgradeops.py" download "${1:-}" ;;
+  upgrade-apply)    require_root; acquire_lock
+                    exec python3 "${PRIV_DIR}/upgradeops.py" apply "${1:-}" ;;
+
+  # ---- 只读 ----
+  status)           exec python3 "${PRIV_DIR}/status.py" ;;
+  selftest)         exec python3 "${PRIV_DIR}/selftest.py" ;;
+  health)           exec python3 "${PRIV_DIR}/health.py" "$@" ;;
+
+  *)                die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;
 esac

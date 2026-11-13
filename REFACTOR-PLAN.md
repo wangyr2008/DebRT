@@ -15,7 +15,7 @@
 | P0-2 配置删除回收 | ✅ 完成（改为按 manifest 对账） | v0.1.71 |
 | P0-3 补 `set -u` | ✅ 完成（20/20 脚本） | v0.1.73 |
 | P1-2 守卫分层 | ✅ 四阶段完成（含 dert-priv 测试缝） | v0.1.75~79 |
-| P2 结构分层 | ✅ 全部域完成（dert-priv 1822→246，−86%；lib.sh 395→86） | v0.1.80~89 |
+| P2 结构分层 | ✅ 完成（dert-priv 1822→**76**，−96%；lib.sh 395→86） | v0.1.80~91 |
 | P3 供应链签名 | ✅ 代码完成（待配 Secret） | v0.1.74 |
 | P4 可观测 | 🔄 health 完成；单元硬化待做 | v0.1.81 |
 
@@ -194,6 +194,8 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 | v0.1.87 | `applyops.py`（收敛流水线 + 运行时动作） | 改写 | 17 个行为用例 + 真机新旧双跑 |
 | v0.1.88 | `configops.py`（config-set）+ lib.sh 瘦身 | 改写 | 14 个行为用例 + 真机保存实测 |
 | v0.1.89 | `upgradeops.py`（check/download/apply） | 改写 | 24 个行为用例 + 真机重装实测 |
+| v0.1.90 | 收敛单元加 BUSY 重试（真机验收抓到的缺陷） | 修复 | 真机升级后 0 失败单元 |
+| v0.1.91 | `miscops.py` + 入口瘦身到 76 行 | 改写 | 12 个行为用例 |
 
 **剩余域**（都是**重写**而非搬迁，且风险递增，建议每个单独一版 + 双跑验证）：
 | 域 | 行数 | 形态 | 风险 |
@@ -201,7 +203,8 @@ monkeypatch 后跑真 `main()`），CI 拆 `fast-tests` → `real-path-smoke`（
 已完成域：`status` / `selftest`（v0.1.80）、`container`（v0.1.82）、
 `auth`（v0.1.83）、`backupcheck`（v0.1.84）、`singbox`（v0.1.85）、
 `backup` / `factory`（v0.1.86）、`apply_all` + 运行时动作（v0.1.87）、
-`config_set` + `lib.sh` 瘦身（v0.1.88）、`upgrade`（v0.1.89）。
+`config_set` + `lib.sh` 瘦身（v0.1.88）、`upgrade`（v0.1.89）、
+`session-secret` / `config-get` / `service-ctl`（v0.1.91）。
 
 **为什么没一次做完**：上面每一个都是"把 bash 编排改写成 Python 编排"，
 不是移动代码。改写会引入新 bug，而验收手段只有真机双跑——一次改太多，
