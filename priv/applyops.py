@@ -26,7 +26,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -289,7 +288,9 @@ def maintain_singbox_dropin():
                 f.write(body)
         except OSError:
             continue
-        print("%s: 已为 sing-box 安装 %s drop-in" % (name, what))
+        # 走 journald，不往 stdout 打——apply-all 的 stdout 是面板解析的 JSON，
+        # 多一行人类可读文本就会变成 PRIV_MALFORMED（backup-restore 内部也调它）
+        _log("singbox_dropin", dropin=name, what=what)
         changed = True
     if changed:
         _sh(["systemctl", "daemon-reload"], timeout=60)

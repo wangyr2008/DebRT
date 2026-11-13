@@ -7,6 +7,52 @@
 
 ## [Unreleased]
 
+## [0.1.98] - 2026-11-13
+
+> 全量复查（pyflakes + 逐模块对照 bash 原实现 + 真机跑未覆盖路径）修掉的问题。
+
+### Fixed
+
+- **`config-set firewall` 在老配置上会抛 traceback**。只提交 `portfw` 时走的是
+  `cfg["firewall"]["portfw"]`，而配置里没有 `firewall` 段就 KeyError——面板只能
+  看到"特权服务返回异常"，看不出是缺段。两处都改成 `setdefault`。
+  （bash 原实现同样有此问题，属于存量缺陷。）
+
+- **`apply-all` 往 stdout 打人类可读文本**。补 sing-box drop-in 时
+  `maintain_singbox_dropin()` 会 `print("wait-wan: 已为 sing-box 安装…")`，
+  而 apply-all 的 stdout 是面板解析的 JSON——多一行就变成 `PRIV_MALFORMED`
+  （`backup-restore` 内部也会调它）。改成 `log_event` 走 journald。
+
+- **`upgrade-apply` 的版本号解析**：`VERSION` 里若带 CR/内部空白，`strip()`
+  去不掉，会拿脏字符串去比较版本。改成与 bash 的 `tr -d '[:space:]'` 等价。
+
+- **升级包成员判定过松**：`VERSION` 用的是前缀匹配，`VERSION.old` 也算通过。
+  改成精确匹配（`panel/`、`priv/` 仍用前缀）。
+
+- **`gen_sudoers` 会静默漏掉解析不出的分支**。新加 `fooBar)` / `foo_bar)` 这类
+  标签时，sudoers 少一条 → 面板"命令不允许"，而生成器一声不吭。现在除兜底
+  `*)` 外，解析不出标签直接报错。
+
+### Changed
+
+- 清掉 pyflakes 报的死代码：`applyops`/`upgradeops`/`miscops`/`backupops`/
+  `selftest`/`singbox` 的未使用导入，`container.py` 里赋值后从未使用的 `retried`。
+
+### Added
+
+- `test_firewall_without_existing_section`：老配置缺 `firewall` 段时只提交
+  `portfw` 必须成功（而不是 traceback）。
+
+### 真机复查（0.1.97 → 0.1.98 前）
+
+| 路径 | 结果 |
+|---|---|
+| `config-set dhcp` / `static` 原值重存 | ok，config.json 哈希不变 |
+| `config-set lan` 非法掩码 | `LAN_MASK_BAD`，配置未变 |
+| 备份创建 + 恢复往返 | ok，哈希不变 |
+| health | 14/14，0 失败单元 |
+
+
 ## [0.1.97] - 2026-11-13
 
 > 审计第 8 条：sudoers 从 `dert-priv *` 收紧成逐子命令列举，**由分发表生成**。

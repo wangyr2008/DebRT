@@ -183,11 +183,14 @@ def merge(section, norm, raw):
     elif section == "qos":
         cfg["qos"] = data
     elif section == "firewall":
-        # 只改请求里出现的键：面板可能只提交 portfw 或只提交 wan_input_drop
+        # 只改请求里出现的键：面板可能只提交 portfw 或只提交 wan_input_drop。
+        # 两处都要 setdefault——老配置里可能没有 firewall 段，直接下标会 KeyError，
+        # 而 KeyError 抛出去就是 traceback，面板只会看到"特权服务返回异常"。
+        fw = cfg.setdefault("firewall", {})
         if "wan_input_drop" in raw:
-            cfg.setdefault("firewall", {})["wan_input_drop"] = data["wan_input_drop"]
+            fw["wan_input_drop"] = data["wan_input_drop"]
         if "portfw" in raw:
-            cfg["firewall"]["portfw"] = data["portfw"]
+            fw["portfw"] = data["portfw"]
     elif section == "upgrade":
         cfg["upgrade"] = data
     else:

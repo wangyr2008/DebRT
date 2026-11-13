@@ -36,7 +36,7 @@ import sys
 import time
 
 import privlib
-from privlib import CONFIG_JSON, ETC, RUN, SECRETS_JSON, VAR, die, ok_out
+from privlib import CONFIG_JSON, RUN, SECRETS_JSON, VAR, die, ok_out
 
 # 生产环境为 "/"；测试可用 DERT_FSROOT 指向临时根。未设时与 bash 版逐字符等价。
 ROOT = os.environ.get("DERT_FSROOT", "") or "/"

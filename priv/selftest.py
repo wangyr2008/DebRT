@@ -12,7 +12,7 @@ _FS = _o.environ.get("DERT_FSROOT", "")
 E = _FS + "/etc/dert"
 V = _FS + "/var/lib/dert"
 R = _FS + "/run/dert"
-import json, os, shutil, subprocess, sys
+import json, os, shutil, subprocess
 checks = []
 def add(name, ok, hint=""):
     checks.append({"name": name, "ok": bool(ok), "hint": hint})

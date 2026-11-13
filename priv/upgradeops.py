@@ -28,7 +28,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 
 import privlib
 from privlib import CONFIG_JSON, RUN, VAR, die, ok_out
@@ -325,16 +324,21 @@ def _check_structure(pkg, names):
             ("。具体：%s" % reason if reason else ""))
     if _has_link(pkg):
         die("UPG_BAD", "升级包含链接条目，已拒绝", "为防路径穿越，升级包只允许普通文件与目录")
-    for need, msg in (("VERSION", "升级包缺少 VERSION 文件"),
-                      ("panel/", "升级包缺少 panel/ 目录"),
-                      ("priv/", "升级包缺少 priv/ 目录")):
-        if not any(ln == need or ln.startswith(need) for ln in names):
+    # VERSION 必须是**精确**成员（前缀匹配会把 VERSION.old 也算通过）；
+    # 目录条目用前缀（"panel/" 与 "panel/x" 都算）
+    for need, msg, exact in (("VERSION", "升级包缺少 VERSION 文件", True),
+                             ("panel/", "升级包缺少 panel/ 目录", False),
+                             ("priv/", "升级包缺少 priv/ 目录", False)):
+        hit = any((ln == need) if exact else ln.startswith(need) for ln in names)
+        if not hit:
             die("UPG_BAD", msg, "请确认上传的是 DebRT 官方发布的 .tar.gz 升级包")
 
 
 def _pkg_version(pkg):
     r = _sh(["tar", "-xOzf", pkg, "VERSION"], timeout=60)
-    return ((r.stdout or "").strip() if r else "")
+    # 与 bash 的 tr -d '[:space:]' 等价：VERSION 是单行，但别把回车符之类
+    # 带进版本比较（在 Windows 上编辑过 VERSION 就会带 CR）
+    return ("".join((r.stdout or "").split()) if r else "")
 
 
 def _syntax_check(stg):

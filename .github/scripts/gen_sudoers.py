@@ -61,11 +61,18 @@ def subcommands(path=PRIV):
     body = m.group(1)
     out = []
     for chunk in body.split(";;"):
+        if not chunk.strip():
+            continue
         # 每个分支前面可能带一段注释（`# ---- 认证 ----`），不能整块丢掉；
         # 只认第一处出现在行首的 `名称)` 标签。
-        mm = re.search(r"^[ \t]*([a-z][a-z0-9-]*)\)", chunk, re.M)
+        mm = re.search(r"^[ \t]*([a-z][a-z0-9_-]*)\)", chunk, re.M)
         if not mm:
-            continue
+            # 兜底分支 `*)` 允许没有名字；其余分支解析不出来就直接报错。
+            # 否则新加一个 `fooBar)` 或 `foo_bar)` 会被**静默漏掉**，
+            # sudoers 少一条 → 面板"命令不允许" → 用户只能干瞪眼。
+            if re.search(r"^[ \t]*\*\)", chunk, re.M):
+                continue
+            raise SystemExit("分发表里有无法识别的分支：%r" % chunk.strip()[:60])
         name = mm.group(1)
         # 参数面：分发表里出现 $1 / ${1:-} / $@ 就认为它接受参数
         takes_args = bool(re.search(r'\$\{?1|\$@', chunk))

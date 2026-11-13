@@ -242,7 +242,6 @@ def act_compose_deploy():
             # pod 建立时 cgroup slice 竞态：报 OCI "No such file or directory"
             # 且容器 State=created —— 重试一次即好（真机实测一次）
             logtext = open(logf, encoding="utf-8", errors="replace").read()
-            retried = False
             if "no such file or directory" in logtext.lower() or "OCI runtime" in logtext:
                 names = P.run_out(["podman", "ps", "-a", "--filter",
                                    "label=com.docker.compose.project=dert",
@@ -258,7 +257,6 @@ def act_compose_deploy():
                         if r2:
                             lf.write(r2.stdout or "")
                             lf.write(r2.stderr or "")
-                        retried = True
 
     names = P.run_out(["podman", "ps", "-a", "--filter",
                        "label=com.docker.compose.project=dert",

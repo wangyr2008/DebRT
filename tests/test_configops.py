@@ -16,7 +16,6 @@ import os
 import sys
 import unittest
 
-import support
 from test_applyops import Sandbox, run
 
 
@@ -162,6 +161,19 @@ class OtherSections(Base):
         rc, out = self.set_section("firewall", {"portfw": []})
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.cfg()["firewall"]["wan_input_drop"], before)
+        self.assertEqual(self.cfg()["firewall"]["portfw"], [])
+
+    def test_firewall_without_existing_section(self):
+        """老配置里没有 firewall 段时，只提交 portfw 不能崩。
+
+        直接下标 cfg["firewall"]["portfw"] 会 KeyError，而 KeyError 抛出去就是
+        traceback——面板只能看到"特权服务返回异常"，看不出是配置缺段。
+        """
+        cfg = self.cfg()
+        cfg.pop("firewall", None)
+        self.s.write_cfg(cfg)
+        rc, out = self.set_section("firewall", {"portfw": []})
+        self.assertEqual(rc, 0, out)
         self.assertEqual(self.cfg()["firewall"]["portfw"], [])
 
     def test_upgrade_section_saves_without_applying(self):
