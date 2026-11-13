@@ -161,12 +161,14 @@ assert "ppp*)" in _hook, "R-02 回归：ppp0 缺少 v4/v6 合并分支"
 # R-01：升级同步块必须覆盖所有 /etc 钩子（曾漏 v0.1.43 新增的热插拔钩子，
 # 导致"插网线自愈"只对全新安装生效）
 _priv_src = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
-assert "75-dert-pppoe-hotplug" in _priv_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
+# v0.1.89：升级通道搬到 priv/upgradeops.py，下面凡是"升级同步"类断言都改看它
+_upg_src = open(os.path.join(ROOT, "priv", "upgradeops.py"), encoding="utf-8").read()
+assert "75-dert-pppoe-hotplug" in _upg_src, "R-01 回归：升级同步漏了 PPPoE 热插拔钩子"
 # PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时必须能自愈
 _wd = open(os.path.join(ROOT, "priv", "pppoe-watchdog"), encoding="utf-8").read()
 assert "ppp0" in _wd and "systemctl restart" in _wd, "看门狗缺少 ppp0 探测或重启逻辑"
 assert os.path.exists(os.path.join(ROOT, "systemd", "dert-pppoe-watchdog.timer")), "看门狗 timer 缺失"
-assert "dert-pppoe-watchdog.timer" in _priv_src, "升级同步未覆盖看门狗 timer"
+assert "dert-pppoe-watchdog.timer" in _upg_src, "升级同步未覆盖看门狗 timer"
 # 看门狗健康判据必须同时认 IPv4 与全局 IPv6（只认 v4 会误杀 IPv6-only 链路，
 # 每 3 分钟重启一次拨号，比卡死更糟）
 assert "scope global" in _wd, "B-01 回归：看门狗只认 IPv4"
@@ -226,10 +228,10 @@ assert "for d in $CLEAN_DEVS" in _qa and '"ppp0","ifb0"' in _qa, \
     "P2-01 回归：qdisc 清扫未按全部网口+ppp0 遍历"
 # P3-01：升级内联收敛必须带锁标记——子进程 acquire_lock 重开 fd9 必 BUSY，
 # 无标记时该调用 100% 失败（死代码），收敛全靠 3s 后的 converge.service 兜底
-assert "_DERT_LOCK_HELD=1 /usr/local/lib/dert/dert-priv apply-all --convergent" in _priv_src, \
+assert 'env["_DERT_LOCK_HELD"] = "1"' in _upg_src and '"--convergent"' in _upg_src, \
     "P3-01 回归：升级内联收敛缺锁标记（子进程必 BUSY）"
 # P3-02：升级通道必须同步 network/systemd/dert-pppoe.service（A-04/R-01 同族第三处）
-assert "network/systemd/dert-pppoe.service" in _priv_src, \
+assert '"/network"' in _upg_src and "/systemd/dert-pppoe.service" in _upg_src, \
     "P3-02 回归：升级通道漏同步 PPPoE 单元"
 # P3-06：三处 WAN 就绪判据必须同时认 IPv4 与全局 IPv6——同一逻辑三处存放，
 # 只改看门狗漏掉 wait-wan 会让 sing-box 在 IPv6-only 链路上永远起不来
@@ -364,7 +366,7 @@ assert not re.search(r'^exec 9>.*2>/dev/null', _hook3, re.M), \
 _inst = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
 assert '90-dert-lan-prefix" /etc/networkd-dispatcher/routable.d/' in _inst, \
     "P3-18 回归：install.sh 未安装 90-dert-lan-prefix"
-assert "90-dert-lan-prefix /etc/networkd-dispatcher/routable.d/" in _priv_src, \
+assert "90-dert-lan-prefix" in _upg_src, \
     "P3-18 回归：升级通道未同步 90-dert-lan-prefix（升级用户永远拿不到）"
 assert "routable.d/90-dert-lan-prefix" in _un, \
     "P3-18 回归：卸载清单缺 90-dert-lan-prefix"
@@ -378,7 +380,7 @@ _status_src = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").re
 assert 'temps.get("current")' in _status_src, "P3-11 回归：硬盘温度仍遍历全部 temperature 值"
 # CI 冒烟网关：升级通道的内联收敛与延迟收敛重启必须按 /run/dert/smoke-mode 跳过
 # （runner 的网络不能动——CI 实测步骤全绿但 agent 收尾信号传不回，job 被超时标 cancelled）
-assert "smoke-mode" in _priv_src \
+assert "smoke-mode" in _upg_src \
     and "smoke-mode" in open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read(), \
     "CI 冒烟回归：升级通道收敛未按 smoke-mode 标记跳过"
 
@@ -432,6 +434,14 @@ assert _restore_body.index("_schema_ok") < _restore_body.index("_deploy_tree(sta
 #   且不得重启 networkd/dnsmasq
 # 这两条原来是对 bash 源码做正则匹配（还踩过"注释里提到命令导致假绿"的坑）。
 # 搬到 Python 后可以直接把流水线跑一遍再断言副作用，比看源码文本可靠。
+# P3-33：收敛单元必须在 BUSY 上重试（v0.1.90）
+# 升级流程会在自己还持有 apply.lock 时安排"3 秒后重启 converge"——那一次必然
+# BUSY 退出，把 dert-converge.service 标成 failed，health 的 failed_units 直接变红
+# （真机 2026-11-13 实测）。BUSY 不是真故障，重试即可。
+_cg = open(os.path.join(ROOT, "systemd", "dert-converge.service"), encoding="utf-8").read()
+assert "Restart=on-failure" in _cg and "RestartSec=" in _cg, \
+    "P3-33 回归：收敛单元不再重试（升级/保存撞锁时会被标成 failed）"
+
 # P3-14：dnsmasq 启动前必须预建 servers-file——/run 是 tmpfs，重启后文件不存在，
 # 每次开机都会在 dnsmasq 日志里留一条 "cannot read /run/dert-dns/upstream.conf"
 _dd = open(os.path.join(ROOT, "systemd", "dnsmasq.service.d", "10-dert-restart.conf"),
@@ -523,9 +533,9 @@ assert "priv/netwatch" in _inst, "P3-19 回归：install.sh 未部署 priv/netwa
 assert "dert-netwatch.service" in _inst, "P3-19 回归：install.sh 未安装 netwatch 单元"
 assert "systemctl enable --now dert-netwatch.service" in _inst, \
     "P3-19 回归：install.sh 未启用 netwatch（装了但不开等于没装）"
-assert "dert-netwatch.service" in _priv_src, \
+assert "dert-netwatch.service" in _upg_src, \
     "P3-19 回归：升级通道未同步 netwatch（升级用户永远拿不到）"
-assert "enable dert-netwatch.service" in _priv_src, \
+assert '["systemctl", "enable", "dert-netwatch.service"]' in _upg_src, \
     "P3-19 回归：升级通道未启用 netwatch"
 assert "dert-netwatch.service" in _un, "P3-19 回归：卸载清单缺 dert-netwatch.service"
 
@@ -606,8 +616,8 @@ assert "nft delete table inet dert_dns" in _un, "P3-19 回归：uninstall.sh 没
 assert re.search(r'rm -rf "\$LIB_DIR"', _un), \
     "P3-19 回归：uninstall.sh 没整体删程序目录（dns-split-* 等会残留）"
 
-assert "20-dert-dns-split.conf" in _priv_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
-assert "dns-split-prepare" in _priv_src, "P3-19 回归：升级通道没同步 dns-split-prepare"
+assert "20-dert-dns-split.conf" in _upg_src, "P3-19 回归：升级通道没同步 DNS 分流 drop-in"
+assert "dns-split-prepare" in _upg_src, "P3-19 回归：升级通道没同步 dns-split-prepare"
 
 # 前缀变更钩子必须重新生成配置：source_ip_cidr 里含旧 v6 前缀，
 # nft 表里白名单的 v6 DNS 目标也指向 dnsmasq 的旧全局地址
@@ -625,12 +635,12 @@ for _f in ("LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
 # 白名单语义（放行顶层文件、拒绝未知目录、拒绝穿越）已迁到行为测试：
 # tests/test_tarcheck.py 用真实恶意 tar 验证。这里只保留"接线"约束——
 # dert-priv 必须以 root 解压前调用该模块，不能又写回内联逻辑。
-assert "tarcheck.py" in _priv_src, \
+assert "tarcheck" in _upg_src, \
     "P3-20 回归：升级包成员校验未走 priv/tarcheck.py（内联逻辑无法行为测试）"
 # 不能把 tar 的 stderr 合进成员清单管道：tar 对含 `..` 的成员会打
 # "Removing leading ..."，合并后那行会被当成成员名，拒绝原因变成 tar 的警告原文；
 # 反过来正常包若有任何 tar 警告也会被误判为危险条目。两个方向都错（真机实测踩到）。
-assert 'tar -tzf "$pkg" 2>&1 | python3' not in _priv_src, \
+assert "names = _tar_list(pkg)" in _upg_src, \
     "P3-20 回归：tar 的 stderr 又被合进成员清单管道（警告会被当成成员名）"
 
 # P3-21：dnsmasq 必须用 bind-dynamic，不能用 bind-interfaces。
@@ -675,6 +685,7 @@ assert "needs: fast-tests" in _smoke, \
 # 只看非注释行：注释里解释"以前用 eval"是合理的，断言源码文本时
 # 必须排除注释，否则清理代码时会被自己的说明文字绊倒（已踩过三次）。
 _priv_src_all = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+_upg_src_all = open(os.path.join(ROOT, "priv", "upgradeops.py"), encoding="utf-8").read()
 _priv_code = [l for l in _priv_src_all.split("\n") if not l.strip().startswith("#")]
 assert not any("eval " in l for l in _priv_code), \
     "P3-24 回归：dert-priv 又在用 eval 执行动态生成的代码（改用 read 读值）"
@@ -698,9 +709,9 @@ assert "dhcp-host" in _ng_join, \
 # ---- P3-26：升级下载加固（v0.1.70）----
 # 1) 清单里的 url 只接受 https：curl 会照做 file:// 等协议
 # 2) 单文件大小上限：恶意/错误源不能把磁盘写满
-assert "--max-filesize" in _priv_src_all, \
+assert "--max-filesize" in _upg_src_all, \
     "P3-26 回归：升级下载又没限制文件大小（恶意源可写满磁盘）"
-assert "升级源地址必须以 https:// 开头" in _priv_src_all, \
+assert "升级源地址必须以 https:// 开头" in _upg_src_all, \
     "P3-26 回归：清单 url 未强制 https（file:// 会被 curl 照做）"
 
 # ---- P3-27：CI 必须有 shell 静态分析（v0.1.70）----
@@ -771,7 +782,7 @@ assert _wd.count("python3 -c") == 1, \
     f"P3-29 回归：看门狗里的 python3 调用变成 {_wd.count('python3 -c')} 处（应合并为 1）"
 
 # 周期改动必须重启 timer 才生效：enable --now 对已在运行的 timer 是空操作
-assert "systemctl restart dert-pppoe-watchdog.timer" in _priv_src_all, \
+assert '["systemctl", "restart", "dert-pppoe-watchdog.timer"]' in _upg_src_all, \
     "P3-29 回归：升级通道不重启看门狗 timer（新周期要等下次开机才生效）"
 
 # ---- P3-30：所有 shell 脚本必须有 set -u（v0.1.73）----
@@ -833,14 +844,14 @@ assert "signing/dert-signing.pub.pem" not in _rel, \
     "P3-31 回归：release.yml 又引用顶层 signing/ 目录（旧版升级包白名单会拒绝）"
 assert "dert-${VER}.tar.gz.sig" in _rel, "P3-31 回归：签名产物未加入 Release"
 
-_priv_sig = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
-assert "openssl pkeyutl -verify" in _priv_sig, \
+_priv_sig = open(os.path.join(ROOT, "priv", "upgradeops.py"), encoding="utf-8").read()
+assert '"openssl", "pkeyutl", "-verify"' in _priv_sig, \
     "P3-31 回归：upgrade-apply 不再验签（sha256 挡不住镜像劫持）"
 assert "UPG_SIG" in _priv_sig, "P3-31 回归：缺签名校验失败的错误码"
 assert "require_signature" in _priv_sig, \
     "P3-31 回归：缺 upgrade.require_signature 策略开关"
 # 验签必须在解压之前：先确认来源，再碰包内容
-assert _priv_sig.index("openssl pkeyutl -verify") < _priv_sig.index("tar -tzf \"$pkg\""), \
+assert _priv_sig.index('"openssl", "pkeyutl", "-verify"') < _priv_sig.index("names = _tar_list(pkg)"), \
     "P3-31 回归：验签位置跑到解压之后了（应最先校验来源真实性）"
 
 # ---- P3-32：dert-priv 引用的每个 priv/ 文件都必须真实存在（v0.1.81）----

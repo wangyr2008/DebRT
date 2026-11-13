@@ -38,7 +38,12 @@ GUARDS = os.path.join(ROOT, ".github", "scripts", "test_guards.py")
 # 两条"对 bash 源码做正则"的断言被**行为化**了：现在直接跑一遍收敛流水线，
 # 断言"预检报错原样透传""无漂移分支删了 stage 且没重启 networkd/dnsmasq"。
 # 这比看源码文本可靠——那两条原本就踩过"注释里提到命令导致假绿"的坑。
-STRING_ASSERT_BUDGET = 132
+# v0.1.90：132 → 133。新增的是「dert-converge.service 必须 Restart=on-failure」——
+# 这是 systemd 单元级的约定，只能靠读单元文件断言：它要防的是"升级进程还持锁时
+# 被安排重启的收敛必然 BUSY 退出"，而那次退出只有在真机的 systemd 上才复现
+# （本机无法在无 root 环境里跑 systemd 单元）。真机 2026-11-13 实测到过，
+# 表现是 health 的 failed_units 变红。
+STRING_ASSERT_BUDGET = 133
 
 
 def count():

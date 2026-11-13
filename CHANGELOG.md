@@ -7,6 +7,67 @@
 
 ## [Unreleased]
 
+## [0.1.90] - 2026-11-13
+
+> 升级通道换 Python 实现后的第一轮真机验收，抓到一个**跨版本的既有缺陷**。
+
+### Fixed
+
+- **升级后的延迟重启会让收敛失败一次**。`upgrade-apply` 在返回前安排"3 秒后
+  重启面板 + 收敛"，但此时升级进程仍持有 `apply.lock`（fd9，随 `exec` 继承）。
+  收敛起来后 `flock -n` 必然 BUSY → 退出 1 → `dert-converge.service` 被标 failed
+  → health 的 `failed_units` 检查直接变红（真机 2026-11-13 实测，日志：
+  `run-p*.service: Job for dert-converge.service failed because the control process
+  exited with error code`）。
+
+  BUSY 不是真故障，是"另一次配置变更正在进行"。给收敛单元加
+  `Restart=on-failure` + `RestartSec=15`（15 秒后升级进程早已退出），并用
+  `StartLimitIntervalSec=0` 关掉启动频率限制，避免"重试几次后被判 start-limit-hit"
+  这种更难查的失败。同一把锁被面板保存 / 备份恢复占用时，收敛也会自愈。
+
+
+## [0.1.89] - 2026-11-13
+
+> 工业化重构 **P2-9**：升级通道（check / download / apply）抽成独立模块。
+> 这是最后一个域，也是最危险的一个——它是**唯一会替换自身**的路径。
+
+### Changed
+
+- **`priv/upgradeops.py`（约 460 行）**：`upgrade-check` / `upgrade-download` /
+  `upgrade-apply`。`dert-priv` 从 **617 行降到 246 行**（−371）。
+
+  逐条保留的顺序（每一步都在防一种具体的坏结局）：
+  1. **先验来源再验结构**：签名 → 成员白名单 → 版本。sha256 只能证明"没被改坏"，
+     不能证明"是谁发的"——镜像被劫持时可以同时替换包和哈希
+  2. **成员清单先取到变量再喂校验器**。不能 `tar -tzf | tarcheck`：tar 对含 `..`
+     的成员会往 stderr 打 "Removing leading ..."，合并进管道后那行会被当成成员名
+     （真机 2026-11-12 实测踩到，两个方向都错）
+  3. **暂存区必须在被替换目录之外**：放里面会随 mv 一起改名，第二步 mv 必 ENOENT
+  4. **换目录用 mv 两步**：`mv dert → dert.prev.$$` 成功后才 `mv stg → dert`，
+     失败可原路退回（UPG_SWAP）
+  5. **布局对齐**：install.sh 是扁平布局、升级包保持 `priv/` 子目录，换目录后必须
+     把 `priv/*` 铺回根，否则 sudo 调用的 `/usr/local/lib/dert/dert-priv` 直接消失
+  6. **升级后立即收敛**：生成物是 netgen 的产物，等最长 6h 的 timer 才重生成，
+     期间旧键/旧语法还在跑（真机实录：v0.1.44 升级后 IPv6"升级了也没修好"）
+  7. **延迟重启面板**：先把本次响应送达客户端，3 秒后再重启
+
+- `download` 的 sha256 改用 `hashlib` 计算（原来 shell 出去调 `sha256sum`）；
+  `.sha256` 按 `errors="replace"` 读——伪造/损坏的校验文件是二进制时，
+  要走到"不匹配"，不能抛异常。
+
+### Added
+
+- `tests/test_upgradeops.py`（24 个用例）：版本比较、清单式检查、非 https 拒绝、
+  缺 sha256 拒绝、sha 不匹配拒绝、降级拒绝、路径穿越/未知目录/软链/缺
+  VERSION·panel·priv/包内 Python 语法错误 全部拒绝、缺公钥但带签名拒绝，
+  以及**换目录 + 扁平化布局**的正向验证（在临时安装根里真跑一遍）。
+
+### 说明
+
+- `dert-priv` 从 1,822 行降到 246 行（−86%），`lib.sh` 从 395 行降到 86 行。
+  剩下的 bash 只有：子命令分发、root 检查、排他锁、几个一行的 exec 包装。
+
+
 ## [0.1.88] - 2026-11-13
 
 > 工业化重构 **P2-8**：配置写入流水线（config-set）抽成独立模块，

@@ -1,7 +1,16 @@
 [Unit]
 Description=DebRT 定时防漂移收敛
+# 收敛会在升级结束前 3 秒被安排重启，而升级进程仍持着 apply.lock（fd9）——
+# 那一次必然 BUSY 退出（真机 2026-11-13 实测：run-p*.service 报
+# "Job for dert-converge.service failed because the control process exited with error code"，
+# 随后 health 的 failed_units 检查直接变红）。同一把锁也会和面板保存、备份恢复撞车。
+# BUSY 不是真故障，重试即可；StartLimitIntervalSec=0 关掉启动频率限制，
+# 避免"重试几次后被 systemd 判为 start-limit-hit"这种更难查的失败。
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/dert/dert-priv apply-all --convergent
 TimeoutStartSec=120
+Restart=on-failure
+RestartSec=15
