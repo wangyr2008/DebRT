@@ -341,6 +341,32 @@ class ApplyGuards(unittest.TestCase):
         self.assertEqual(out["code"], "UPG_BAD")
         self.assertIn("broken.py", out["message"])
 
+    def test_never_writes_outside_install_root(self):
+        """换目录全过程不得碰安装根以外的路径。
+
+        这条是 CI 抓出来的真实缺陷：暂存目录曾写死 `/usr/local/lib/.dert.upgrade.PID`，
+        测试缝（DERT_LIB 指向临时目录）对它不起作用——macOS 上 /usr/local/lib 恰好
+        可写，本地全绿；CI 上是普通用户，直接 PermissionError。
+        """
+        pkg = make_pkg(os.path.join(self.s.td, "p.tar.gz"), version="0.1.89")
+        real = os.makedirs
+        seen = []
+
+        def spy(path, *a, **k):
+            seen.append(str(path))
+            return real(path, *a, **k)
+
+        os.makedirs = spy
+        try:
+            rc, out = run(self.s.u.apply, pkg)
+        finally:
+            os.makedirs = real
+        self.assertEqual(rc, 0, out)
+        outside = [p for p in seen if p.startswith("/usr/local/lib")]
+        self.assertEqual(outside, [], "写了安装根以外的路径：%s" % outside)
+        # 暂存/回退目录必须在安装根的父目录里（同一文件系统才能原子 rename）
+        self.assertEqual(self.s.u.STAGE_PARENT, os.path.dirname(self.s.lib))
+
     def test_corrupt_archive_refused(self):
         p = os.path.join(self.s.td, "bad.tar.gz")
         with open(p, "wb") as f:

@@ -7,6 +7,38 @@
 
 ## [Unreleased]
 
+## [0.1.94] - 2026-11-13
+
+> 修 CI：`upgradeops` 的暂存目录没走测试缝，本地绿、CI 红。
+
+### Fixed
+
+- **`upgrade-apply` 的暂存/回退目录写死了 `/usr/local/lib`**。它本该是
+  "安装根的父目录"（同一文件系统才能原子 rename），写死之后测试缝 `DERT_LIB`
+  对它不起作用：测试跑起来会去写**真实**的 `/usr/local/lib`。macOS 上那个目录
+  恰好可写，所以本地 270 个用例全绿；CI 是普通用户，三个用例直接
+  `PermissionError: '/usr/local/lib/.dert.upgrade.2344'`。
+
+  改为 `STAGE_PARENT = dirname(LIB)`：生产仍是 `/usr/local/lib`（逐字符等价），
+  测试则落在临时根的父目录里。
+
+- **顺带把 `/etc`、`/usr/local/bin`、`/var/log` 的写入也接上 `DERT_FSROOT`**。
+  此前这些路径在测试里是硬编码的，靠"写失败被 `except OSError` 吞掉"蒙混过去；
+  现在测试跑完不会在真实系统上留任何痕迹。延迟重启（`systemd-run`）在测试缝下
+  直接跳过，不再往真实 systemd 里排任务。
+
+### Added
+
+- `test_never_writes_outside_install_root`：用 `os.makedirs` 的探针记录整条换目录
+  流程碰过的路径，断言**没有任何一条**落在 `/usr/local/lib` 下。这条在 macOS 上也
+  会红——它不依赖"目标目录是否可写"，直接锁住"不许写出安装根"这个不变量。
+
+
+## [0.1.93] - 2026-11-13
+
+> 首个带签名的发布：验证 GitHub Actions 用 `DERT_SIGNING_KEY` 产出 `.sig` 的完整链路。
+> 无代码改动。
+
 ## [0.1.92] - 2026-11-13
 
 > 工业化重构 **P4-3**：root 单元硬化。

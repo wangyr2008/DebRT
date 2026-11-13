@@ -38,6 +38,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # 未设时与生产逐字符等价。
 LIB = os.environ.get("DERT_LIB", "/usr/local/lib/dert")
 SHARE = LIB + "/share"
+# 暂存/回退目录必须**在安装根的父目录**里（同一文件系统才能原子 rename），
+# 但不能写死 /usr/local/lib：那样测试缝（DERT_LIB 指向临时目录）就失效了，
+# 测试会去写真实 /usr/local/lib —— macOS 上碰巧可写，CI 上直接 PermissionError。
+STAGE_PARENT = os.path.dirname(LIB.rstrip("/")) or "/"
+# 数据根：/etc、/usr/local/bin、/var/log 这些系统路径跟随 DERT_FSROOT（测试缝）。
+# 未设时为空串 → 与生产逐字符等价。
+ROOT = os.environ.get("DERT_FSROOT", "") or "/"
+
+
+def _fs(path):
+    return path if ROOT == "/" else ROOT.rstrip("/") + path
 PROXIES = ("", "https://gh-proxy.org/", "https://gh-proxy.com/")
 MAX_PKG = 268435456          # 256MB，远大于实际包体
 PANEL_UNIT = "dert-panel.service"
@@ -378,28 +389,30 @@ def _sync_etc_hooks():
     net = LIB + "/network"
     if not os.path.isdir(net):
         return
-    d = "/etc/networkd-dispatcher/routable.d"
+    d = _fs("/etc/networkd-dispatcher/routable.d")
     for name in ("70-dert-dns", "80-dert-cake", "90-dert-lan-prefix"):
         _install(net + "/dispatcher/" + name, d + "/" + name, 0o755)
-    _install(net + "/dispatcher/70-dert-dns", "/etc/networkd-dispatcher/no-carrier.d/70-dert-dns", 0o755)
+    _install(net + "/dispatcher/70-dert-dns",
+             _fs("/etc/networkd-dispatcher/no-carrier.d/70-dert-dns"), 0o755)
     # R-01：PPPoE 热插拔钩子（install.sh/uninstall.sh 都带，升级通道曾漏掉）
-    _mkdir("/etc/networkd-dispatcher/carrier.d")
-    for dst in ("/etc/networkd-dispatcher/carrier.d/75-dert-pppoe-hotplug",
+    _mkdir(_fs("/etc/networkd-dispatcher/carrier.d"))
+    for dst in (_fs("/etc/networkd-dispatcher/carrier.d/75-dert-pppoe-hotplug"),
                 d + "/75-dert-pppoe-hotplug"):
         _install(net + "/dispatcher/75-dert-pppoe-hotplug", dst, 0o755)
-    _install(net + "/ppp/ip-up.d/dert", "/etc/ppp/ip-up.d/dert", 0o755)
-    _install(net + "/ppp/ip-down.d/dert", "/etc/ppp/ip-down.d/dert", 0o755)
-    _install(net + "/sysctl/70-dert.conf", "/etc/sysctl.d/70-dert.conf", 0o644)
-    _install(net + "/modules/dert.conf", "/etc/modules-load.d/dert.conf", 0o644)
-    _install(net + "/logrotate/dert", "/etc/logrotate.d/dert", 0o644)
+    _install(net + "/ppp/ip-up.d/dert", _fs("/etc/ppp/ip-up.d/dert"), 0o755)
+    _install(net + "/ppp/ip-down.d/dert", _fs("/etc/ppp/ip-down.d/dert"), 0o755)
+    _install(net + "/sysctl/70-dert.conf", _fs("/etc/sysctl.d/70-dert.conf"), 0o644)
+    _install(net + "/modules/dert.conf", _fs("/etc/modules-load.d/dert.conf"), 0o644)
+    _install(net + "/logrotate/dert", _fs("/etc/logrotate.d/dert"), 0o644)
     # P3-02：PPPoE 拨号单元在 network/systemd/ 下，不在 systemd/ 的 glob 里
-    _install(net + "/systemd/dert-pppoe.service", "/etc/systemd/system/dert-pppoe.service", 0o644)
+    _install(net + "/systemd/dert-pppoe.service",
+             _fs("/etc/systemd/system/dert-pppoe.service"), 0o644)
     # v0.1.57：DNS 分流 drop-in（覆盖写，不判断是否存在）
     r = _sh(["systemctl", "list-unit-files", "sing-box.service"], timeout=30)
     if r is not None and r.returncode == 0:
-        _mkdir("/etc/systemd/system/sing-box.service.d")
+        _mkdir(_fs("/etc/systemd/system/sing-box.service.d"))
         try:
-            with open("/etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf",
+            with open(_fs("/etc/systemd/system/sing-box.service.d/20-dert-dns-split.conf"),
                       "w", encoding="utf-8") as f:
                 f.write("# 由 DebRT 安装/收敛自动维护：DNS 按 MAC 分流（见 COEXISTENCE.md §DNS 分流）\n"
                         "# 启动前生成 00-dert-dns.json；启动后派生 nft 表；停止时删表回落 dnsmasq\n"
@@ -412,11 +425,11 @@ def _sync_etc_hooks():
         _sh(["systemctl", "daemon-reload"], timeout=60)
     # sudoers：先语法检查再落盘（visudo 拒绝就保留旧的，不能把 sudo 打坏）
     if os.path.isfile(LIB + "/sudoers/dert"):
-        tmp = "/etc/sudoers.d/dert.upgrade-tmp"
+        tmp = _fs("/etc/sudoers.d/dert.upgrade-tmp")
         if _install(LIB + "/sudoers/dert", tmp, 0o440):
             r = _sh(["visudo", "-c", "-f", tmp], timeout=30)
             if r is not None and r.returncode == 0:
-                os.replace(tmp, "/etc/sudoers.d/dert")
+                os.replace(tmp, _fs("/etc/sudoers.d/dert"))
             else:
                 try:
                     os.unlink(tmp)
@@ -428,20 +441,22 @@ def _sync_etc_hooks():
 def _sync_units():
     if not os.path.isdir(LIB + "/systemd"):
         return
-    _mkdir("/etc/systemd/system/dnsmasq.service.d")
-    _mkdir("/etc/systemd/system/sing-box.service.d")
+    _mkdir(_fs("/etc/systemd/system/dnsmasq.service.d"))
+    _mkdir(_fs("/etc/systemd/system/sing-box.service.d"))
     for pat in ("/*.service", "/*.timer"):
         for uf in glob.glob(LIB + "/systemd" + pat):
-            _install(uf, "/etc/systemd/system/" + os.path.basename(uf), 0o644)
+            _install(uf, _fs("/etc/systemd/system/") + os.path.basename(uf), 0o644)
     for sub in ("dnsmasq.service.d", "sing-box.service.d"):
         for uf in glob.glob(LIB + "/systemd/" + sub + "/*"):
-            _install(uf, "/etc/systemd/system/%s/%s" % (sub, os.path.basename(uf)), 0o644)
+            _install(uf, _fs("/etc/systemd/system/%s/%s" % (sub, os.path.basename(uf))), 0o644)
     _sh(["systemctl", "enable", "dert-panel.service", "dert-dns-sync.service",
          "dert-converge.timer"], timeout=120)
 
 
 def _delayed_restart(units):
     """先把响应送回客户端，3 秒后再重启（systemd-run 优先，退化到 setsid）。"""
+    if ROOT != "/":
+        return      # 测试缝：不往真实 systemd 里排任务
     cmd = ["systemctl", "restart"] + units
     r = _sh(["systemd-run", "--on-active=3", "--quiet"] + cmd, timeout=30)
     if r is not None and r.returncode == 0:
@@ -480,7 +495,7 @@ def apply(pkg):
             "如需回退旧版本，请先恢复出厂前的备份并手动放置旧版包")
 
     # 3) 解压到暂存区（必须在被替换目录之外）+ 自检
-    stg = "/usr/local/lib/.dert.upgrade.%d" % os.getpid()
+    stg = os.path.join(STAGE_PARENT, ".dert.upgrade.%d" % os.getpid())
     shutil.rmtree(stg, ignore_errors=True)
     os.makedirs(stg, exist_ok=True)
     r = _sh(["tar", "-C", stg] + _tar_flags() + ["-xzf", pkg], timeout=300)
@@ -507,7 +522,7 @@ def apply(pkg):
         shutil.copytree(LIB, bak, symlinks=True)
     except Exception:
         pass
-    old = "/usr/local/lib/dert.prev.%d" % os.getpid()
+    old = os.path.join(STAGE_PARENT, "dert.prev.%d" % os.getpid())
     try:
         os.rename(LIB, old)
         os.rename(stg, LIB)
@@ -544,16 +559,16 @@ def apply(pkg):
                 pass
     # sb.sh 随升级保持最新：旧 sb 无更新状态记录，面板"上次更新"会一直空
     if os.path.isfile(LIB + "/singbox/sb.sh"):
-        _install(LIB + "/singbox/sb.sh", "/usr/local/bin/sb", 0o755)
+        _install(LIB + "/singbox/sb.sh", _fs("/usr/local/bin/sb"), 0o755)
 
     _sync_etc_hooks()
 
     # PPPoE 看门狗：pppd 对"接口被外部删除"不敏感，服务 active 但 ppp0 消失时不自愈
     if os.path.isfile(LIB + "/systemd/dert-pppoe-watchdog.timer"):
         _install(LIB + "/systemd/dert-pppoe-watchdog.service",
-                 "/etc/systemd/system/dert-pppoe-watchdog.service", 0o644)
+                 _fs("/etc/systemd/system/dert-pppoe-watchdog.service"), 0o644)
         _install(LIB + "/systemd/dert-pppoe-watchdog.timer",
-                 "/etc/systemd/system/dert-pppoe-watchdog.timer", 0o644)
+                 _fs("/etc/systemd/system/dert-pppoe-watchdog.timer"), 0o644)
         _sh(["systemctl", "daemon-reload"], timeout=60)
         _sh(["systemctl", "enable", "--now", "dert-pppoe-watchdog.timer"], timeout=60)
         # 周期改过（1min → 15min）必须重启才生效：enable --now 对已在运行的 timer 是空操作
@@ -562,7 +577,7 @@ def apply(pkg):
     # 网络事件分发（v0.1.67）：覆盖写 + enable，不判断"是否已存在"
     if os.path.isfile(LIB + "/systemd/dert-netwatch.service"):
         _install(LIB + "/systemd/dert-netwatch.service",
-                 "/etc/systemd/system/dert-netwatch.service", 0o644)
+                 _fs("/etc/systemd/system/dert-netwatch.service"), 0o644)
         _sh(["systemctl", "daemon-reload"], timeout=60)
         _sh(["systemctl", "enable", "dert-netwatch.service"], timeout=60)
         _sh(["systemctl", "restart", "dert-netwatch.service"], timeout=60)
@@ -592,7 +607,7 @@ def apply(pkg):
     # 升级后自检并落日志（升级此前只验证面板能起）
     r = _sh([LIB + "/dert-priv", "selftest"], timeout=180)
     try:
-        with open("/var/log/dert-upgrade-selftest.log", "a", encoding="utf-8") as f:
+        with open(_fs("/var/log/dert-upgrade-selftest.log"), "a", encoding="utf-8") as f:
             f.write((r.stdout or "") + (r.stderr or ""))
     except OSError:
         pass
@@ -609,7 +624,7 @@ def apply(pkg):
         try:
             r = subprocess.run([LIB + "/dert-priv", "apply-all", "--convergent"],
                                capture_output=True, text=True, timeout=600, env=env)
-            with open("/var/log/dert-upgrade-selftest.log", "a", encoding="utf-8") as f:
+            with open(_fs("/var/log/dert-upgrade-selftest.log"), "a", encoding="utf-8") as f:
                 f.write((r.stdout or "") + (r.stderr or ""))
             if r.returncode != 0:
                 _log("升级后收敛有报错，详见 /var/log/dert-upgrade-selftest.log")
