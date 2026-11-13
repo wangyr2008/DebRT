@@ -112,6 +112,47 @@ ip netns exec t1 dig +short github.com @192.168.10.1
 ip netns del t1 && ip link del t1h                   # 用完清理
 ```
 
+## 发版
+
+`release.yml` 由 **tag** 触发（`on: push: tags: ["v*"]`），所以推送方式很关键：
+
+```sh
+printf '0.2.0\n' > VERSION          # 必须与 tag 完全一致，否则 workflow 第一步就退出
+# 在 CHANGELOG.md 的 [Unreleased] 下补一条
+git add -A && git commit -m "release: v0.2.0"
+git tag -a v0.2.0 -m "v0.2.0：一句话说明"
+git push origin main
+git push origin v0.2.0              # 显式推 tag
+```
+
+**两个坑**（都踩过）：
+
+1. **`git push --follow-tags` 只推附注标签**（`git tag -a`）。用轻量标签
+   （`git tag v0.2.0`）时它什么都不会推，于是 tag 只在本地、`release` 工作流
+   一次都不会触发——但 `smoke` 照常跑绿，很容易误以为"发版成功了"。
+   要么用 `-a`，要么像上面那样显式 `git push origin v0.2.0`。
+2. **`VERSION` 与 tag 必须一致**，`release.yml` 会校验；不一致时不会出包，
+   只在日志里留一句 tag/VERSION 不一致。
+
+发布产物应包含三个附件：`dert-<ver>.tar.gz`、`.sha256`、`.sig`。缺 `.sig`
+说明仓库 Secret `DERT_SIGNING_KEY` 没配好（日志里会有 `::warning::未配置`）。
+
+### 签名密钥
+
+私钥**只存在两处**：你的本机（`~/.dert-signing/dert-signing.key.pem`，600）
+与 GitHub Secret `DERT_SIGNING_KEY`（base64 的 PEM，单行）。设备端只有公钥
+`priv/dert-signing.pub.pem`。CI 用私钥签、设备用公钥验，私钥永不进镜像。
+
+本机手工签一个包（不走 CI 时）：
+
+```sh
+openssl pkeyutl -sign -inkey ~/.dert-signing/dert-signing.key.pem -rawin \
+  -in dert-0.2.0.tar.gz -out dert-0.2.0.tar.gz.sig
+```
+
+设备端策略由 `upgrade.require_signature` 控制：`true` 时无签名的包直接拒绝，
+`false`（默认）时只警告放行——这是"存量发布还没签名"的过渡开关。
+
 ## 许可证
 
 提交贡献即表示同意以本项目的许可证（见 [LICENSE](LICENSE)）授权你的贡献。
