@@ -179,6 +179,11 @@ class PrepareBehavior(unittest.TestCase):
         self.assertIn('"::"', text, "必须监听双栈：白名单设备的 v6 DNS 也要能进来")
         self.assertIn("hijack-dns", text, "5353 入口要 hijack-dns 才能下发 fakeip")
         self.assertIn("landns", text, ".lan 本地解析不能丢（局域网主机名）")
+        # nft 把白名单的 { tcp, udp } dport 53 都 DNAT 到 5353，所以监听侧
+        # 不能只绑 UDP：只绑 UDP 时 TCP DNS 直接 connection refused，
+        # 而且客户端不会自动退回 UDP（真机 2026-11-13 实测 dig +tcp 被拒）。
+        self.assertNotEqual(cfg["inbounds"][0].get("network"), "udp",
+                            "5353 不能只监听 UDP（nft 把 TCP DNS 也 DNAT 过来了）")
         # v0.1.64 起按源 IP 分流的规则已整体移除（改由 nft 按 MAC 分流）
         self.assertNotIn("source_ip_cidr", text)
         # v0.1.65 起不再读运营商 DNS（非白名单已由 nft 直连 dnsmasq）

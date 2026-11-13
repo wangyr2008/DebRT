@@ -7,6 +7,39 @@
 
 ## [Unreleased]
 
+## [0.1.101] - 2026-11-13
+
+> 修一个只在 TCP DNS 上暴露的缺陷：白名单入口只监听了 UDP。
+
+### Fixed
+
+- **`00-dert-dns.json` 的 `dns-in` inbound 写死了 `"network": "udp"`**，
+  而 `inet dert_dns` 里白名单那两条规则是 `meta l4proto { tcp, udp } th dport 53`
+  ——TCP 也被 DNAT 到 5353，可那个端口上没有 TCP 监听。真机实测：
+
+  ```
+  ss -lntup | grep 5353              → 只有 udp
+  dig +tcp @192.168.10.1 -p 5353 ... → Connection refused
+  ```
+
+  客户端在响应被截断后重试、或强制走 TCP 时，解析直接失败且**不会自动退回
+  UDP**，表现是"某个域名解析不了"，很难定位。因为 fakeip 应答很小、
+  `HTTPS/SVCB` 查询又被 reject，触发概率低，但真碰上就是怪问题。
+
+  去掉 `network` 字段后 sing-box 默认同时监听 tcp+udp（在设备上用临时实例
+  在 15353 端口验证过：`udp UNCONN` + `tcp LISTEN` 同时存在），nft 规则不用改。
+
+### Added
+
+- `test_dns_split` 增加断言：5353 入口不得把 `network` 固定成 `udp`。
+
+### 注意
+
+- 这个修复**只在 sing-box 启动时生效**：片段由 `ExecStartPre` 生成，而升级流程
+  按契约不会重启 sing-box。升级后需要手动 `systemctl restart sing-box` 一次
+  （实测：升级完成但未重启时，5353 仍只有 UDP；重启后 tcp+udp 同时在听）。
+
+
 ## [0.1.100] - 2026-11-13
 
 > 复查遗留项 2、3：漂移判定补上权限；恢复/出厂失败会回滚。

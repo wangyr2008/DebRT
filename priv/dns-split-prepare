@@ -58,7 +58,12 @@ cfg = {
             # 白名单设备已发 437 个 v6 DNS 包全部落空）。
             "listen": "::",
             "listen_port": 5353,
-            "network": "udp",
+            # 不写 network：省略时同时监听 tcp+udp（真机验证）。
+            # nft 把白名单设备的 { tcp, udp } dport 53 都 DNAT 到这里，
+            # 只绑 UDP 会让 TCP DNS 直接 connection refused——而且客户端
+            # 不会自动退回 UDP，表现是"某个域名解析不了"。
+            # 触发场景：响应被截断后重试、客户端强制 TCP、大记录查询。
+            # （v0.1.101 修；此前写死 "udp"，dig +tcp 实测被拒。）
         }
     ],
     "route": {
