@@ -60,6 +60,12 @@ rm -f /etc/sudoers.d/dert /etc/sysctl.d/70-dert.conf /etc/modules-load.d/dert.co
 # 继续尝试在 ppp0 上跑 DHCPv6。均为 DebRT 生成物（原文件内容已被覆盖）
 rm -f /etc/ppp/peers/dert /etc/ppp/chap-secrets /etc/ppp/pap-secrets
 rm -f /etc/systemd/network/30-*.network 2>/dev/null || true
+# v0.1.107：已撤销前缀的 drop-in 与状态文件。不删的话，重装后会把上一轮的
+# 旧前缀当成"已废弃"继续广播（虽然无害，但会让客户端把还在用的地址停掉的风险
+# 变高）。只删自己那一个文件，目录空了才收走，不碰别人的 drop-in。
+rm -f /etc/systemd/network/20-lan.network.d/90-retired-prefixes.conf 2>/dev/null || true
+rmdir /etc/systemd/network/20-lan.network.d 2>/dev/null || true
+rm -f /var/lib/dert/retired-prefixes 2>/dev/null || true
 # DNS 分流表：把客户端 DNS DNAT 到 tun 的地址，卸载后没人监听，必须清掉
 nft delete table inet dert_dns 2>/dev/null || true
 # sb.sh 与其 cron 由 DebRT 下发，一并移除；sing-box 服务本体与 /etc/sing-box 保留运行
