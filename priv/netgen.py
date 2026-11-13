@@ -21,14 +21,13 @@ _FS = os.environ.get("DERT_FSROOT", "")
 CONFIG_PATH = _FS + "/etc/dert/config.json"
 SECRETS_PATH = _FS + "/etc/dert/secrets.json"
 ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
-# PPPoE 链路的 MTU。1492 是 PPPoE 的理论上限，但问题不在上限本身：
-#   · br-lan 的 RA 之前宣告的是链路 MTU（1500），客户端就按 1500 发包；
-#   · v6 的 MSS 钳制用 `rt mtu`，压不住客户端自己的 1440（见 gen_nft）；
-#   于是**每条新连接**都要先挨一次 ICMPv6 PTB 才降到 1492，白付一个 RTT。
-#   真机 2026-11-13 实测：改前 PTB 计数 20 秒 +5，改后 30 秒 +0。
-# 取 1480 而不是 1492：留 12 字节余量给少数路径更小的目的地（PTB 过滤在部分
-# 运营商链路上很常见），代价是 v4 每包少 12 字节（包数约多 0.8%）。
-PPPOE_MTU = 1480
+# PPPoE 链路的 MTU。保持 1492（PPPoE 理论值）——v0.1.102 曾降到 1480 并给
+# br-lan 加 IPv6MTUBytes=1480，结果 networkd 不再发 RA，客户端 600 秒后默认
+# 路由过期，**所有设备的 v6 一起断**（真机 2026-11-13 15:51，断开 Wi-Fi 重连
+# 才恢复，因为 RS 会触发一次 RA）。已回滚。
+# 真正要修的是"每条新连接白丢一个 RTT"：那是 v6 的 MSS 钳制失效导致的，
+# 与 MTU 取值无关，见 gen_nft 里的 v6 分支。
+PPPOE_MTU = 1492
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
 
@@ -241,12 +240,9 @@ def gen_lan_network(cfg):
              "[Network]",
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
              "IPForward=yes"]
-    # v6 的 MTU 必须在 RA 里宣告：不宣告时客户端按链路 MTU（1500）发包，
-    # 而 ppp0 只有 1492，路由器就得给每个新连接回一次 PTB，白丢一个 RTT
-    # （见 PPPOE_MTU 的注释）。IPv6MTUBytes 同时设置 br-lan 的 v6 MTU 并写进
-    # RA 的 MTU 选项，客户端从第一个包起就用 1480，不必再等 PTB。
-    if cfg["wan"].get("mode") == "pppoe" and v6.get("enabled"):
-        lines.append(f"IPv6MTUBytes={PPPOE_MTU}")
+    # 不要给 br-lan 设 IPv6MTUBytes：v0.1.102 试过 1480，networkd 随即不再发
+    # RA（/run/systemd/netif/links 里连 IPV6_SEND_RA 都没有），客户端 600 秒后
+    # 默认路由过期 → 全屋 v6 断，只有重新连 Wi-Fi（发 RS）才恢复。已回滚。
     # LAN 桥成员口由 30-<name>.network 绑定（见 gen_port_networks）
     # IPv6：RA 统一由 networkd 发布（dnsmasq 不再发 RA，避免双 RA 源，见审计 B-21）
     if v6.get("enabled") and v6.get("mode") == "static" and not v6.get("prefix"):
@@ -268,7 +264,16 @@ def gen_lan_network(cfg):
         # 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告（man 原文同）
         if v6.get("mode") == "native" and cfg["wan"].get("mode") in ("dhcp", "pppoe"):
             lines.append("DHCPPrefixDelegation=yes")
-        lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]", "RouterLifetimeSec=600", "EmitDNS=yes"]
+        # RA 的两个时间必须留足余量：RouterLifetimeSec 只比发送间隔大一点点时，
+        # 客户端会在下一条 RA 到达前就把默认路由过期掉——表现是"用着好好的，
+        # 十几分钟后全屋 v6 突然上不去，重连 Wi-Fi 又好了（RS 会触发一次 RA）"。
+        # 真机 2026-11-13 15:51 就这么断过一次：15:41 发过一条 RA，
+        # 600 秒后客户端到期，而下一条恰好也在这个点。
+        # 按 RFC 4861 的建议取 3 倍关系：间隔 ≤200 秒，寿命 1800 秒。
+        lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]",
+                  "MaxRtrAdvIntervalSec=200",
+                  "RouterLifetimeSec=1800",
+                  "EmitDNS=yes"]
         if v6.get("mode") in ("nat6", "static"):
             # NAT6/静态有确定的 LAN v6 地址，直告本机（dnsmasq 在 br-lan 上服务 DNS）
             lan_v6 = f"{ULA_PREFIX}::1" if v6.get("mode") == "nat6" else \

@@ -3,6 +3,7 @@
 这些断言在重构（改结构、改语言、改文件划分）后应当依然成立，
 只要生成出来的配置语义没变。
 """
+import re
 import unittest
 
 import support
@@ -52,9 +53,10 @@ class TestPppdPeer(unittest.TestCase):
         self.assertIn("mtu %d" % self.ng.PPPOE_MTU, body)
         self.assertIn("mru %d" % self.ng.PPPOE_MTU, body)
 
-    def test_mtu_leaves_margin_below_pppoe_limit(self):
-        # 留 12 字节余量：部分运营商链路的 v6 路径更小且会过滤 PTB
-        self.assertLess(self.ng.PPPOE_MTU, 1492)
+    def test_mtu_is_pppoe_default(self):
+        # v0.1.102 曾降到 1480，结果 networkd 停发 RA、全屋 v6 断（见 PPPOE_MTU 注释）。
+        # 别再降 MTU——真正要修的是 MSS 钳制。
+        self.assertEqual(self.ng.PPPOE_MTU, 1492)
 
 
 class TestLANNetwork(unittest.TestCase):
@@ -79,17 +81,29 @@ class TestLANNetwork(unittest.TestCase):
         self.assertNotIn("IPv6SendRA=yes", body)
         self.assertNotIn("DHCPPrefixDelegation=yes", body)
 
-    def test_ipv6_mtu_advertised(self):
-        # 不宣告 MTU 时客户端按 1500 发包 → 超过真实路径上限 → 静默丢包，
-        # 表现是"v6 访问很慢/卡住"（真机 2026-11-13）
-        body = self.ng.gen_lan_network(support.pppoe_config())
-        self.assertIn("IPv6MTUBytes=%d" % self.ng.PPPOE_MTU, body)
+    def test_ra_lifetime_outlasts_interval(self):
+        """RA 的寿命必须远大于发送间隔。
 
-    def test_ipv6_mtu_not_advertised_for_non_pppoe(self):
-        # DHCP/静态 WAN 的链路 MTU 就是 1500，没有这个问题，不该凭空压低
-        cfg = support.pppoe_config()
-        cfg["wan"]["mode"] = "dhcp"
-        self.assertNotIn("IPv6MTUBytes", self.ng.gen_lan_network(cfg))
+        真机 2026-11-13：寿命 600 秒、间隔上限也是 600 秒，15:41 发过一条之后
+        15:51 全屋 v6 突然断（默认路由到期，下一条 RA 恰好还没到），
+        断开 Wi-Fi 重连才恢复——因为 RS 会立刻触发一次 RA。
+        按 RFC 4861 取 3 倍关系。
+        """
+        body = self.ng.gen_lan_network(support.pppoe_config())
+        life = int(re.search(r"RouterLifetimeSec=(\d+)", body).group(1))
+        gap = int(re.search(r"MaxRtrAdvIntervalSec=(\d+)", body).group(1))
+        self.assertGreaterEqual(life, gap * 3,
+                                "RA 寿命 %d 秒 vs 间隔 %d 秒，余量不足" % (life, gap))
+
+    def test_no_ipv6_mtu_override(self):
+        """不要给 br-lan 设 IPv6MTUBytes。
+
+        v0.1.102 实测：设成 1480 后 networkd 不再发 RA（/run/systemd/netif/links
+        里连 IPV6_SEND_RA 都没有），客户端 600 秒后默认路由过期 → 全屋 v6 断，
+        只有重新连 Wi-Fi（发 RS 触发一次 RA）才恢复。已回滚，别再"顺手"加回来。
+        """
+        body = self.ng.gen_lan_network(support.pppoe_config())
+        self.assertNotIn("IPv6MTUBytes", body)
 
 
 class TestDnsmasq(unittest.TestCase):
