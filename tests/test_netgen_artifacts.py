@@ -80,6 +80,31 @@ class TestLANNetwork(unittest.TestCase):
         body = self.ng.gen_lan_network(cfg)
         self.assertNotIn("IPv6SendRA=yes", body)
         self.assertNotIn("DHCPPrefixDelegation=yes", body)
+        self.assertNotIn("SubnetId", body)
+
+    def test_pd_subnet_id_avoids_wan_prefix(self):
+        """LAN 必须从 PD 里取**第二个** /64，避开 WAN 自己的地址。
+
+        运营商委派的 PD 常常是 /60，而 WAN 的 IA_NA 地址就落在 PD 的第一个
+        /64 里。networkd 默认（SubnetId=auto）把第一个 /64 分给 LAN，于是
+        WAN 与 LAN 同前缀：路由表两条相同的 /64，选路优先 ppp0，发往 LAN
+        客户端的包全被送进 WAN（真机 2026-11-14 08:39：ppp0 与 br-lan 都是
+        ...:1fe0::/64，`ip -6 route get <客户端>` 返回 dev ppp0，LAN 的 v6 全断）。
+        """
+        body = self.ng.gen_lan_network(support.pppoe_config())
+        self.assertIn("[DHCPPrefixDelegation]", body)
+        self.assertIn("UplinkInterface=ppp0", body)
+        self.assertIn("SubnetId=1", body)
+        # 段必须独立：不能把 IPv6SendRA=yes 之类吞进 [DHCPPrefixDelegation]
+        seg = body.split("[DHCPPrefixDelegation]", 1)[1]
+        self.assertNotIn("IPv6SendRA=yes", seg)
+
+    def test_pd_uplink_follows_wan_mode(self):
+        cfg = support.pppoe_config()
+        cfg["wan"]["mode"] = "dhcp"
+        body = self.ng.gen_lan_network(cfg)
+        wan = next(p["name"] for p in cfg["ports"] if p.get("wan"))
+        self.assertIn("UplinkInterface=%s" % wan, body)
 
     def test_ra_lifetime_outlasts_interval(self):
         """RA 的寿命必须远大于发送间隔。

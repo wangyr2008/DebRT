@@ -56,7 +56,9 @@ class Env:
             fake("systemctl", 'exit %d' % (0 if services_up else 1)),
             fake("nft", 'printf "%s" "$FAKE_NFT"'),
             fake("ss", 'printf "%s" "$FAKE_SS"'),
-            fake("ip", 'printf "%s" "$FAKE_IP"'),
+            # 按接口返回不同内容：br-lan 与 ppp0 的前缀要能分别断言
+            fake("ip", 'case "$*" in *ppp0*) printf "%s" "$FAKE_IP_WAN" ;; '
+                       '*) printf "%s" "$FAKE_IP" ;; esac'),
         ]
         for name, body in fakes:
             p = os.path.join(self.bin, name)
@@ -68,6 +70,9 @@ class Env:
             "FAKE_NFT": nft_out,
             "FAKE_SS": "*:5353 *:*\n" if listening else "*:53 *:*\n",
             "FAKE_IP": ("    inet6 %s/64 scope global dynamic mngtmpaddr\n" % GUA),
+            # WAN 默认给一个**不同**的 /64（真机正常态）
+            "FAKE_IP_WAN": ("    inet6 2409:8a5e:a54:1fe0:98e6:5c85:448d:46a0/64 "
+                            "scope global dynamic mngtmpaddr\n"),
         }
 
     def run(self):
@@ -126,6 +131,24 @@ class DetectsProblems(unittest.TestCase):
         # 前缀变了但 nft 没跟上 → 白名单 v6 DNS 全打向不存在的地址
         self.assertIn("nft:v6_target",
                       self._failed(v6_target="2409:8a5e:dead::1"))
+
+    def test_lan_wan_same_prefix(self):
+        """LAN 与 WAN 同前缀必须报红。
+
+        真机 2026-11-14 08:39：运营商委派 PD 是 /60，WAN 的 IA_NA 地址落在
+        第一个 /64 里，networkd 又把这个 /64 分给 br-lan。路由表两条相同的
+        /64，选路优先 ppp0，发往 LAN 客户端的包全被送进 WAN，LAN 的 v6 全断。
+        这种状态从服务状态、nft、DNS 上看都"正常"，只有比对前缀才看得出来。
+        """
+        e = Env()
+        self.addCleanup(e.close)
+        # WAN 与 LAN 用同一个 /64
+        e.env_extra["FAKE_IP_WAN"] = (
+            "    inet6 2409:8a5e:a57:a080:98e6:5c85:448d:46a0/64 "
+            "scope global dynamic mngtmpaddr\n")
+        d, rc = e.report()
+        self.assertIn("ipv6:lan_wan_prefix", d["failed"])
+        self.assertEqual(rc, 1)
 
     def test_5353_not_listening(self):
         self.assertIn("dns:5353_listening", self._failed(listening=False))

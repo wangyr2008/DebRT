@@ -7,6 +7,41 @@
 
 ## [Unreleased]
 
+## [0.1.112] - 2026-11-14
+
+> 修"LAN 的 v6 又全断了"：这次是 **WAN 和 LAN 拿到同一个 /64**。
+
+### Fixed
+
+- **br-lan 显式指定 `SubnetId=1`**。运营商委派的 PD 是 **/60**（够 16 个 /64），
+  而 WAN 自己的 IA_NA 地址就落在 PD 的**第一个** /64 里：
+
+  ```
+  ppp0: DHCP: received delegated prefix 2409:8a5e:a54:1fe0::/60
+  WAN 地址:  2409:8a5e:a54:1fe0:98e6:5c85:448d:46a0/64   ← 在第一个 /64
+  LAN 前缀:  2409:8a5e:a54:1fe0::/64                      ← networkd 也取了第一个
+  ```
+
+  `SubnetId=` 默认是 `auto`，networkd 取第一个 /64 给 LAN，于是同一 /64 挂在
+  两个接口上。路由表出现两条相同前缀，`ip -6 route get <客户端地址>` 直接返回
+  `dev ppp0`——**发往 LAN 客户端的包全被送进 WAN**，LAN 的 v6 彻底不通。
+  改取第二个 /64（`1fe1`）即避开 WAN 所在的那一个。
+
+  真机验证：改前 br-lan = `1fe0::/64`（与 ppp0 相同，选路走 ppp0）；
+  改后 br-lan = `1fe1::/64`，`1fe0::/64` 路由只剩 ppp0 一条，选路恢复 `dev br-lan`。
+
+- **`health` 新增 `ipv6:lan_wan_prefix`**：比对 br-lan 与 ppp0 的 GUA 是否同 /64。
+  这种状态从服务状态、nft 表、DNS 上看全都"正常"，只有比对前缀才看得出来。
+
+### 说明
+
+- 只对 `native` 模式生效；`nat6` / `static` 有自己的固定前缀。
+- DHCP 模式下 `UplinkInterface` 取 WAN 网口名，PPPoE 下固定 `ppp0`。
+- **已知限制**：如果哪天运营商只委派一个 /64（没有第二个 /64 可切），
+  `SubnetId=1` 无处可取，LAN 会拿不到 GUA。那时需要退回 ULA + NAT66，
+  这条先记着——当前线路是 /60，不触发。
+
+
 ## [0.1.111] - 2026-11-14
 
 > 0.1.110 引入的回归：关闭 IPv6 时 `25-ppp0.network` 会被删掉。

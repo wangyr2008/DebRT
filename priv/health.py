@@ -17,6 +17,7 @@ node_exporter textfile）直接消费。**只读，不改任何东西。**
     health.py --quiet    只输出失败项
 """
 
+import ipaddress
 import json
 import os
 import shutil
@@ -93,6 +94,26 @@ def prefix_checks(checks):
     if not gua:
         check(checks, "ipv6:br_lan_gua", True, "无全局 v6（可能已关闭 v6）")
         return
+
+    # LAN 与 WAN 同前缀 → 路由表出现两条相同的 /64，选路优先 ppp0，发往 LAN
+    # 客户端的包全被送进 WAN，LAN 的 v6 彻底不通（真机 2026-11-14 08:39：
+    # ppp0 与 br-lan 都是 ...:1fe0::/64，`ip -6 route get <客户端>` 返回 dev ppp0）。
+    # 成因是运营商委派的 PD 是 /60，而 WAN 的 IA_NA 地址就落在第一个 /64 里。
+    rc, wan_out = run(["ip", "-6", "addr", "show", "dev", "ppp0", "scope", "global"])
+    wan_gua = ""
+    for line in wan_out.splitlines():
+        if "inet6" in line and "temporary" not in line:
+            wan_gua = line.split()[1].split("/")[0]
+            break
+    if wan_gua:
+        try:
+            same = (ipaddress.ip_network(gua + "/64", strict=False) ==
+                    ipaddress.ip_network(wan_gua + "/64", strict=False))
+        except ValueError:
+            same = False
+        check(checks, "ipv6:lan_wan_prefix", not same,
+              f"LAN 与 WAN 同前缀 {gua}/64（发往客户端的包会被送到 ppp0）"
+              if same else "不同前缀")
 
     rc, tbl = run(["nft", "list", "table", "inet", "dert_dns"])
     targets = set()

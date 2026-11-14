@@ -291,6 +291,20 @@ def gen_lan_network(cfg):
             lines += ["", "[IPv6Prefix]", f"Prefix={ULA_PREFIX}::/64"]
         elif v6.get("mode") == "static" and v6.get("prefix"):
             lines += ["", "[IPv6Prefix]", f"Prefix={v6['prefix']}"]
+        # 必须显式指定 SubnetId。运营商委派的 PD 常常是 /60，而 WAN 自己的
+        # IA_NA 地址就落在 PD 的**第一个** /64 里；networkd 默认（SubnetId=auto）
+        # 把第一个 /64 分给 LAN，于是 WAN 与 LAN 同前缀：路由表出现两条相同的
+        # /64，选路优先 ppp0，发往 LAN 客户端的包全被送进 WAN，LAN 的 v6 彻底
+        # 不通（真机 2026-11-14 08:39 实测：ppp0 = ...:1fe0::/64，br-lan 也被
+        # 分到 ...:1fe0::/64，`ip -6 route get <客户端>` 直接返回 dev ppp0）。
+        # 取第二个 /64 就避开了 WAN 所在的那一个。
+        if v6.get("mode") == "native" and cfg["wan"].get("mode") in ("dhcp", "pppoe"):
+            uplink = "ppp0" if cfg["wan"]["mode"] == "pppoe" else \
+                next((p["name"] for p in cfg.get("ports", []) if p.get("wan")), "")
+            if uplink:
+                lines += ["", "[DHCPPrefixDelegation]",
+                          f"UplinkInterface={uplink}",
+                          "SubnetId=1"]
     return "\n".join(lines) + "\n"
 
 
