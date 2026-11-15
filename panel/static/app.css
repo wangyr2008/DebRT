@@ -38,7 +38,7 @@ body { background: var(--ru-bg, #f5f5f7); }
   position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;background:var(--ru-bg)}
 #router-ui .ru-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
 #router-ui .ru-brandicon{width:36px;height:36px;border-radius:10px;overflow:hidden;flex:none;box-shadow:0 1px 4px rgba(0,0,0,.22)}
-#router-ui .ru-brandicon svg,#router-ui .ru-brandicon img{width:100%;height:100%;display:block}
+#router-ui .ru-brandicon svg{width:100%;height:100%;display:block}
 #router-ui .ru-brand b{display:block;font-size:14.5px;font-weight:600;letter-spacing:-.01em}
 #router-ui .ru-brand small{display:block;font-size:11.5px;color:var(--ru-text2);margin-top:1px}
 #router-ui .ru-nav{display:flex;flex-direction:column;gap:2px}
@@ -56,7 +56,7 @@ body { background: var(--ru-bg, #f5f5f7); }
   background:radial-gradient(1200px 600px at 50% -10%, rgba(0,113,227,.08), transparent 60%), var(--ru-bg)}
 #router-ui .ru-lcard{width:400px;max-width:100%;background:var(--ru-card);border:1px solid var(--ru-line);border-radius:18px;box-shadow:var(--ru-shadow);padding:34px 32px 26px;text-align:center}
 #router-ui .ru-llogo{width:58px;height:58px;border-radius:14px;overflow:hidden;margin:0 auto 14px;box-shadow:0 8px 22px rgba(1,80,208,.35)}
-#router-ui .ru-llogo svg,#router-ui .ru-llogo img{width:100%;height:100%;display:block}
+#router-ui .ru-llogo svg{width:100%;height:100%;display:block}
 #router-ui .ru-lcard h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 #router-ui .ru-lsub{font-size:12.5px;color:var(--ru-text2);margin-top:4px}
 #router-ui .ru-lcard form{text-align:left;margin-top:24px}
