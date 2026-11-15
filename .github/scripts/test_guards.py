@@ -5,6 +5,7 @@
 3) IPv6 矩阵：WAN 模式 × IPv6 模式的可用/拒绝组合（A-01/A-02/N-02 类回归）
 4) PPPoE IPv6：光猫桥接 + 拨号场景（IA_NA/IA_PD 经 networkd DHCPv6 客户端获取）
 """
+import json
 import glob
 import os
 import re
@@ -534,6 +535,26 @@ for _ico in ("favicon.ico", "favicon-32.png", "apple-touch-icon.png"):
     assert os.path.exists(os.path.join(ROOT, "panel", "static", _ico)), f"P3-16 回归：缺 {_ico}"
 _panel = open(os.path.join(ROOT, "panel", "dert_panel.py"), encoding="utf-8").read()
 assert '"/favicon.ico"' in _panel, "P3-16 回归：面板未直接响应 /favicon.ico（会 302 成 HTML）"
+
+# P3-37：添加到主屏要以独立窗口打开（v0.1.114）
+# 没有 apple-mobile-web-app-capable，iOS 只会把页面存成书签，点开仍在 Safari 里
+# （带地址栏、每次重新加载）。这类 meta 最容易被"清理无用标签"时误删，
+# 删了不报错，只是行为悄悄退化——所以钉死。
+# 合并成一条断言：拆成四条只为数数，报错时反而看不出缺了哪个。
+_need = ('name="apple-mobile-web-app-capable"', 'name="mobile-web-app-capable"',
+         'name="apple-mobile-web-app-title"', 'rel="manifest"')
+_missing = [m for m in _need if m not in _idx]
+assert _missing == [], "P3-37 回归：index.html 缺 %s（iOS 添加到主屏后会开在 Safari 里）" % _missing
+
+_mani_p = os.path.join(ROOT, "panel", "static", "manifest.json")
+assert os.path.exists(_mani_p), "P3-37 回归：缺 manifest.json"
+_mani = json.load(open(_mani_p, encoding="utf-8"))
+_mani_bad = ([k for k in ("display", "start_url") if not _mani.get(k)]
+             + [k for k in ("display",) if _mani.get(k) and _mani[k] != "standalone"]
+             + [_ic["src"] for _ic in _mani.get("icons", [])
+                if not os.path.exists(os.path.join(ROOT, "panel", "static",
+                                                   os.path.basename(_ic["src"])))])
+assert _mani_bad == [], "P3-37 回归：manifest 有问题项 %s" % _mani_bad
 
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到

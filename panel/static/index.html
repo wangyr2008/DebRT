@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 添加到主屏后以独立窗口打开（不加这几条 iOS 只会存成书签，点开仍在 Safari 里）。
+     status-bar-style 用 default：内容从状态栏下方开始，不需要额外处理安全区。 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="DebRT">
+<link rel="manifest" href="/static/manifest.json">
 <title>DebRT</title>
 <!-- PNG/ICO 在前：Safari 不认 SVG favicon（只认位图），只给 data:image/svg+xml 时后台标签
      显示成通用页面图标；Chrome 会优先用下面那行矢量版，缩放更清晰 -->

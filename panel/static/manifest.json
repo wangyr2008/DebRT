@@ -1,0 +1,15 @@
+{
+  "name": "DebRT 管理后台",
+  "short_name": "DebRT",
+  "description": "Debian 软路由管理后台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#0150cf",
+  "icons": [
+    { "src": "/static/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/static/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

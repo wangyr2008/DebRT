@@ -7,6 +7,42 @@
 
 ## [Unreleased]
 
+## [0.1.114] - 2026-11-15
+
+> 回撤 v0.1.113 的图标改动；修「iOS 添加到主屏后仍在 Safari 里打开」。
+
+### Reverted
+
+- **v0.1.113 的 logo 替换整体回撤**（commit `6b1ab8f` 已 revert，tag 与 Release
+  均已删除）。面板恢复原来的内联 SVG 图标。改动本身没有质量问题，只是先不发。
+
+### Fixed
+
+- **iOS 添加到主屏后仍然开在 Safari 里**。原因是 `index.html` 里**完全没有**
+  `apple-mobile-web-app-capable`——没有这条，iOS 只会把页面存成一个书签，
+  点开还是 Safari（带地址栏、每次重新加载），而不是独立窗口。
+
+  补齐四条声明 + 一份 manifest：
+
+  ```html
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="DebRT">
+  <link rel="manifest" href="/static/manifest.json">
+  ```
+
+  `status-bar-style` 用 `default` 而不是 `black-translucent`：后者会让内容
+  顶到刘海下面，需要额外处理 `env(safe-area-inset-*)`，而现有布局用的是
+  `min-height:100vh`，改动面大。`default` 让内容从状态栏下方开始，零风险。
+
+### Added
+
+- 守卫 **P3-37**：`index.html` 必须带那四条声明、`manifest.json` 必须存在且
+  `display=standalone`、引用的图标必须真实存在。这类 meta 最容易被"清理无用
+  标签"时误删——删了不报错，只是行为悄悄退化，所以钉死。
+
+
 ## [0.1.112] - 2026-11-14
 
 > 修"LAN 的 v6 又全断了"：这次是 **WAN 和 LAN 拿到同一个 /64**。
