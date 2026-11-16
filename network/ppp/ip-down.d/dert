@@ -8,13 +8,14 @@ systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 
 # 与 ip-up.d/dert 对称：0000usepeerdns 在 down 时也会改写 /etc/resolv.conf
 # （恢复成拨号前的版本，往往是空文件）。断网期间局域网仍在，主机名解析不能丢，
-# 所以这里同样把 resolv.conf 指回本机 dnsmasq。
+# 所以这里同样写回「首选 sing-box，回退 dnsmasq」（见 ip-up.d/dert 的说明）。
 if systemctl is-active --quiet dnsmasq 2>/dev/null; then
     {
-        echo "# 由 DebRT 维护 —— 指向本机 dnsmasq"
+        echo "# 由 DebRT 维护 —— 首选本机 sing-box（127.0.0.2），回退 dnsmasq"
         echo "# pppd 的 usepeerdns 会改写本文件，每次拨号/掉线后由 DebRT 恢复"
+        echo "nameserver 127.0.0.2"
         echo "nameserver 127.0.0.1"
-        echo "nameserver ::1"
+        echo "options timeout:2 attempts:1"
     } > "/etc/resolv.conf.dert.$$" 2>/dev/null \
       && mv -f "/etc/resolv.conf.dert.$$" /etc/resolv.conf 2>/dev/null \
       || rm -f "/etc/resolv.conf.dert.$$" 2>/dev/null

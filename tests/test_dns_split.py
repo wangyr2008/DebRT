@@ -189,6 +189,49 @@ class PrepareBehavior(unittest.TestCase):
         # v0.1.65 起不再读运营商 DNS（非白名单已由 nft 直连 dnsmasq）
         self.assertNotIn("carrier", text.lower())
 
+    def test_self_dns_entry_on_loopback(self):
+        """v0.1.118：路由器自身也要有 DNS 入口（127.0.0.2:53），否则本机查询
+        走 dnsmasq → 运营商 DNS，被污染的 www.google.com 会拿到 Twitter 的 IP。"""
+        h = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h.close)
+        rc, _, _ = h.run(os.path.join(support.PRIV, "dns-split-prepare"))
+        self.assertEqual(rc, 0)
+        p = os.path.join(h.root, "etc", "sing-box", "00-dert-dns.json")
+        with open(p) as fh:
+            cfg = json.load(fh)
+
+        tags = {i.get("tag"): i for i in cfg["inbounds"]}
+        self.assertIn("dns-self", tags, "缺路由器自身的 DNS 入口")
+        me = tags["dns-self"]
+        # 必须绑 127.0.0.2 而不是 127.0.0.1：后者是 dnsmasq，要留着做兜底
+        self.assertEqual(me.get("listen"), "127.0.0.2", me)
+        self.assertEqual(me.get("listen_port"), 53, me)
+        self.assertEqual(me.get("type"), "direct", me)
+        # 和 dns-in 一样不能写死 network=udp（客户端会用 TCP 重试）
+        self.assertNotEqual(me.get("network"), "udp", me)
+
+        hijack = [r for r in cfg["route"]["rules"]
+                  if r.get("action") == "hijack-dns" and r.get("inbound") == "dns-self"]
+        self.assertEqual(len(hijack), 1, "dns-self 必须 hijack-dns，否则查询会转发回自己")
+        # 不能带 protocol 条件（direct inbound 不做 sniff，规则会静默不匹配 → 无限循环）
+        self.assertNotIn("protocol", hijack[0], hijack[0])
+
+    def test_self_dns_does_not_break_whitelist_entry(self):
+        """加 dns-self 后，白名单入口的 5353/双栈/hijack 一个都不能少。"""
+        h = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h.close)
+        rc, _, _ = h.run(os.path.join(support.PRIV, "dns-split-prepare"))
+        self.assertEqual(rc, 0)
+        p = os.path.join(h.root, "etc", "sing-box", "00-dert-dns.json")
+        with open(p) as fh:
+            cfg = json.load(fh)
+        tags = {i.get("tag"): i for i in cfg["inbounds"]}
+        self.assertEqual(tags["dns-in"].get("listen"), "::")
+        self.assertEqual(tags["dns-in"].get("listen_port"), 5353)
+        inbounds_hijacked = {r.get("inbound") for r in cfg["route"]["rules"]
+                             if r.get("action") == "hijack-dns"}
+        self.assertEqual(inbounds_hijacked, {"dns-in", "dns-self"}, inbounds_hijacked)
+
 
 if __name__ == "__main__":
     unittest.main()

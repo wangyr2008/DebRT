@@ -8,6 +8,15 @@
 #   1. direct inbound 监听 5353 —— 白名单设备专用 DNS 入口，nft 按 MAC 把 53 端口
 #      DNAT 到这里。用独立端口而不是 tun DNS，是为了让「按 MAC 分流」完全落在
 #      nft 的二层匹配（ether saddr）上，不依赖源 IP，也不依赖邻居表。
+#   1b. direct inbound 监听 127.0.0.2:53 —— **路由器自身**专用 DNS 入口（v0.1.118）。
+#      以前本机 resolv.conf 指向 dnsmasq(127.0.0.1)，而 dnsmasq 的上游是运营商 DNS，
+#      于是「路由器自己」拿到的 www.google.com 是污染结果（实测 104.244.42.197，
+#      Twitter 的 IP），走代理也连不上；而手机因为被 nft DNAT 到 5353 走 sing-box
+#      的 DoH 解析，一切正常。这里给本机开独立入口后，本机也能拿到 fakeip/干净结果。
+#      选 127.0.0.2 而不是 127.0.0.1：dnsmasq 仍占着 127.0.0.1:53 作兜底，
+#      sing-box 停掉时 resolv.conf 的第二个 nameserver 会自动接管（UDP 收 ICMP
+#      端口不可达，glibc 立即换下一个，不用等超时）。
+#      绑 53 端口靠 systemd 单元给的 cap_net_bind_service（sing-box 以 sing-box 用户运行）。
 #   2. route.rules hijack-dns —— 把 5353 收到的查询交给 sing-box 内部 DNS 模块。
 #      不能带 protocol: "dns"：direct inbound 不做 sniff，protocol 识别不出来，
 #      规则会静默不匹配、退回默认 direct outbound，把查询转发回 5353 自己形成
@@ -64,6 +73,15 @@ cfg = {
             # 不会自动退回 UDP，表现是"某个域名解析不了"。
             # 触发场景：响应被截断后重试、客户端强制 TCP、大记录查询。
             # （v0.1.101 修；此前写死 "udp"，dig +tcp 实测被拒。）
+        },
+        {
+            # 路由器自身专用：本机 resolv.conf 的第一个 nameserver 指向这里。
+            # 只绑 127.0.0.2（lo 整个 127/8 都在本机，无需额外加地址），
+            # 与 dnsmasq 的 127.0.0.1:53 互不干扰，停 sing-box 即可回退。
+            "type": "direct",
+            "tag": "dns-self",
+            "listen": "127.0.0.2",
+            "listen_port": 53,
         }
     ],
     "route": {
@@ -73,6 +91,7 @@ cfg = {
             # 形成无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。
             # nft 已经保证只有 53 端口的 DNS 会进这个 inbound，只匹配 inbound 就够。
             {"inbound": "dns-in", "action": "hijack-dns"},
+            {"inbound": "dns-self", "action": "hijack-dns"},
         ]
     },
     "dns": {

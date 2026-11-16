@@ -26,7 +26,7 @@ systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 [ -x /usr/local/lib/dert/qdisc-apply ] && /usr/local/lib/dert/qdisc-apply
 [ -x /usr/local/lib/dert/wan-addr-sync ] && /usr/local/lib/dert/wan-addr-sync
 
-# 把本机 /etc/resolv.conf 恢复成指向 dnsmasq。
+# 把本机 /etc/resolv.conf 恢复成「首选 sing-box，回退 dnsmasq」。
 #
 # 为什么必须做：pppd 的 usepeerdns 会让 /etc/ppp/ip-up.d/0000usepeerdns 把
 # resolv.conf 改写成运营商 DNS。后果是**路由器自身**绕过 dnsmasq：
@@ -35,13 +35,21 @@ systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 #   · 吃不到 dnsmasq 的 5000 条缓存，每次都要回源
 # 运营商上游已经由上面的步骤写进 /run/dert-dns/upstream.conf 交给 dnsmasq 了，
 # 所以这里可以放心覆盖。本钩子按字母序在 0000usepeerdns 之后执行，能覆盖它。
+#
+# 首选 127.0.0.2 而不是 127.0.0.1（v0.1.118）：dnsmasq 的上游是运营商 DNS，
+# 路由器自身查 www.google.com 会拿到污染结果（实测 104.244.42.197，Twitter 的 IP），
+# 走代理也连不上；而 sing-box 的 dns-self 入口用 DoH 解析，结果干净且带 fakeip 分流。
+# 127.0.0.1 留作第二个：sing-box 没装/停掉时该端口无人监听，UDP 收到 ICMP
+# 端口不可达，glibc 立即换下一个（不等超时），所以不会拖慢解析。
+# 不写 ::1：dns-self 只监听 v4，留着 ::1 会让本机 v6 查询绕过 sing-box 回到 dnsmasq。
 # 用 tmp + mv：避免 dnsmasq/glibc 读到半个文件。
 if systemctl is-active --quiet dnsmasq 2>/dev/null; then
     {
-        echo "# 由 DebRT 维护 —— 指向本机 dnsmasq"
+        echo "# 由 DebRT 维护 —— 首选本机 sing-box（127.0.0.2），回退 dnsmasq"
         echo "# pppd 的 usepeerdns 会改写本文件，每次拨号后由 ip-up.d/dert 恢复"
+        echo "nameserver 127.0.0.2"
         echo "nameserver 127.0.0.1"
-        echo "nameserver ::1"
+        echo "options timeout:2 attempts:1"
     } > "/etc/resolv.conf.dert.$$" 2>/dev/null \
       && mv -f "/etc/resolv.conf.dert.$$" /etc/resolv.conf 2>/dev/null \
       || rm -f "/etc/resolv.conf.dert.$$" 2>/dev/null

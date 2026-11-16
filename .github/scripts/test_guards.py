@@ -641,6 +641,23 @@ if "V0.1.0" in _idx:
     _p40_bad.append("index.html 又出现硬编码版本号 V0.1.0（升级后不会变）")
 assert _p40_bad == [], "P3-40 回归：%s" % "；".join(_p40_bad)
 
+# P3-41：路由器自身 DNS 必须走 sing-box（v0.1.118）
+# 以前 resolv.conf 指向 dnsmasq(127.0.0.1)，而 dnsmasq 上游是运营商 DNS：路由器
+# 自己查 www.google.com 拿到污染结果（真机实测 104.244.42.197，Twitter 的 IP），
+# 走代理也连不上。现在首选 sing-box 的 dns-self（127.0.0.2:53）。
+# 三处写入点必须一致，且不能再写 ::1（dns-self 只监听 v4，::1 会让本机 v6 查询
+# 绕回 dnsmasq，污染照旧）。
+_p41_bad = []
+for _rel41 in ("install.sh",
+               os.path.join("network", "ppp", "ip-up.d", "dert"),
+               os.path.join("network", "ppp", "ip-down.d", "dert")):
+    _txt41 = open(os.path.join(ROOT, _rel41), encoding="utf-8").read()
+    if "nameserver 127.0.0.2" not in _txt41:
+        _p41_bad.append("%s 没写 nameserver 127.0.0.2" % _rel41)
+    if "nameserver ::1" in _txt41:
+        _p41_bad.append("%s 还写着 nameserver ::1（本机 v6 查询会绕回 dnsmasq）" % _rel41)
+assert _p41_bad == [], "P3-41 回归：%s" % "；".join(_p41_bad)
+
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
 # fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。
@@ -1055,4 +1072,5 @@ print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落�
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
       "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/"
       "P3-32安装glob/P3-34单元硬化/P3-35结构化日志/P3-36sudoers生成/P3-37PWA独立窗口/"
-      "P3-38iOS不放大+启动兜底/P3-39静态IP设备进列表/观察②③ 全部通过")
+      "P3-38iOS不放大+启动兜底/P3-39静态IP设备进列表/P3-40窄屏版本号/"
+      "P3-41本机DNS走sing-box/观察②③ 全部通过")

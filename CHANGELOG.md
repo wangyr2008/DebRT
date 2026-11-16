@@ -7,6 +7,51 @@
 
 ## [Unreleased]
 
+## [0.1.118] - 2026-11-16
+
+> 让**路由器自身**的 DNS 也走 sing-box：以前它走运营商 DNS，被污染的域名
+> （`www.google.com` 解析成 Twitter 的 IP）走代理也连不上。
+
+### Fixed
+
+- **路由器自身访问境外域名失败，而手机正常**。原因不是代理坏了，是 DNS：
+
+  | | DNS 走哪 | `www.google.com` 解析到 | 结果 |
+  |---|---|---|---|
+  | 手机（白名单） | nft DNAT 到 sing-box `:5353` | fakeip `198.19.0.214` | ✅ |
+  | 路由器自身 | dnsmasq → 运营商 DNS | **`104.244.42.197`**（Twitter 的 IP） | ❌ |
+
+  运营商把 `www.google.com` 污染成了别家 IP（AAAA 则是 Teredo `2001::1`），
+  curl 拿着假地址走代理，TLS 对不上自然超时。而 `google.com`（不带 www）
+  是干净的——所以 `dig` 看着正常，一访问就中招。
+
+  现在给路由器自身开独立 DNS 入口：`00-dert-dns.json` 增加 `dns-self`
+  inbound（`127.0.0.2:53`）+ 对应 `hijack-dns` 规则，本机 `resolv.conf`
+  首选它。选 `127.0.0.2` 而不是 `127.0.0.1` 是因为 dnsmasq 还占着后者，
+  留着做兜底：sing-box 没装或停掉时该端口无人监听，UDP 收到 ICMP 端口不可达，
+  glibc 会**立即**换下一个 nameserver（不等超时），所以不会拖慢解析。
+
+  绑 53 端口靠 systemd 单元已有的 `cap_net_bind_service`（sing-box 以
+  `sing-box` 用户运行，不是 root）。
+
+- `resolv.conf` 不再写 `nameserver ::1`：`dns-self` 只监听 v4，留着 `::1`
+  会让本机 v6 查询绕回 dnsmasq，污染照旧。三处写入点（`install.sh`、
+  `ip-up.d/dert`、`ip-down.d/dert`）同步改。
+
+### 说明
+
+- **ICMP 仍然不走代理**，这是 sing-box 的固有边界：`output` 链只接管 TCP，
+  而且它的路由规则里 `network: icmp → Direct`。所以 `ping google` 永远不通，
+  测代理请用 `curl -x http://127.0.0.1:7890` 或直接 `curl`。
+- **本机 UDP 仍未接管**（`output` 链无 udp 规则），QUIC 类流量走直连。
+
+### Added
+
+- 守卫 **P3-41**：三处 `resolv.conf` 写入点必须首选 `127.0.0.2`，且不得再写
+  `nameserver ::1`。
+- `test_dns_split.py` 新增 2 个用例：`dns-self` 的监听地址/端口/类型/hijack
+  规则，以及「加了 dns-self 后白名单入口一个都不能少」。
+
 ## [0.1.117] - 2026-11-16
 
 > 手机版头部补上版本号；顺带修掉侧栏里写死的 `V0.1.0`。

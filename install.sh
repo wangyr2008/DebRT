@@ -172,13 +172,15 @@ chmod 644 "$ETC_DIR/config.json" 2>/dev/null || true
 # 租约文件用 Debian dnsmasq 默认路径 /var/lib/misc/dnsmasq.leases（审计 B-04：
 # dnsmasq 启动期以 root 打开该文件，面板作为 dert 可读 644 的租约用于设备列表）
 
-# 路由器自身 DNS → 本机 dnsmasq（备份原文件）
+# 路由器自身 DNS → 首选本机 sing-box（127.0.0.2），回退 dnsmasq（127.0.0.1）
+# 备份原文件。sing-box 未安装/未运行时 127.0.0.2 无人监听，glibc 收到端口不可达
+# 会立即换下一个 nameserver，所以两条都写是安全的。
 if [ ! -f /etc/resolv.conf.dert.bak ]; then
   cp -a /etc/resolv.conf /etc/resolv.conf.dert.bak 2>/dev/null || true
 fi
 if [ ! -L /etc/resolv.conf ]; then
-  printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:2\n' > /etc/resolv.conf
-  c_info "/etc/resolv.conf 已指向本机 dnsmasq（原文件备份为 resolv.conf.dert.bak）"
+  printf 'nameserver 127.0.0.2\nnameserver 127.0.0.1\noptions timeout:2 attempts:1\n' > /etc/resolv.conf
+  c_info "/etc/resolv.conf 已指向本机 sing-box（127.0.0.2），dnsmasq（127.0.0.1）作兜底；原文件备份为 resolv.conf.dert.bak"
 else
   c_warn "/etc/resolv.conf 是符号链接（可能由 systemd-resolved 管理），未改动；路由器自身 DNS 需自行确认"
 fi
