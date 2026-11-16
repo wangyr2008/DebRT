@@ -626,6 +626,21 @@ assert _macs39 == ["8C:DE:F9:32:FB:48"], \
 assert _rows39[0]["no_dhcp"] is True and _rows39[0]["ip"] == "192.168.10.128" \
     and _rows39[0]["online"] is True, "P3-39 回归：静态 IP 设备字段不对：%s" % _rows39
 
+# P3-40：窄屏（手机）头部必须显示版本号（v0.1.117）
+# `.ru-narrow .ru-side{display:none}` 把侧边栏整个藏掉，版本号只写在侧栏的
+# `ru-sidever` 上时，手机上永远看不到（用户实测）。这类展示元素删了不报错、
+# 只是悄悄少一块，所以钉住：元素、样式、统一写入函数三件套。
+_p40_bad = []
+if 'id="ru-mver"' not in _idx:
+    _p40_bad.append("index.html 缺窄屏版本元素 ru-mver")
+if "ru-mver" not in _css:
+    _p40_bad.append("app.css 缺 .ru-mver 样式（会挤在标题同一行）")
+if "setVersion" not in _app:
+    _p40_bad.append("app.js 缺 setVersion（三处版本号会各自漂移）")
+if "V0.1.0" in _idx:
+    _p40_bad.append("index.html 又出现硬编码版本号 V0.1.0（升级后不会变）")
+assert _p40_bad == [], "P3-40 回归：%s" % "；".join(_p40_bad)
+
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
 # fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。

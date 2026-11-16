@@ -47,6 +47,16 @@ function showBad(id, msg) {
   el.textContent = msg || "";
   el.classList.toggle("show", !!msg);
 }
+/* 版本号在三个位置出现：桌面侧栏（ru-sidever）、窄屏头部（ru-mver）、
+   登录页副标题（ru-lsub，格式不同单独写）。统一走这里，别只改一处——
+   v0.1.116 之前窄屏头部压根没有版本元素，手机上完全看不到版本。 */
+function setVersion(v) {
+  var t = v ? "V" + v : "—";
+  ["ru-sidever", "ru-mver"].forEach(function (id) {
+    var el = $id(id);
+    if (el) el.textContent = t;
+  });
+}
 /* ===================== iOS 视口复位 =====================
  * Safari 聚焦 font-size < 16px 的输入框会整页放大，且失焦后经常不缩回：
  * 「登录页点密码框页面变大 → 登录进后台还是放大的」。CSS 已把触屏输入框提到
@@ -299,7 +309,7 @@ function renderOverview(st) {
   $id("ru-sidefoot-text").textContent = "管理员已登录";
   /* 登录页副标题只显示版本号（会话加载时写一次）；这里不再写 LAN IP——
      状态轮询会覆盖它，登出后登录页就会重新冒出 IP（真机实测） */
-  $id("ru-sidever").textContent = "V" + (st.version || "—");
+  setVersion(st.version);
   $id("ver-now").value = "V" + (st.version || "—") + (st.build ? "（Build " + st.build + "）" : "");
 }
 loaders.overview = refreshStatus;
@@ -1372,7 +1382,12 @@ function startSession() {
   API.get("/api/session").then(function (s) {
     bootTries = 0;
     setLogged(s.logged);
-    if (s.version) $id("ru-lsub").textContent = "管理后台 · v" + s.version;
+    if (s.version) {
+      /* 会话里就带版本：登录后落在非「概览」页时，status 轮询还没跑，
+         版本号也不该空着（真机：刷新后停在设备列表，头部空白） */
+      setVersion(s.version);
+      $id("ru-lsub").textContent = "管理后台 · v" + s.version;
+    }
   }).catch(function (err) {
     if (err && err.code) { setLogged(false); return; }
     bootTries++;
