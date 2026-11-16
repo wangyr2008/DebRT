@@ -239,3 +239,24 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-narrow .ru-bindgrid .ru-ipseg{grid-column:1}
 #router-ui .ru-narrow .ru-bindgrid > .ru-iconbtn{grid-row:1;grid-column:2}
 #router-ui .ru-narrow .ru-modal{padding:14px;align-items:center}
+
+/* ===== 启动卡（连不上路由器时） ===== */
+#router-ui .ru-boot{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;gap:12px;padding:28px 22px;text-align:center;color:var(--ru-text2);font-size:13px}
+#router-ui .ru-bootline{display:flex;align-items:center;gap:10px}
+#router-ui .ru-boot.err .ru-bootline{color:var(--ru-red);font-weight:500}
+#router-ui .ru-boothint{font-size:12px;color:var(--ru-text2);max-width:300px;line-height:1.65}
+
+/* ===== iOS 聚焦输入框不放大（v0.1.115） =====
+   Safari 在聚焦 font-size < 16px 的输入框时会把整页放大到等效 16px，且失焦后经常
+   不缩回——「登录页点密码框就放大、登录进后台还保持放大」就是这个。
+   触屏设备把输入类控件统一提到 16px 根治（桌面端保持设计稿字号，版面不变）。
+   断言见 test_guards P3-38，别顺手删。 */
+@media (any-pointer:coarse){
+  #router-ui .ru-in,
+  #router-ui .ru-lcard .ru-in,
+  #router-ui .ru-table .ru-in,
+  #router-ui textarea.ru-in{font-size:16px}
+  #router-ui .ru-table .ru-in{height:36px}
+  #router-ui .ru-narrow .ru-table .ru-in{height:40px}
+}

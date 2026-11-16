@@ -47,6 +47,28 @@ function showBad(id, msg) {
   el.textContent = msg || "";
   el.classList.toggle("show", !!msg);
 }
+/* ===================== iOS 视口复位 =====================
+ * Safari 聚焦 font-size < 16px 的输入框会整页放大，且失焦后经常不缩回：
+ * 「登录页点密码框页面变大 → 登录进后台还是放大的」。CSS 已把触屏输入框提到
+ * 16px 根治，这里再兜一层——失焦/切页时临时写 maximum-scale=1 强制缩回 1.0，
+ * 150ms 后恢复，正常双指缩放不受影响。 */
+var VIEWPORT_BASE = "width=device-width, initial-scale=1, viewport-fit=cover";
+var zoomTimer = null;
+function resetViewportZoom() {
+  var m = document.querySelector('meta[name="viewport"]');
+  if (!m) return;
+  if (zoomTimer) clearTimeout(zoomTimer);
+  m.setAttribute("content", VIEWPORT_BASE + ", maximum-scale=1");
+  zoomTimer = setTimeout(function () {
+    m.setAttribute("content", VIEWPORT_BASE);
+    zoomTimer = null;
+  }, 150);
+}
+document.addEventListener("focusout", function (e) {
+  var t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) resetViewportZoom();
+}, true);
+
 /* ===================== API ===================== */
 var API = {
   get: function (path) { return request("GET", path); },
@@ -116,9 +138,12 @@ $id("ru-loginform").addEventListener("submit", function (e) {
     btnBusy(loginBtn, false);
     $id("ru-loginpwd").value = "";
     loginBad.classList.remove("show");
+    resetViewportZoom();      // 登录页常是"放大状态"的来源，切进后台时一并复位
     setLogged(true);
   }).catch(function (err) {
     btnBusy(loginBtn, false);
+    /* 无 code = 网络层失败（fetch 直接 reject），此时说"密码错误"会把人带沟里 */
+    if (!err || !err.code) { loginFail("无法连接到路由器", "请确认设备仍在路由器 Wi-Fi 内，稍后重试"); return; }
     loginFail(err.message || "登录失败", err.hint || "");
   });
 });
@@ -1307,9 +1332,48 @@ $id("btn-panel-logout").addEventListener("click", function () {
   }).catch(apiFail);
 });
 
-API.get("/api/session").then(function (s) {
-  setLogged(s.logged);
-  if (s.version) $id("ru-lsub").textContent = "管理后台 · v" + s.version;
-}).catch(function () { setLogged(false); });
+/* 启动探测：连不上路由器时不要掉进登录页。
+ * v0.1.114 及以前是 .catch(function () { setLogged(false); })——路由器刚升级/重启时
+ * 用户会看到一个"密码怎么输都不对"的登录框（其实是网络层压根没通）。现在：
+ *   - 有 code（面板活着但 4xx/5xx）→ 进登录页，行为不变；
+ *   - 无 code（fetch reject，网络层失败）→ 留在启动卡上说明原因，按退避自动重试，
+ *     约 28 秒覆盖一次重启；仍不通则显示「重新连接」按钮交给用户。 */
+var BOOT_RETRY_DELAYS = [2000, 3000, 5000, 8000, 10000];
+var bootTries = 0, bootTimer = null;
+
+function bootSet(state, text, hint) {
+  var el = $id("ru-boot");
+  if (!el) return;                       // 已登录：启动卡被 setLogged 移除
+  el.classList.toggle("err", state === "err");
+  $id("ru-boot-spin").hidden = state === "err";
+  $id("ru-boot-retry").hidden = state !== "err";
+  var h = $id("ru-boot-hint");
+  h.hidden = !hint;
+  h.textContent = hint || "";
+  $id("ru-boot-text").textContent = text;
+}
+
+function startSession() {
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
+  bootSet("busy", bootTries ? "正在重新连接路由器…（第 " + bootTries + " 次）" : "正在连接路由器…");
+  API.get("/api/session").then(function (s) {
+    bootTries = 0;
+    setLogged(s.logged);
+    if (s.version) $id("ru-lsub").textContent = "管理后台 · v" + s.version;
+  }).catch(function (err) {
+    if (err && err.code) { setLogged(false); return; }
+    bootTries++;
+    if (bootTries <= BOOT_RETRY_DELAYS.length) {
+      bootTimer = setTimeout(startSession, BOOT_RETRY_DELAYS[bootTries - 1]);
+      bootSet("busy", "正在重新连接路由器…（第 " + bootTries + " 次）");
+      return;
+    }
+    bootSet("err", "无法连接到路由器",
+      "请确认设备已连上路由器 Wi-Fi。路由器重启或升级后通常需要 30 秒左右才能访问，可稍后点下方按钮重试。");
+  });
+}
+
+$id("ru-boot-retry").addEventListener("click", function () { bootTries = 0; startSession(); });
+startSession();
 
 })();

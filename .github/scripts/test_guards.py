@@ -556,6 +556,41 @@ _mani_bad = ([k for k in ("display", "start_url") if not _mani.get(k)]
                                                    os.path.basename(_ic["src"])))])
 assert _mani_bad == [], "P3-37 回归：manifest 有问题项 %s" % _mani_bad
 
+# P3-38：iOS 聚焦输入框整页放大 + 连不上时要有出口（v0.1.115）
+# 三件事一起钉，共同点都是"删了不报错、行为悄悄退化"：
+#   ① 触屏输入控件字号必须 ≥16px——Safari 聚焦 <16px 的框会把整页放大，
+#      且失焦后经常不缩回（登录页点密码框变大、进后台还保持放大）；
+#   ② 启动探测失败要留在启动卡上给原因和重试——以前直接掉登录页，
+#      路由器重启中用户面对"密码怎么输都不对"的登录框；
+#   ③ 静态资源只发一条 Cache-Control——发两条时浏览器按最保守的 no-store 处理，
+#      _file 里的 max-age/no-cache 等于白写。
+# 合并成一条：拆成五条只为数数，报错时反而看不出缺了哪个。
+_css = open(os.path.join(ROOT, "panel", "static", "app.css"), encoding="utf-8").read()
+_app = open(os.path.join(ROOT, "panel", "static", "app.js"), encoding="utf-8").read()
+_coarse_i = _css.find("@media (any-pointer:coarse)")
+_coarse = _css[_coarse_i:] if _coarse_i >= 0 else ""
+_coarse_end = _coarse.find("\n}")
+_coarse = _coarse[:_coarse_end] if _coarse_end > 0 else _coarse
+# 取的是实际字号数值而不是"文本里有没有 16px"：写 15px 也得拦住
+_coarse_fs = [int(v) for v in re.findall(r"\.ru-in[^{]*\{[^}]*font-size:(\d+)px", _coarse)]
+
+_p38_bad = []
+if not _coarse:
+    _p38_bad.append("app.css 缺 any-pointer:coarse 块")
+elif not _coarse_fs or min(_coarse_fs) < 16:
+    _p38_bad.append("触屏输入框字号 %s < 16px（Safari 聚焦时放大整页）"
+                    % (_coarse_fs or "未设置"))
+for _k in ("resetViewportZoom", "maximum-scale=1", '"focusout"'):
+    if _k not in _app:
+        _p38_bad.append("app.js 缺 %s（登录后页面保持放大）" % _k)
+for _k in ('id="ru-boot-text"', 'id="ru-boot-hint"', 'id="ru-boot-retry"'):
+    if _k not in _idx:
+        _p38_bad.append("启动卡缺 %s（连不上路由器时无路可走）" % _k)
+if _panel.count('send_header("Cache-Control"') != 1:
+    _p38_bad.append("Cache-Control 发了 %d 条（浏览器按 no-store 处理，静态缓存策略失效）"
+                    % _panel.count('send_header("Cache-Control"'))
+assert _p38_bad == [], "P3-38 回归：%s" % "；".join(_p38_bad)
+
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
 # fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。
@@ -968,4 +1003,6 @@ print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落�
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
-      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/观察②③ 全部通过")
+      "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/"
+      "P3-32安装glob/P3-34单元硬化/P3-35结构化日志/P3-36sudoers生成/P3-37PWA独立窗口/"
+      "P3-38iOS不放大+启动兜底/观察②③ 全部通过")

@@ -62,11 +62,14 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             raise api.ApiError(400, "BODY_READ", "请求体读取失败", "连接中断或读取超时，请重试")
 
-    def _send(self, code, body: bytes, ctype="application/json; charset=utf-8", extra=None):
+    def _send(self, code, body: bytes, ctype="application/json; charset=utf-8", extra=None,
+              cache="no-store"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # 只有一个 Cache-Control（以前静态文件再塞一个到 extra 里 → 响应头出现两条，
+        # 浏览器按最保守的 no-store 处理，_file 里的 max-age 形同虚设）
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
@@ -170,8 +173,10 @@ class Handler(BaseHTTPRequestHandler):
             ctype += "; charset=utf-8"
         with open(full, "rb") as f:
             data = f.read()
-        cache = "no-cache" if full.endswith(("index.html", "app.js")) else "max-age=3600"
-        self._send(200, data, ctype, {"Cache-Control": cache})
+        # 面板自身的 HTML/JS/CSS 一律协商缓存：文件名不带 hash，只有手写的 ?v=N，
+        # 给 max-age 会让用户升级后仍跑旧样式（改了看不到，以为没修好）。
+        cache = "no-cache" if full.endswith(("index.html", ".js", ".css")) else "max-age=3600"
+        self._send(200, data, ctype, cache=cache)
 
 
 def main():
