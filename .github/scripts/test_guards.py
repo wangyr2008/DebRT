@@ -9,7 +9,9 @@ import json
 import glob
 import os
 import re
+import shutil
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "priv"))
@@ -591,6 +593,39 @@ if _panel.count('send_header("Cache-Control"') != 1:
                     % _panel.count('send_header("Cache-Control"'))
 assert _p38_bad == [], "P3-38 回归：%s" % "；".join(_p38_bad)
 
+# P3-39：设备列表必须包含「只在 ARP 里、从不走 DHCP」的静态 IP 设备（v0.1.116）
+# 手工配静态 IP 的设备（mesh 主节点、NAS、打印机）不会出现在 dnsmasq 租约里，
+# 以前设备列表看不到它们，而概览数的是 ARP 条目 → 两个数字永远对不上
+# （用户实测：概览 12 台、列表 11 条，差额就是主 mesh AP）。
+# 这里直接喂假租约 + 假 ARP 跑一遍 leases()，断言产物——不看源码文本。
+import sysinfo as _si  # noqa: E402  （panel/ 已在 sys.path 顶部加入）
+_td39 = tempfile.mkdtemp(prefix="dert-p339-")
+_old39 = (_si._lease_file, _si._arp_file, _si._notes_file)
+try:
+    _si._lease_file = os.path.join(_td39, "leases")
+    _si._arp_file = os.path.join(_td39, "arp")
+    _si._notes_file = os.path.join(_td39, "notes.json")
+    open(_si._lease_file, "w").close()
+    with open(_si._arp_file, "w") as _f:
+        _f.write("IP address       HW type     Flags       HW address            "
+                 "Mask     Device\n")
+        # 静态 IP 设备（br-lan，在线）
+        _f.write("192.168.10.128   0x1  0x2  8c:de:f9:32:fb:48  *  br-lan\n")
+        # WAN 侧接口的上游网关：不能算内网设备（B-05 判据一致性）
+        _f.write("219.142.78.1     0x1  0x2  aa:bb:cc:dd:ee:02  *  enp4s0\n")
+        # ARP 未解析完整（0x0）：不能当在线设备
+        _f.write("192.168.10.150   0x1  0x0  aa:bb:cc:dd:ee:03  *  br-lan\n")
+    _rows39 = _si.leases([])
+finally:
+    _si._lease_file, _si._arp_file, _si._notes_file = _old39
+    shutil.rmtree(_td39, ignore_errors=True)
+
+_macs39 = [r["mac"] for r in _rows39]
+assert _macs39 == ["8C:DE:F9:32:FB:48"], \
+    "P3-39 回归：静态 IP 设备未进列表，或 WAN/未解析 ARP 条目混入：%s" % _rows39
+assert _rows39[0]["no_dhcp"] is True and _rows39[0]["ip"] == "192.168.10.128" \
+    and _rows39[0]["online"] is True, "P3-39 回归：静态 IP 设备字段不对：%s" % _rows39
+
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
 # fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。
@@ -1005,4 +1040,4 @@ print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落�
       "P3-19DNS按MAC分流/P3-20发布包含规/P3-21dnsmasq绑定/P3-23测试分层/P3-24无eval/"
       "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/"
       "P3-32安装glob/P3-34单元硬化/P3-35结构化日志/P3-36sudoers生成/P3-37PWA独立窗口/"
-      "P3-38iOS不放大+启动兜底/观察②③ 全部通过")
+      "P3-38iOS不放大+启动兜底/P3-39静态IP设备进列表/观察②③ 全部通过")

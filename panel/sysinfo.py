@@ -10,6 +10,7 @@ import time
 
 MOCK = False
 _lease_file = "/var/lib/misc/dnsmasq.leases"   # Debian dnsmasq 默认租约路径（审计 B-04）
+_arp_file = "/proc/net/arp"                    # 设备列表补静态 IP 设备时读；测试可替换
 _notes_file = "/var/lib/dert/notes.json"
 
 _cpu_prev = None  # (ts, idle, total)
@@ -71,6 +72,8 @@ _MOCK_LEASES = [
     {"name": "MacBook Pro", "ip": "192.168.10.35", "mac": "A4:83:E7:1B:09:D6", "static": False, "online": True, "lease_text": "剩余 3 天 4 小时", "note": "工作笔记本"},
     {"name": "群晖 NAS", "ip": "192.168.10.10", "mac": "00:11:32:4D:8C:2E", "static": True, "online": True, "lease_text": "剩余 6 天 12 小时", "note": "家庭文件服务器"},
     {"name": "小米音箱", "ip": "192.168.10.42", "mac": "64:09:80:5C:11:A9", "static": False, "online": False, "lease_text": "剩余 5 小时", "note": ""},
+    # 只在 ARP 里、从不走 DHCP 的设备（预览「静态 IP」徽标）
+    {"name": None, "ip": "192.168.10.128", "mac": "8C:DE:F9:32:FB:48", "static": False, "online": True, "lease_text": "", "no_dhcp": True, "note": ""},
 ]
 
 _MOCK_CONTAINERS = [
@@ -185,19 +188,30 @@ def uptime_s():
         return None
 
 
-def arp_online_macs():
-    """近期在线（ARP 表项完整）的 MAC 集合。"""
-    macs = set()
+def arp_online():
+    """br-lan 上 ARP 表项完整的 {MAC: IP}。
+
+    判据必须与 priv/status.py 的「已连接设备」计数保持一致（B-05）：flags 0x2
+    （ATF_COM，含 STALE）且限定 br-lan——不限接口时，WAN 走 DHCP 网口会把上游
+    网关也算进来。v0.1.116 之前这里漏了 br-lan 过滤，与 status.py 分家过。
+    """
+    out = {}
     try:
-        with open("/proc/net/arp") as f:
-            next(f)
+        with open(_arp_file) as f:
+            next(f, None)
             for line in f:
                 parts = line.split()
-                if len(parts) >= 6 and parts[2] == "0x2" and parts[3] != "00:00:00:00:00:00":
-                    macs.add(parts[3].upper())
+                if (len(parts) >= 6 and parts[2] == "0x2"
+                        and parts[3] != "00:00:00:00:00:00" and parts[5] == "br-lan"):
+                    out[parts[3].upper()] = parts[0]
     except Exception:
         pass
-    return macs
+    return out
+
+
+def arp_online_macs():
+    """近期在线（ARP 表项完整）的 MAC 集合。"""
+    return set(arp_online())
 
 
 def load_notes():
@@ -232,10 +246,17 @@ def fmt_lease_left(expiry: int, now: int) -> str:
 
 
 def leases(static_list):
-    """合并 dnsmasq 租约 + 静态绑定 + 备注 + 在线状态。"""
+    """合并 dnsmasq 租约 + 静态绑定 + ARP 在线的静态 IP 设备 + 备注 + 在线状态。
+
+    第三个来源（v0.1.116）解决的是：手工配静态 IP 的设备从不走 DHCP，
+    以前只出现在概览的 ARP 计数里，设备列表永远看不到——用户报「主 mesh AP
+    不在列表里，但概览算进去了」就是这个。这类设备打 no_dhcp=True 标记，
+    前端租约列显示「静态 IP」而不是空白。
+    """
     now = int(time.time())
     notes = load_notes()
-    online = arp_online_macs()
+    online_map = arp_online()
+    online = set(online_map)
     items = {}
     try:
         with open(_lease_file) as f:
@@ -267,10 +288,16 @@ def leases(static_list):
             # 离线静态绑定：无租约也进列表
             items[mac] = {"name": s.get("name", ""), "ip": s.get("ip", ""), "mac": mac,
                           "static": True, "lease_text": ""}
+    # 只在 ARP 里出现的设备（静态 IP）：补进列表，否则概览与列表对不上
+    for mac, ip in online_map.items():
+        if mac not in items:
+            items[mac] = {"name": None, "ip": ip, "mac": mac, "static": False,
+                          "lease_text": "", "no_dhcp": True}
     out = []
     for mac in sorted(items):
         it = items[mac]
         it["online"] = mac in online
         it["note"] = notes.get(mac, "")
+        it.setdefault("no_dhcp", False)     # 字段固定出现，前端/第三方消费方不用猜
         out.append(it)
     return out

@@ -648,15 +648,28 @@ $id("bind-commit").addEventListener("click", function () {
 function loadLeases() {
   return API.get("/api/leases").then(function (data) {
     var list = data.leases || [];
-    $id("dev-count").textContent = "当前共 " + list.length + " 条记录" + (data.static_count ? "，其中 " + data.static_count + " 条静态绑定" : "") + "；可填写备注便于识别";
+    /* no_dhcp = 只在 ARP 里出现、从不走 DHCP 的设备（mesh 主节点、NAS、打印机等）。
+       以前这类设备只进概览的 ARP 计数，设备列表永远看不到，两个数字对不上。
+       文案里单列「在线 N 台」：概览的「已连接设备」就是在线数，直接可对照；
+       记录数会比在线数多——离线但租约未过期的设备也留在表里。 */
+    var noDhcp = list.filter(function (d) { return d.no_dhcp; }).length;
+    var onlineN = list.filter(function (d) { return d.online; }).length;
+    var extra = [];
+    if (data.static_count) extra.push(data.static_count + " 条静态绑定");
+    if (noDhcp) extra.push(noDhcp + " 台静态 IP（未走 DHCP）");
+    $id("dev-count").textContent = "当前共 " + list.length + " 条记录（在线 " + onlineN + " 台）" +
+      (extra.length ? "；其中 " + extra.join("、") : "") + "；可填写备注便于识别";
     var tb = $id("dev-tbody");
     if (!list.length) { tb.innerHTML = '<tr><td colspan="5" class="ru-empty">暂无设备连接</td></tr>'; return; }
     var html = "";
     list.forEach(function (d) {
+      var leaseCell = d.static ? '<span class="ru-badge blue">静态绑定</span>'
+        : d.no_dhcp ? '<span class="ru-badge">静态 IP</span>'
+        : esc(d.lease_text || "—");
       html += "<tr><td><span style=\"display:inline-flex;align-items:center;gap:7px\"><span class=\"ru-dot" + (d.online ? " on" : "") + '"></span>' + esc(d.name || d.hostname || "未知设备") + "</span></td>" +
         '<td data-label="IP 地址">' + esc(d.ip) + '</td>' +
         '<td data-label="MAC 地址" class="mono">' + esc(d.mac) + "</td>" +
-        '<td data-label="租约">' + (d.static ? '<span class="ru-badge blue">静态绑定</span>' : esc(d.lease_text || "—")) + "</td>" +
+        '<td data-label="租约">' + leaseCell + "</td>" +
         '<td data-label="备注"><input class="ru-in" style="min-width:130px" maxlength="32" data-note-mac="' + esc(d.mac) + '" value="' + esc(d.note || "") + '" placeholder="添加备注（32 字内）"></td></tr>';
     });
     tb.innerHTML = html;
