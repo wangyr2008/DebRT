@@ -41,6 +41,8 @@ Cmnd_Alias DERT_PRIV = /usr/local/lib/dert/dert-priv auth-verify, \
     /usr/local/lib/dert/dert-priv status, \
     /usr/local/lib/dert/dert-priv selftest, \
     /usr/local/lib/dert/dert-priv health, \
-    /usr/local/lib/dert/dert-priv health *
+    /usr/local/lib/dert/dert-priv health *, \
+    /usr/local/lib/dert/dert-priv flow, \
+    /usr/local/lib/dert/dert-priv flow *
 
 dert ALL=(root) NOPASSWD: DERT_PRIV

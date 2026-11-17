@@ -7,6 +7,60 @@
 
 ## [Unreleased]
 
+## [0.1.119] - 2026-11-18
+
+> 两件事：**出口质量终于有历史了**（v4/v6 分开测），以及一个**默认关闭**的
+> 调试模式——打开后每台设备的每条新连接都会记下「走了哪条路」。
+
+### Added
+
+- **WAN 出口质量探测**（`priv/wanq.py` + `dert-wanq.timer`，每 60 秒一轮）。
+  `health` 只判「ppp0 存不存在」，测不出「在但劣化」——2026-11-17 那次出口
+  劣化了 3 分钟，日志里一个字都没有，最后翻了十几轮 journal 才定位到运营商侧。
+
+  - v4 / v6 **分开判定**，v6 未启用时完全不发 v6 探测包；
+  - 每个地址族探多个目标（网关 + 两个国内 DNS）**取最好的那个**。按总和算会
+    把「某个目标屏蔽 ICMP」误判成「链路丢一半」——公共 DNS 的 v6 地址普遍如此；
+  - 判据：丢包 ≥20% 或平均 RTT ≥200ms → `degraded`；
+  - **只在状态跳变时写事件**（`wan_quality_drop` / `wan_quality_ok`，恢复事件
+    带 `down_s`）。60 秒一轮一天 1440 条，全写事件只会把 journal 冲掉；
+  - 快照落 `/var/lib/dert/wanq.json`（含最近 60 个样本，约 1 小时），
+    概览页新增「出口质量」卡片直接读它。
+
+- **调试模式 · 流量路径**（`priv/flowops.py`，默认关闭）。
+  打开后 nft 在 `dstnat + 10` 给每条**新连接**记一行内核日志，路径由「哪条规则
+  匹配上」决定：
+
+  | 路径 | 含义 |
+  |---|---|
+  | `direct` | 直连（非白名单，或白名单但命中 `geoip-cn` 的 `bypass`） |
+  | `tun` | UDP/ICMP 打了 `0x2023`，进 tun 走代理 |
+  | `singbox` | TCP 被重定向到回环，进 sing-box 再按域名分流 |
+  | `dns` / `dns-sb` | DNS 走 dnsmasq / 走 sing-box |
+
+  - 为什么不用 sing-box 的日志：`action: bypass` 的流量在它里面**完全不可见**
+    （那恰恰是最难查的一类），而且它的日志没有源设备，只有目标地址；
+  - 为什么放在 `dstnat + 10`：实测 `dert_dns` 在 `dstnat - 2`、sing-box 的
+    TCP 重定向在 `dstnat + 2`、UDP/ICMP 打标在 `dstnat + 3`，晚于它们才能读到结论；
+  - **端口不写死**：`auto_redirect` 的端口每次启动都变（真机实测 45217 → 39883），
+    判据只能用「被 DNAT 到回环」；
+  - DNS 规则带 `ct status dnat`：mDNS 也是 5353 端口但走组播不做 DNAT，
+    不加这个条件会把 mDNS 记成「DNS 走了 sing-box」；
+  - 每条连接一行（`ct state new`）+ 20/秒限速，关闭时 nft 链**根本不存在**。
+
+### Fixed
+
+- `priv/dert-priv` 的 `health` 分支缺 `;;`（上一个版本留下的语法隐患，
+  新增分支时被 `bash -n` 抓到）。
+
+### Notes
+
+- 调试模式的两个坑是 `nft -c` 实测出来的，都不是运行期报错而是**语法错误**：
+  `chain flow` 的 `flow` 是 nft 保留字（flowtable），改名 `flowlog`；
+  `limit rate 20/second burst 40` 缺 `packets` 单位。
+- 新增单元在升级路径上不会自动安装：`upgradeops` 显式补装并 `enable --now`，
+  守卫 P3-42 钉住这件事（否则老设备升级完只有文件没有定时器，且不报错）。
+
 ## [0.1.118] - 2026-11-16
 
 > 让**路由器自身**的 DNS 也走 sing-box：以前它走运营商 DNS，被污染的域名

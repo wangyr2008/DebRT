@@ -587,6 +587,17 @@ def apply(pkg):
         _sh(["systemctl", "enable", "dert-netwatch.service"], timeout=60)
         _sh(["systemctl", "restart", "dert-netwatch.service"], timeout=60)
 
+    # WAN 出口质量探测（v0.1.119）：新增单元，老版本没有 → 必须在这里补装
+    # 并 enable，否则升级完只有文件没有定时器。
+    if os.path.isfile(LIB + "/systemd/dert-wanq.timer"):
+        _install(LIB + "/systemd/dert-wanq.service",
+                 _fs("/etc/systemd/system/dert-wanq.service"), 0o644)
+        _install(LIB + "/systemd/dert-wanq.timer",
+                 _fs("/etc/systemd/system/dert-wanq.timer"), 0o644)
+        _sh(["systemctl", "daemon-reload"], timeout=60)
+        _sh(["systemctl", "enable", "--now", "dert-wanq.timer"], timeout=60)
+        _sh(["systemctl", "restart", "dert-wanq.timer"], timeout=60)
+
     for f in glob.glob(LIB + "/*.py") + [LIB + "/lib.sh"]:
         if os.path.isfile(f):
             try:

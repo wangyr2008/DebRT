@@ -1,0 +1,25 @@
+[Unit]
+# 只看 ppp0 存不存在不够：2026-11-17 那次故障里接口一直在、服务没重启，
+# 但出口劣化了 3 分钟，health 完全没记录。本单元按 v4/v6 分别测丢包与延迟，
+# 只在状态跳变时写一条事件（wan_quality_drop / wan_quality_ok）。
+Description=DebRT WAN 出口质量探测（v4/v6 丢包与延迟）
+After=network.target
+ConditionPathExists=/etc/dert/config.json
+
+[Service]
+Type=oneshot
+# 与 dert-priv 调用 health.py 的方式一致：priv/*.py 以 644 安装，靠 python3 执行
+ExecStart=/usr/bin/python3 /usr/local/lib/dert/wanq.py probe
+TimeoutStartSec=90
+
+# ---- 硬化（与 dert-pppoe-watchdog 同一套）----
+# 注意：本单元要发 ICMP，所以不能加 RestrictAddressFamilies；
+# 以 root 运行时 raw socket 不需要 file capability，NoNewPrivileges 不影响。
+ProtectSystem=true
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectControlGroups=true
+ProtectKernelLogs=true

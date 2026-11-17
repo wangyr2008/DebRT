@@ -95,6 +95,9 @@ install -m 644 "$SRC_DIR/systemd/dert-dns-sync.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-pppoe-watchdog.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-pppoe-watchdog.timer" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-netwatch.service" /etc/systemd/system/
+# WAN 出口质量探测（v0.1.119）：health 只看 ppp0 在不在，测不出「在但劣化」
+install -m 644 "$SRC_DIR/systemd/dert-wanq.service" /etc/systemd/system/
+install -m 644 "$SRC_DIR/systemd/dert-wanq.timer"   /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/systemd/dert-pppoe.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/sysctl/70-dert.conf"  /etc/sysctl.d/
 install -m 644 "$SRC_DIR/network/modules/dert.conf"    /etc/modules-load.d/
@@ -243,6 +246,8 @@ else
   systemctl enable --now dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   systemctl restart dert-pppoe-watchdog.timer >/dev/null 2>&1 || true
   systemctl enable --now dert-netwatch.service >/dev/null 2>&1 || true
+  # WAN 出口质量探测：每 60 秒一轮 v4/v6 丢包与延迟，跳变时写事件
+  systemctl enable --now dert-wanq.timer >/dev/null 2>&1 || true
   systemctl enable --now dert-panel.service >/dev/null 2>&1
 
   c_info "首次配置收敛（生成网桥/防火墙/DHCP 配置并应用）..."

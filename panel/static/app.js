@@ -251,6 +251,47 @@ function refreshConfig() {
 }
 
 /* ===================== 1 系统概览 ===================== */
+/* 出口质量：数据来自 priv/wanq.py 每 60 秒写的快照，面板只读。
+   判定阈值在服务端（丢包 ≥20% 或 平均 RTT ≥200ms），前端不重复实现，
+   否则两处判据迟早漂移。 */
+function fmtAge(sec) {
+  if (sec < 60) return Math.max(0, Math.round(sec)) + " 秒";
+  if (sec < 3600) return Math.round(sec / 60) + " 分钟";
+  return Math.round(sec / 3600) + " 小时";
+}
+function renderWanq(q) {
+  q = q || {};
+  var ids = ["ov-q4-loss", "ov-q4-rtt", "ov-q6-loss", "ov-q6-rtt"];
+  var badge = $id("ov-q-badge"), hint = $id("ov-q-hint");
+  if (!badge) return;
+  if (!q.updated) {
+    badge.textContent = "暂无数据";
+    badge.className = "ru-badge";
+    for (var i = 0; i < ids.length; i++) $id(ids[i]).textContent = "—";
+    hint.textContent = "定时器尚未跑过（开机约 2 分钟后出第一份数据）。";
+    return;
+  }
+  var bad = q.state === "degraded";
+  badge.textContent = bad ? "出口劣化" : "出口正常";
+  badge.className = "ru-badge" + (bad ? " red" : " green");
+
+  var v4 = q.v4 || {}, v6 = q.v6 || {};
+  function pct(v) { return v == null ? "—" : v + "%"; }
+  function ms(v) { return v == null ? "—" : Math.round(v) + " ms"; }
+  var v6off = v6.s6 === "off";
+  $id("ov-q4-loss").textContent = v4.s4 === "off" ? "—" : pct(v4.loss);
+  $id("ov-q4-rtt").textContent = v4.s4 === "off" ? "—" : ms(v4.avg_ms);
+  $id("ov-q6-loss").textContent = v6off ? "未启用" : pct(v6.loss);
+  $id("ov-q6-rtt").textContent = v6off ? "未启用" : ms(v6.avg_ms);
+
+  var now = Date.now() / 1000;
+  var parts = [];
+  if (v4.target) parts.push("v4 目标 " + v4.target);
+  if (!v6off && v6.target) parts.push("v6 目标 " + v6.target);
+  parts.push("更新于 " + fmtAge(Math.max(0, now - q.updated)) + "前");
+  if (bad && q.since) parts.push("已持续 " + fmtAge(Math.max(0, now - q.since)));
+  hint.textContent = parts.join(" · ") + "。丢包 ≥20% 或延迟 ≥200ms 判为劣化；只在状态变化时写事件（wan_quality_drop / wan_quality_ok）。";
+}
 function renderOverview(st) {
   var ok = st.wan && st.wan.state === "up";
   var dot = $id("ov-hero-dot");
@@ -306,6 +347,7 @@ function renderOverview(st) {
   }
   $id("ov-ports").innerHTML = ph || '<div class="ru-empty">未检测到网口</div>';
   srRenderIcons($id("ov-ports"));
+  renderWanq(st.wanq);
   $id("ru-sidefoot-text").textContent = "管理员已登录";
   /* 登录页副标题只显示版本号（会话加载时写一次）；这里不再写 LAN IP——
      状态轮询会覆盖它，登出后登录页就会重新冒出 IP（真机实测） */
@@ -1018,8 +1060,77 @@ $id("file-compose").addEventListener("change", function () {
   this.value = "";
 });
 
+/* ---- 调试模式：流量路径记录（v0.1.119）---- */
+var FLOW_LABEL = { direct: "直连", tun: "进 tun", singbox: "进 sing-box", dns: "DNS", "dns-sb": "DNS(sing-box)" };
+function renderFlow(d) {
+  d = d || {};
+  var badge = $id("flow-badge");
+  if (badge) {
+    /* 三种状态要分清：配置开着但链没建起来（收敛未跑/被删）、链在记录、已关闭。
+       只按 enabled 显示会掩盖「开着却什么都没记」这种最难查的情况。 */
+    badge.textContent = d.chain_present ? "记录中" : (d.enabled ? "已开启·链未生效" : "已关闭");
+    badge.className = "ru-badge" + (d.chain_present ? " green" : (d.enabled ? " red" : ""));
+  }
+  var sw = $id("flow-switch");
+  if (sw) sw.checked = !!d.enabled;
+
+  var c = d.counts || {}, parts = [];
+  ["direct", "tun", "singbox", "dns-sb", "dns"].forEach(function (k) {
+    if (c[k]) parts.push(FLOW_LABEL[k] + " " + c[k]);
+  });
+  var stats = $id("flow-stats");
+  if (stats) {
+    stats.textContent = d.total
+      ? "最近 10 分钟共 " + d.total + " 条：" + parts.join(" · ")
+      : (d.enabled ? "最近 10 分钟没有记录——确认设备确实有访问；若一条都没有，可能是内核日志不可读或链未生效" : "调试模式已关闭，未记录任何内容");
+  }
+
+  var tb = $id("flow-tbody");
+  if (!tb) return;
+  var recs = d.records || [];
+  if (!recs.length) { tb.innerHTML = '<tr><td colspan="5" class="ru-empty">暂无记录</td></tr>'; return; }
+  var html = "";
+  recs.forEach(function (r) {
+    var isDirect = r.path === "direct";
+    html += "<tr><td>" + esc(r.t || "—") + "</td>" +
+      "<td>" + esc(r.dev || r.src || "—") + "</td>" +
+      '<td class="mono" data-label="目标">' + esc(r.dst || "—") + "</td>" +
+      '<td data-label="端口">' + esc(r.dpt || "—") + "</td>" +
+      '<td data-label="路径"><span class="ru-badge' + (isDirect ? "" : " blue") + '">' + esc(FLOW_LABEL[r.path] || r.path) + "</span></td></tr>";
+  });
+  tb.innerHTML = html;
+}
+function loadFlow() {
+  return API.get("/api/flow").then(renderFlow).catch(function (e) {
+    if (e.code === "UNAUTH") return;
+    var s = $id("flow-stats");
+    if (s) s.textContent = "读取失败：" + (e.message || "未知错误") + (e.hint ? "（" + e.hint + "）" : "");
+  });
+}
+if ($id("flow-switch")) {
+  $id("flow-switch").addEventListener("change", function () {
+    var el = this, on = el.checked;
+    API.post("/api/flow", { enabled: on }).then(function (r) {
+      toast("ok", on ? "调试模式已开启" : "调试模式已关闭",
+        on ? "每台设备的每条新连接都会出现在下方表格" : "nft 链已移除，不再产生任何日志");
+      renderFlow(r);
+      return loadFlow();
+    }).catch(function (e) {
+      el.checked = !on;   /* 失败必须回弹，否则开关显示与真实状态相反 */
+      apiFail(e);
+    });
+  });
+}
+if ($id("btn-flow-refresh")) {
+  $id("btn-flow-refresh").addEventListener("click", function () {
+    var b = this;
+    btnBusy(b, true);
+    loadFlow().then(function () { btnBusy(b, false); });
+  });
+}
+
 /* ===================== 6 其他工具（sing-box / 配置 / Tailscale 托管） ===================== */
-loaders.tools = loadSingbox;
+loaders.tools = function () { loadSingbox(); loadFlow(); };
 function fmtDur(sec) {  /* 全站唯一定义（B-03：曾两处且语义不一致，后定义覆盖前者） */
   if (sec == null || isNaN(sec) || sec < 0) return "—";
   sec = Math.floor(sec);

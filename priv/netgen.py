@@ -397,6 +397,53 @@ def gen_dnsmasq(cfg):
     return "\n".join(lines) + "\n"
 
 
+def flow_chain_lines():
+    """调试模式的 flow 链（v0.1.119）。只在 debug.flow 为真时进产物。
+
+    单独提成函数是为了让 `priv/flowops.py` 在开关时**生成同一份文本**——
+    两份实现迟早漂移（LAN→WAN 事故的教训），而这条链的判据错一个字节
+    就会把「直连」记成「走代理」。
+
+    为什么放在 dstnat + 10：这个链必须**晚于所有决策点**才能读到结论。
+    实测各链优先级（真机 nft list 输出）：
+      dert_dns             dstnat - 2   按 MAC 把 53 分给 sing-box 或 dnsmasq
+      sing-box 预匹配       dstnat - 1   mark 0x2024 / 0x2023 透传
+      sing-box TCP 重定向   dstnat + 2   TCP → 127.0.0.1:<auto_redirect 端口>
+      sing-box UDP/ICMP     dstnat + 3   白名单 mark 0x2023，其余 mark 0x2024
+    到 dstnat + 10 时，包上已经带着「走了哪条路」的全部证据。
+
+    端口不写死：auto_redirect 的端口每次启动都会变（真机实测 45217 → 39883），
+    判据只能用「被 DNAT 到回环」，不能用端口号。
+    """
+    def _flow(path, match):
+        # limit 在 log 之前：ct state new 已经保证一条连接只记一次，
+        # 这里的限速只防 SYN 洪泛把 journal 冲掉。
+        # `burst 40 packets` 的 packets 单位不能省——真机 nft -c 实测报
+        # "unexpected log, expecting packets"，而语法错误会让整条链建不起来。
+        return ('    iifname $LAN_BR ct state new ' + match +
+                ' counter limit rate 20/second burst 40 packets'
+                ' log prefix "dertflow %s "' % path)
+
+    return [
+        "  # 调试模式：记录每台设备的转发路径（关闭时本链不存在）",
+        "  chain flowlog {",
+        "    type filter hook prerouting priority dstnat + 10; policy accept;",
+        # DNS 先判，且必须带 ct status dnat：dert_dns 是唯一在 br-lan 上做
+        # DNAT 的链，加上这个条件才能把 DNS 和 mDNS（同样是 5353 端口，但
+        # 目标是 224.0.0.251 组播、不走 DNAT）区分开——否则局域网的 mDNS
+        # 会被记成「DNS 走了 sing-box」。
+        _flow("dns-sb", "ct status dnat meta l4proto { tcp, udp } th dport 5353"),
+        _flow("dns", "ct status dnat meta l4proto { tcp, udp } th dport 53"),
+        _flow("singbox", "ip daddr 127.0.0.0/8"),
+        _flow("singbox", "ip6 daddr ::1"),
+        _flow("tun", "meta mark 0x00002023"),
+        # 兜底：非白名单（无 mark）与非白名单 UDP/ICMP（mark 0x2024）都落这里
+        _flow("direct", "meta l4proto { tcp, udp, icmp, ipv6-icmp }"),
+        "  }",
+        "",
+    ]
+
+
 def gen_nft(cfg):
     # PPPoE 模式下三层流量在 ppp0 上；但物理口也必须纳入防火墙（input 过滤 + hairpin），
     # 否则其 link-local 地址会暴露面板 80 端口（审计 B-05）
@@ -495,6 +542,23 @@ def gen_nft(cfg):
         "  }",
         "",
     ]
+    # 调试模式（v0.1.119）：把每台设备的新连接与转发路径写进内核日志。
+    #
+    # 为什么放在 dstnat + 10：这个链必须**晚于所有决策点**才能读到结论。
+    # 实测各链优先级（真机 nft list 输出）：
+    #   dert_dns            dstnat - 2   按 MAC 把 53 分给 sing-box 或 dnsmasq
+    #   sing-box 预匹配      dstnat - 1   mark 0x2024 / 0x2023 透传
+    #   sing-box TCP 重定向  dstnat + 2   TCP → 127.0.0.1:<auto_redirect 端口>
+    #   sing-box UDP/ICMP    dstnat + 3   白名单 mark 0x2023，其余 mark 0x2024
+    # 所以到 dstnat + 10 时，包上已经带着「走了哪条路」的全部证据。
+    #
+    # 端口不写死：auto_redirect 的端口每次启动都会变（真机实测 45217 → 39883），
+    # 判据只能用「被 DNAT 到回环」，不能用端口号。
+    #
+    # 默认关闭，关闭时这条链根本不存在 —— 产物与 v0.1.118 逐字一致。
+    if (cfg.get("debug") or {}).get("flow"):
+        lines += flow_chain_lines()
+
     # hairpin：LAN 内用公网 IP 访问自己 —— LAN 侧也要做 DNAT（审计 C-20）
     lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] + dnat + dnat_lan + ["  }", ""]
     lines += [
@@ -633,6 +697,15 @@ def schema_check(cfg):
 
     if cfg.get("qos") is not None and not isinstance(cfg.get("qos"), dict):
         bad("QoS 段格式损坏", "请在「网络设置 → QoS 限速」重新保存")
+
+    # 调试段（v0.1.119）：flow 只认布尔值。写成 "on" / "1" / 1 这类真值会让
+    # 「关掉」变成「开着」，而这条链会往内核日志写每条新连接——语义必须唯一。
+    dbg = cfg.get("debug")
+    if dbg is not None and not isinstance(dbg, dict):
+        bad("调试段格式损坏", "执行 dert-priv flow off，或手工删除 config.json 里的 debug 段")
+    if isinstance(dbg, dict) and "flow" in dbg and not isinstance(dbg["flow"], bool):
+        bad(f"debug.flow 必须是 true/false，当前为 {dbg['flow']!r}",
+            "执行 dert-priv flow off 重置")
 
     # ---- P3-25：字段级安全断言（收敛侧）----
     # validate.py 的字段校验只在「面板写入」这一条路径生效；备份恢复、回滚、

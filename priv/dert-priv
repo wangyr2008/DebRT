@@ -72,5 +72,11 @@ case "$CMD" in
   selftest)         exec python3 "${PRIV_DIR}/selftest.py" ;;
   health)           exec python3 "${PRIV_DIR}/health.py" "$@" ;;
 
+  # ---- 调试模式（v0.1.119）----
+  # 参数原样透传：on / off / status / show [分钟] [--no-dns]
+  # 读内核日志需要 root，所以整个子命令都要求 root，不做「show 免 root」的分裂。
+  flow)             require_root
+                    exec python3 "${PRIV_DIR}/flowops.py" "$@" ;;
+
   *)                die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;
 esac

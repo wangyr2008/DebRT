@@ -658,6 +658,61 @@ for _rel41 in ("install.sh",
         _p41_bad.append("%s 还写着 nameserver ::1（本机 v6 查询会绕回 dnsmasq）" % _rel41)
 assert _p41_bad == [], "P3-41 回归：%s" % "；".join(_p41_bad)
 
+# P3-42：WAN 出口质量探测必须真的接上（v0.1.119）
+# health 只判「ppp0 在不在」，测不出「在但劣化」——2026-11-17 那次出口劣化 3 分钟，
+# 日志里一个字都没有。新增了定时器，但**新单元在升级路径上不会自动安装**：
+# 老设备升级完如果只落了文件没 enable，面板会一直显示「暂无数据」，且不报错。
+_p42_bad = []
+_inst42 = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
+for _need42 in ("dert-wanq.service", "dert-wanq.timer", "enable --now dert-wanq.timer"):
+    if _need42 not in _inst42:
+        _p42_bad.append("install.sh 缺 %s" % _need42)
+_up42 = open(os.path.join(ROOT, "priv", "upgradeops.py"), encoding="utf-8").read()
+for _need42 in ("dert-wanq.service", "dert-wanq.timer", '"--now", "dert-wanq.timer"'):
+    if _need42 not in _up42:
+        _p42_bad.append("upgradeops 缺 %s（老设备升级后没有定时器）" % _need42)
+_api42 = open(os.path.join(ROOT, "panel", "api.py"), encoding="utf-8").read()
+if 'st["wanq"] = _wanq()' not in _api42:
+    _p42_bad.append("面板 /api/status 没带 wanq 字段（概览卡片永远空着）")
+if "WANQ_FILE" not in _api42:
+    _p42_bad.append("api.py 没读 WANQ_FILE")
+assert _p42_bad == [], "P3-42 回归：%s" % "；".join(_p42_bad)
+
+# P3-43：调试模式的四条硬约束（v0.1.119）
+# 这四条都不会让程序报错，只会让功能静默失效或给出**错误结论**：
+#   ① 链名不能用 `flow` —— nft 保留字（flowtable），nft -c 报
+#      "unexpected flow, expecting string or last"，整条链建不起来；
+#   ② `burst 40` 缺 `packets` 单位 → "unexpected log, expecting packets"；
+#   ③ 出厂必须关闭 —— 默认开着等于给每台设备每条连接写内核日志；
+#   ④ flowops 必须复用 netgen.flow_chain_lines —— 两份实现迟早漂移，
+#      判据错一个字节就会把「直连」记成「走代理」。
+_p43_bad = []
+_ng43 = open(os.path.join(ROOT, "priv", "netgen.py"), encoding="utf-8").read()
+_fo43 = open(os.path.join(ROOT, "priv", "flowops.py"), encoding="utf-8").read()
+if "def flow_chain_lines" not in _ng43:
+    _p43_bad.append("netgen 缺 flow_chain_lines")
+if "chain flowlog" not in _ng43:
+    _p43_bad.append("链名不是 flowlog")
+if "chain flow {" in _ng43:
+    _p43_bad.append("又出现 chain flow（nft 保留字，语法错误）")
+if "burst 40 packets" not in _ng43:
+    _p43_bad.append("burst 缺 packets 单位（nft 语法错误）")
+if "netgen.flow_chain_lines()" not in _fo43:
+    _p43_bad.append("flowops 自己拼链文本（必须复用 netgen）")
+_cfg43 = json.load(open(os.path.join(ROOT, "config", "config.json"), encoding="utf-8"))
+if (_cfg43.get("debug") or {}).get("flow") is not False:
+    _p43_bad.append("出厂配置 debug.flow 必须是 false")
+_dp43 = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+if "flowops.py" not in _dp43:
+    _p43_bad.append("dert-priv 没分发 flow 子命令")
+_su43 = open(os.path.join(ROOT, "sudoers", "dert"), encoding="utf-8").read()
+if "dert-priv flow *" not in _su43:
+    _p43_bad.append("sudoers 没有 flow 条目（面板开关会被拒）")
+if '"/flow": get_flow' not in _api42 or '"/flow": post_flow' not in _api42:
+    _p43_bad.append("面板缺 /api/flow 路由")
+assert _p43_bad == [], "P3-43 回归：%s" % "；".join(_p43_bad)
+
+
 # P3-19：DNS 按 MAC 分流三件套（v0.1.57）
 # 背景：fakeip 是全局 DNS 行为，tun 拦截按 MAC，两者互斥——非白名单设备拿到
 # fakeip 却没人接管 = 黑洞（Bing 图片、游戏登录、VS Code 更新全静默失败）。
@@ -1073,4 +1128,4 @@ print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落�
       "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/"
       "P3-32安装glob/P3-34单元硬化/P3-35结构化日志/P3-36sudoers生成/P3-37PWA独立窗口/"
       "P3-38iOS不放大+启动兜底/P3-39静态IP设备进列表/P3-40窄屏版本号/"
-      "P3-41本机DNS走sing-box/观察②③ 全部通过")
+      "P3-41本机DNS走sing-box/P3-42出口质量探测装配/P3-43调试模式约束/观察②③ 全部通过")

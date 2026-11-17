@@ -25,6 +25,8 @@ UPLOAD_DIR = "/var/lib/dert/uploads"
 BACKUP_DIR = "/var/lib/dert/backups"
 CONFIG_FILE = "/etc/dert/config.json"
 VERSION_FILE = "/usr/local/lib/dert/share/VERSION"
+# WAN 出口质量快照（priv/wanq.py 每 60 秒覆盖写，面板只读）
+WANQ_FILE = "/var/lib/dert/wanq.json"
 
 STATUS_MAP = {"BUSY": 409, "UNAUTH": 401, "AUTH_LOCKED": 423, "AUTH_BAD": 401,
               "TOO_LARGE": 413, "UPG_NO_SOURCE": 400, "CSRF": 403}
@@ -157,6 +159,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             "/podman/images": lambda b, h: (200, priv("podman-ops", "list-images", timeout=60), None),
             "/podman/compose": lambda b, h: (200, priv("podman-ops", "compose-get"), None),
             "/singbox": lambda b, h: (200, priv("singbox-ops", "status"), None),
+            "/flow": get_flow,
             "/backup": get_backup,
         }
         fn = table.get(q)
@@ -168,6 +171,7 @@ def handle(method, path, body: bytes, headers, client_ip=""):
             return post_config_section(m.group(1), body)
         table = {
             "/notes": post_notes,
+            "/flow": post_flow,
             "/portfw": post_portfw,
             "/admin/password": post_password,
             "/logout": do_logout,
@@ -251,6 +255,21 @@ def _wan_dns():
     return dns
 
 
+def _wanq():
+    """出口质量快照。文件不存在（定时器还没跑过）时返回空字典，不报错。"""
+    if MOCK:
+        return {"state": "ok", "updated": int(time.time()), "since": int(time.time()) - 3600,
+                "v4": {"s4": "ok", "target": "223.5.5.5", "loss": 0.0, "avg_ms": 12.4},
+                "v6": {"s6": "ok", "target": "2400:3200::1", "loss": 0.0, "avg_ms": 21.7},
+                "v6_probed": True, "samples": []}
+    try:
+        with open(WANQ_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
 def get_status(body, headers):
     # 3 秒缓存：前端 8s 轮询 + 每次内部 ~9 个子进程，缓存显著降载且无感（移交清单性能项）
     now = time.time()
@@ -274,6 +293,7 @@ def get_status(body, headers):
     if MOCK:
         stats = sysinfo.mock_status()["stats"]
     st["stats"] = stats
+    st["wanq"] = _wanq()
     return 200, st, None
 
 
@@ -303,6 +323,23 @@ def get_leases(body, headers):
     cfg = priv("config-get", timeout=30).get("config", {})
     leases = sysinfo.leases(cfg.get("static", []))
     return 200, {"leases": leases, "static_count": len(cfg.get("static", []))}, None
+
+
+# ---------------- 调试模式（流量路径记录）----------------
+def get_flow(body, headers):
+    """最近的转发路径记录。只读，来自内核日志（flowops.py 解析）。"""
+    if MOCK:
+        return 200, {"ok": True, "enabled": False, "chain_present": False,
+                     "total": 0, "counts": {}, "records": []}, None
+    return 200, priv("flow", "show", "10", timeout=60), None
+
+
+def post_flow(body, headers):
+    data = _json_body(body)
+    on = data.get("enabled")
+    if not isinstance(on, bool):
+        raise ApiError(400, "BAD_JSON", "enabled 必须是 true 或 false")
+    return 200, priv("flow", "on" if on else "off", timeout=60), None
 
 
 def post_notes(body, headers):
