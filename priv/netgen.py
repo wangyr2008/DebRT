@@ -416,32 +416,52 @@ def flow_chain_lines():
     判据只能用「被 DNAT 到回环」，不能用端口号。
     """
     def _flow(path, match):
-        # limit 在 log 之前：ct state new 已经保证一条连接只记一次，
-        # 这里的限速只防 SYN 洪泛把 journal 冲掉。
-        # `burst 40 packets` 的 packets 单位不能省——真机 nft -c 实测报
-        # "unexpected log, expecting packets"，而语法错误会让整条链建不起来。
-        return ('    iifname $LAN_BR ct state new ' + match +
-                ' counter limit rate 20/second burst 40 packets'
-                ' log prefix "dertflow %s "' % path)
+        # 两条规则一组：**log 不终止匹配**，必须紧跟一条同条件的 return。
+        # 真机实测：只写 log 时同一条包会被记 4 次（dns-sb / singbox / tun / direct
+        # 全命中），日志直接失去意义。
+        #
+        # 为什么 return 单独一条、不写在 log 那条后面：`limit` 是匹配式的，
+        # 超速时后面的 log 和 return 都会被跳过 —— 那样高峰期反而会掉到兜底的
+        # direct 分支，记错路径。拆开以后限速只影响「记不记」，不影响「走哪条」。
+        #
+        # `burst 40 packets` 的 packets 单位不能省（nft -c 报
+        # "unexpected log, expecting packets"，整份文件语法错误）。
+        base = "    iifname $LAN_BR ct state new " + match
+        return [
+            base + ' counter limit rate 20/second burst 40 packets'
+                   ' log prefix "dertflow %s "' % path,
+            base + " return",
+        ]
 
-    return [
+    lines = [
         "  # 调试模式：记录每台设备的转发路径（关闭时本链不存在）",
         "  chain flowlog {",
         "    type filter hook prerouting priority dstnat + 10; policy accept;",
-        # DNS 先判，且必须带 ct status dnat：dert_dns 是唯一在 br-lan 上做
-        # DNAT 的链，加上这个条件才能把 DNS 和 mDNS（同样是 5353 端口，但
-        # 目标是 224.0.0.251 组播、不走 DNAT）区分开——否则局域网的 mDNS
-        # 会被记成「DNS 走了 sing-box」。
-        _flow("dns-sb", "ct status dnat meta l4proto { tcp, udp } th dport 5353"),
-        _flow("dns", "ct status dnat meta l4proto { tcp, udp } th dport 53"),
-        _flow("singbox", "ip daddr 127.0.0.0/8"),
-        _flow("singbox", "ip6 daddr ::1"),
-        _flow("tun", "meta mark 0x00002023"),
-        # 兜底：非白名单（无 mark）与非白名单 UDP/ICMP（mark 0x2024）都落这里
-        _flow("direct", "meta l4proto { tcp, udp, icmp, ipv6-icmp }"),
-        "  }",
-        "",
+        # 组播/广播直接放过、不记录：SSDP（239.255.255.250:1900）和 mDNS
+        # （224.0.0.251:5353）是局域网内固定端口的周期性广播，真机实测 20 秒
+        # 能刷出上百行，把真正要看的连接全埋了。它们也永远不可能走代理。
+        "    iifname $LAN_BR ip daddr 224.0.0.0/4 return",
+        "    iifname $LAN_BR ip daddr 255.255.255.255 return",
+        "    iifname $LAN_BR ip6 daddr ff00::/8 return",
     ]
+    # 判据来源（真机对照实验，60 秒计数）：
+    #   ct status dnat           45 命中   ← redirect 之后 conntrack 一定带这个标记
+    #   ip daddr 127.0.0.0/8      0 命中   ← 想当然的写法，redirect 不改到回环
+    #   ip daddr <路由器 LAN IP> 264 命中  ← redirect 是把目的改到**入接口的本机地址**
+    # 所以「进 sing-box」只能用 ct status dnat 判，不能用地址段。
+    #
+    # 顺序很关键：DNS 必须先判。白名单设备的 DNS 也被 DNAT（53 → 5353），
+    # 不先摘出来就会被算成「进 sing-box」。
+    # `fib daddr type local` 用来把「发给路由器自己」与 mDNS（224.0.0.251:5353，
+    # 同样是 5353 端口但走组播、不做 DNAT）区分开，也自动跟随 LAN IP/前缀变化。
+    lines += _flow("dns-sb", "meta l4proto { tcp, udp } th dport 5353 fib daddr type local")
+    lines += _flow("dns", "meta l4proto { tcp, udp } th dport 53 fib daddr type local")
+    lines += _flow("singbox", "ct status dnat fib daddr type local")
+    lines += _flow("tun", "meta mark 0x00002023")
+    # 兜底：非白名单（无 mark）与非白名单 UDP/ICMP（mark 0x2024）都落这里
+    lines += _flow("direct", "meta l4proto { tcp, udp, icmp, ipv6-icmp }")
+    lines += ["  }", ""]
+    return lines
 
 
 def gen_nft(cfg):

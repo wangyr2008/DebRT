@@ -33,7 +33,7 @@ nft 在 `dstnat + 10` 打点（见 netgen.flow_chain_lines 的注释），此时
     flowops.py on                开启
     flowops.py off               关闭
     flowops.py status            当前状态（含链是否真的存在、命中包数）
-    flowops.py show [分钟] [--no-dns]   最近的记录
+    flowops.py show [分钟] [--dns]     最近的记录（DNS 默认不显示，太吵）
 """
 
 import json
@@ -218,7 +218,7 @@ def read_journal(minutes):
     return out if rc == 0 else ""
 
 
-def show(minutes=10, include_dns=True, limit=200):
+def show(minutes=10, include_dns=False, limit=200):
     recs = parse_log(read_journal(minutes))
     if not include_dns:
         recs = [r for r in recs if r["path"] not in ("dns", "dns-sb")]
@@ -275,7 +275,9 @@ def main(argv=None):
 
     if action == "show":
         minutes = 10
-        include_dns = "--no-dns" not in argv
+        # DNS 默认不显示：真机实测 45 秒里 555 行有 383 行是 DNS（69%），
+        # 会把真正要看的 TCP 连接全埋掉。需要时加 --dns。
+        include_dns = "--dns" in argv
         for a in argv[1:]:
             if a.isdigit():
                 minutes = max(1, min(1440, int(a)))
@@ -284,7 +286,7 @@ def main(argv=None):
 
     print(json.dumps({"ok": False, "code": "USAGE",
                       "message": "未知动作：%s" % action,
-                      "hint": "合法动作：on / off / status / show [分钟] [--no-dns]"},
+                      "hint": "合法动作：on / off / status / show [分钟] [--dns]"},
                      ensure_ascii=False))
     return 2
 

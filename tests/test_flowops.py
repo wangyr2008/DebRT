@@ -62,22 +62,57 @@ class TestFlowChainArtifact(unittest.TestCase):
         for p in ("dns-sb", "dns", "singbox", "tun", "direct"):
             self.assertIn('log prefix "dertflow %s "' % p, body)
 
+    def test_singbox_uses_dnat_not_loopback(self):
+        """真机对照实验（60 秒）：redirect 之后 `ip daddr 127.0.0.0/8` 命中 0 次，
+        `ct status dnat` 命中 45 次——redirect 是把目的改到入接口的本机地址，
+        不是回环。用地址段判会让「进 sing-box」永远是 0。"""
+        body = self.body(True)
+        self.assertNotIn("127.0.0.0/8", body,
+                         "redirect 不改到回环，按地址段判永远命中不了")
+        seg = [l for l in body.splitlines() if 'dertflow singbox' in l]
+        self.assertEqual(len(seg), 1)
+        self.assertIn("ct status dnat", seg[0])
+
     def test_every_rule_scoped_to_lan(self):
         body = self.body(True)
         seg = body[body.index("chain flowlog"):]
         seg = seg[:seg.index("\n  }")]
         rules = [l for l in seg.splitlines() if "log prefix" in l]
-        self.assertEqual(len(rules), 6)
+        self.assertEqual(len(rules), 5)
         for r in rules:
             self.assertIn("iifname $LAN_BR", r,
                           "不限 br-lan 会把路由器自身与 tun 回程也记进来")
 
-    def test_dns_rules_require_dnat(self):
-        """mDNS 用的是 5353 端口但走组播、不做 DNAT——不带这个条件就会误判。"""
+    def test_every_log_rule_terminates(self):
+        """log 不终止匹配：真机实测同一条包被记了 4 次（四条路径全命中）。
+        每条 log 规则后面必须紧跟一条同条件的 return。"""
+        lines = self.body(True).splitlines()
+        idx = [i for i, l in enumerate(lines) if "log prefix" in l]
+        self.assertEqual(len(idx), 5)
+        for i in idx:
+            nxt = lines[i + 1]
+            self.assertIn("return", nxt, "log 规则后没有 return：同一条包会被多次记录")
+            self.assertIn("iifname $LAN_BR", nxt)
+
+    def test_multicast_skipped_before_logging(self):
+        """SSDP/mDNS 是周期性广播，20 秒能刷上百行，会把要看的连接埋掉；
+        它们也永远不可能走代理，所以第一条规则就该放过。"""
+        body = self.body(True)
+        seg = body[body.index("chain flowlog"):]
+        first_rules = [l.strip() for l in seg.splitlines()[2:5]]
+        self.assertIn("224.0.0.0/4", first_rules[0])
+        self.assertIn("return", first_rules[0])
+        self.assertIn("ff00::/8", first_rules[2])
+        for r in first_rules:
+            self.assertNotIn("log prefix", r, "组播不该被记录")
+
+    def test_dns_rules_require_local_dest(self):
+        """mDNS 也用 5353 端口但目标是 224.0.0.251 组播——不限定「发给本机」
+        就会被记成「DNS 走了 sing-box」，排查时直接被误导。"""
         body = self.body(True)
         for line in body.splitlines():
             if 'dertflow dns' in line:
-                self.assertIn("ct status dnat", line)
+                self.assertIn("fib daddr type local", line)
 
     def test_flow_chain_function_is_shared(self):
         """flowops 直接用 netgen.flow_chain_lines()，不允许各写一份。"""
@@ -235,10 +270,15 @@ class TestFlowLogParse(FlowCase):
         self.assertEqual(d["total"], 3)
         self.assertEqual(d["records"][0]["path"], "dns", "最新的排在最前")
 
-    def test_show_can_hide_dns(self):
-        d = self.f.show(10, False)
+    def test_dns_hidden_by_default(self):
+        """45 秒实测 555 行里 383 行是 DNS（69%），默认必须隐藏。"""
+        d = self.f.show(10)
         self.assertEqual(d["total"], 2)
         self.assertTrue(all(r["path"] not in ("dns", "dns-sb") for r in d["records"]))
+
+    def test_dns_included_on_request(self):
+        d = self.f.show(10, True)
+        self.assertEqual(d["total"], 3)
 
     def test_show_counts_by_path(self):
         d = self.f.show(10, True)

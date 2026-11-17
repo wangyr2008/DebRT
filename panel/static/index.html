@@ -403,7 +403,7 @@
                 <thead><tr><th>时间</th><th>设备</th><th>目标</th><th>端口</th><th>路径</th></tr></thead>
                 <tbody id="flow-tbody"><tr><td colspan="5" class="ru-empty">加载中…</td></tr></tbody>
               </table>
-              <div class="ru-hint">路径含义：<b>direct</b> 直连（非白名单，或白名单但命中国内规则）· <b>tun</b> 进 tun（UDP/ICMP 走代理）· <b>singbox</b> 被重定向进 sing-box（TCP，再按域名分流）· <b>dns</b> 走 dnsmasq · <b>dns-sb</b> 走 sing-box 的 DNS。只记录最近 10 分钟、每条连接一行（DNS 另有 20/秒限速）；关闭后 nft 链立即移除，不留任何痕迹。</div>
+              <div class="ru-hint">路径含义：<b>直连</b> 非白名单，或白名单但命中国内规则（不走代理）· <b>进 tun</b> UDP/ICMP 走代理 · <b>进 sing-box</b> TCP 被重定向进 sing-box，再按域名分流。只记录最近 10 分钟、每条新连接一行；组播（SSDP/mDNS）与 DNS 默认不显示——它们占日志量的七成以上，会把要看的连接埋掉（SSH 里 <code>dert-priv flow show 10 --dns</code> 可看 DNS）。关闭后 nft 链立即移除，不留痕迹。</div>
             </div>
             <!-- 未安装：一键安装（sb.sh 已随 DebRT 下发，默认不装 sing-box） -->
             <div class="ru-card" id="sb-uninstalled" hidden>
