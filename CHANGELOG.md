@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+## [0.1.120] - 2026-11-18
+
+> 修 0.1.119 的一个部署死角：**新增单元在"引入它的那个版本"里装不上**。
+
+### Fixed
+
+- **`dert-wanq.timer` 升级后是 `disabled`**（真机升级 0.1.119 后实测）。
+  升级跑的是**旧版**代码：旧版的通用拷贝循环把新的 `.service`/`.timer` 落到了
+  `/etc/systemd/system`（文件确实在），但 `enable` 写在新版代码里，而新版要等
+  **下一次**升级才运行。结果是文件在、定时器不跑、面板一直显示「暂无数据」，
+  而且**不报任何错**。
+
+  修法是让收敛自己再对账一次：`applyops.ensure_own_units()` 按 `OWN_UNITS`
+  白名单同步自有单元（只碰 DebRT 自己的，绝不覆盖 sing-box / podman 的），
+  内容变了才 `daemon-reload`，没启用的才 `enable`。收敛有两条路径（无漂移提前
+  返回 / 全量部署），两处都调用——最迟一次收敛即自愈，也能修掉被误 disable 的单元。
+
+- `ensure_own_units` 里"读源"与"读目标"必须分开 `try`：合并写会把「目标不存在」
+  当成「源读不出来」，从而写入空内容，之后每次收敛都判定"有变化"并白跑一次
+  `daemon-reload`（由 `test_no_reload_when_content_same` 抓出来）。
+
+### Notes
+
+- 新增 `tests/test_units.py`（7 用例）：只碰白名单、内容相同不重装、已启用不重复
+  enable、`daemon-reload` 必须在 `enable` 之前、systemctl 失败不影响收敛。
+- 守卫 P3-42 增加三条：`ensure_own_units` 存在、两条收敛路径都调用、
+  `OWN_UNITS` 含 `dert-wanq.timer`。
+
 ## [0.1.119] - 2026-11-18
 
 > 两件事：**出口质量终于有历史了**（v4/v6 分开测），以及一个**默认关闭**的

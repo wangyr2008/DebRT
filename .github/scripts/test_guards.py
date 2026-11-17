@@ -676,6 +676,15 @@ if 'st["wanq"] = _wanq()' not in _api42:
     _p42_bad.append("面板 /api/status 没带 wanq 字段（概览卡片永远空着）")
 if "WANQ_FILE" not in _api42:
     _p42_bad.append("api.py 没读 WANQ_FILE")
+# 升级路径的死角：新增单元由**旧版**代码落地文件，enable 写在新版里，
+# 新版要等下一次升级才跑 —— 所以收敛必须自己再对账一次。
+_ap42 = open(os.path.join(ROOT, "priv", "applyops.py"), encoding="utf-8").read()
+if "def ensure_own_units" not in _ap42:
+    _p42_bad.append("applyops 缺 ensure_own_units（新单元会永远 disabled）")
+if _ap42.count("ensure_own_units()") < 2:
+    _p42_bad.append("收敛的两条路径（无漂移提前返回 / 全量）都要调用 ensure_own_units")
+if '"dert-wanq.timer", True' not in _ap42:
+    _p42_bad.append("OWN_UNITS 里没有 dert-wanq.timer")
 assert _p42_bad == [], "P3-42 回归：%s" % "；".join(_p42_bad)
 
 # P3-43：调试模式的四条硬约束（v0.1.119）

@@ -265,6 +265,83 @@ ExecStopPost=+/usr/local/lib/dert/dns-split-teardown
 """
 
 
+# DebRT 自己的 systemd 单元白名单：(单元名, 是否应开机自启)。
+#
+# 为什么需要这份对账：**新增单元在"引入它的那个版本"里装不上**。
+# 升级时跑的是**旧版**代码——旧版的通用拷贝循环会把新的 .service/.timer
+# 落到 /etc/systemd/system（真机实测文件在），但 `enable` 写在新版代码里，
+# 而新版代码要等**下一次**升级才运行。结果就是：升级完文件在、timer 是
+# disabled，面板一直显示「暂无数据」，且不报错。
+# 收敛（开机 / 6h / 保存配置 / 升级后）都走这里，所以最迟一次收敛即自愈，
+# 也能修掉被误 disable 的单元。
+OWN_UNITS = (
+    ("dert-panel.service", True),
+    ("dert-dns-sync.service", True),
+    ("dert-converge.timer", True),
+    ("dert-pppoe-watchdog.service", False),
+    ("dert-pppoe-watchdog.timer", True),
+    ("dert-netwatch.service", True),
+    ("dert-wanq.service", False),
+    ("dert-wanq.timer", True),
+)
+
+
+def ensure_own_units():
+    """同步自有单元文件并保证该自启的已自启。返回 (changed, newly_enabled)。
+
+    只碰 OWN_UNITS 里的文件——/etc/systemd/system 下还有 sing-box、podman、
+    tailscale 等**别人的**单元，绝不能"看到 service 就覆盖"。
+    任何异常都吞掉并记事件：收敛不能因为这一步失败而整体失败。
+    """
+    changed, newly = False, []
+    try:
+        # 第一遍：只同步内容（先落盘，再 daemon-reload，最后 enable——
+        # 顺序反了的话 enable 一个刚写的单元会拿到旧的 unit 缓存）
+        for name, _want in OWN_UNITS:
+            src = os.path.join(LIB, "systemd", name)
+            if not os.path.isfile(src):
+                continue
+            dst = _fs("/etc/systemd/system/" + name)
+            # 读源与读目标必须分开 try：合并写会把「目标不存在」误当成
+            # 「源读不出来」，从而把空内容写进去（写完下次比对又"有变化"，
+            # 每次收敛都白跑一次 daemon-reload）。
+            try:
+                with open(src, "rb") as f1:
+                    new = f1.read()
+            except OSError:
+                continue
+            try:
+                with open(dst, "rb") as f2:
+                    same = f2.read() == new
+            except OSError:
+                same = False
+            if same:
+                continue
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "wb") as f:
+                    f.write(new)
+                os.chmod(dst, 0o644)
+                changed = True
+            except OSError:
+                continue
+        if changed:
+            _sh(["systemctl", "daemon-reload"], timeout=60)
+        for name, want in OWN_UNITS:
+            if not want or not os.path.isfile(_fs("/etc/systemd/system/" + name)):
+                continue
+            r = _sh(["systemctl", "is-enabled", "--quiet", name], timeout=15)
+            if r is not None and r.returncode == 0:
+                continue
+            _sh(["systemctl", "enable", name], timeout=60)
+            newly.append(name)
+        if newly:
+            _log("units_enabled", units=",".join(newly))
+    except Exception as e:                      # noqa: BLE001 —— 收敛不允许被这里带崩
+        _log("units_sync_failed", error=str(e)[:80])
+    return changed, newly
+
+
 def maintain_singbox_dropin():
     """sing-box 存在但缺 drop-in 时补挂（覆盖"先装 DebRT 后装 sing-box"）。"""
     # 官方 deb 把单元装在 /usr/lib/systemd/system，/etc 下永远没有——
@@ -490,6 +567,7 @@ def apply_all(convergent=False):
             # 此处**不能** start dnsmasq：收敛单元 Before=dnsmasq，同步 start 会与
             # 排序中的启动任务互相等待形成死锁（真机实测）。崩溃恢复靠 Restart=on-failure。
             maintain_singbox_dropin()
+            ensure_own_units()
             clear_converge_failed()
             # stage 必须删：这是"无漂移"的提前返回，早于下方全量路径的清理。
             # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/dert 留一份完整生成物，
@@ -518,6 +596,7 @@ def apply_all(convergent=False):
     wait_dnsmasq(15)
     sync_dns_upstream()
     maintain_singbox_dropin()
+    ensure_own_units()
     retire_old_prefixes()
     clear_converge_failed()
     ok_out(message="已按配置完成系统收敛" + ("。" + migrated if migrated else ""))
