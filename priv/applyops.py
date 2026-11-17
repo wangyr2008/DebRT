@@ -337,6 +337,29 @@ def ensure_own_units():
             newly.append(name)
         if newly:
             _log("units_enabled", units=",".join(newly))
+        # journald 上限：不是 unit 文件，单独同步一次（内容变了才重启 journald）。
+        # 走这里而不是只写在 install.sh 里，是因为**升级不跑 install.sh**，
+        # 而升级后紧跟的收敛跑的是新装好的 dert-priv——正好补上这一步。
+        try:
+            src = os.path.join(LIB, "systemd", "journald.conf.d", "dert.conf")
+            dst = _fs("/etc/systemd/journald.conf.d/dert.conf")
+            if os.path.isfile(src):
+                with open(src, "rb") as f:
+                    want = f.read()
+                try:
+                    with open(dst, "rb") as f:
+                        same = f.read() == want
+                except OSError:
+                    same = False
+                if not same:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    with open(dst, "wb") as f:
+                        f.write(want)
+                    os.chmod(dst, 0o644)
+                    _sh(["systemctl", "restart", "systemd-journald"], timeout=60)
+                    _log("journald_conf_applied")
+        except Exception as e:                  # noqa: BLE001
+            _log("journald_conf_failed", error=str(e)[:80])
     except Exception as e:                      # noqa: BLE001 —— 收敛不允许被这里带崩
         _log("units_sync_failed", error=str(e)[:80])
     return changed, newly

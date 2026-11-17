@@ -130,6 +130,29 @@ class UnitsCase(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(newly, [], "没源文件时不该尝试 enable")
 
+    def test_journald_dropin_is_synced(self):
+        """journald 上限不是 unit 文件，但它必须靠收敛补上——
+        升级不跑 install.sh，只跑收敛。"""
+        os.makedirs(os.path.join(self.unitdir, "journald.conf.d"))
+        src = os.path.join(self.unitdir, "journald.conf.d", "dert.conf")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("[Journal]\nSystemMaxUse=200M\n")
+        self.a.ensure_own_units()
+        dst = os.path.join(self.td, "etc/systemd/journald.conf.d/dert.conf")
+        self.assertTrue(os.path.isfile(dst), "drop-in 没落到 /etc")
+        self.assertIn("systemctl restart systemd-journald", self.calls())
+
+    def test_journald_dropin_not_restarted_when_same(self):
+        os.makedirs(os.path.join(self.unitdir, "journald.conf.d"))
+        src = os.path.join(self.unitdir, "journald.conf.d", "dert.conf")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("[Journal]\nSystemMaxUse=200M\n")
+        self.a.ensure_own_units()
+        open(self.log, "w").close()
+        self.a.ensure_own_units()
+        self.assertNotIn("systemctl restart systemd-journald", self.calls(),
+                         "内容没变还重启 journald 是无谓抖动")
+
     def test_systemctl_failure_never_raises(self):
         self.unit("dert-wanq.timer")
         # 把 systemctl 换成直接失败的脚本：收敛不能被这一步带崩

@@ -7,6 +7,29 @@
 
 ## [Unreleased]
 
+## [0.1.123] - 2026-11-18
+
+> 0.1.122 的 journald 上限没生效——又是「升级跑旧代码」那个坑。
+
+### Fixed
+
+- **`/etc/systemd/journald.conf.d/dert.conf` 升级后不存在**（真机 0.1.122 实测）。
+  0.1.122 把安装写在 `install.sh` 和 `upgradeops` 里，但升级不跑 install.sh，
+  而 upgradeops 那一步是**旧版**代码执行的——文件进了 `/usr/local/lib/dert/`
+  却没进 `/etc`，上限形同虚设。
+
+  修法：把它并入 `applyops.ensure_own_units()`（收敛期对账）。升级后紧跟的收敛
+  跑的是**新装好的** `dert-priv`（`subprocess.run([LIB + "/dert-priv", ...])`），
+  所以这一次就能补上，不用等下一个版本。
+
+- `ensure_own_units` 里内容未变时**不重启 journald**：重启会让日志出现一个
+  短暂空档，没变化就不该抖（`test_journald_dropin_not_restarted_when_same`）。
+
+### Notes
+
+- 守卫 P3-42 增加两条：`applyops` 必须同步 drop-in、仓库里必须有该文件。
+- `tests/test_units.py` 增至 9 用例。
+
 ## [0.1.122] - 2026-11-18
 
 > 面板只留开关；顺手量清了「SSD 写入到底是谁造成的」。

@@ -685,6 +685,11 @@ if _ap42.count("ensure_own_units()") < 2:
     _p42_bad.append("收敛的两条路径（无漂移提前返回 / 全量）都要调用 ensure_own_units")
 if '"dert-wanq.timer", True' not in _ap42:
     _p42_bad.append("OWN_UNITS 里没有 dert-wanq.timer")
+# journald 上限必须靠收敛补：升级不跑 install.sh，只跑收敛
+if "journald.conf.d" not in _ap42:
+    _p42_bad.append("applyops 没同步 journald drop-in（升级后上限不会生效）")
+if not os.path.isfile(os.path.join(ROOT, "systemd", "journald.conf.d", "dert.conf")):
+    _p42_bad.append("缺 systemd/journald.conf.d/dert.conf")
 assert _p42_bad == [], "P3-42 回归：%s" % "；".join(_p42_bad)
 
 # P3-43：调试模式的四条硬约束（v0.1.119）
