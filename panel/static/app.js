@@ -1060,51 +1060,43 @@ $id("file-compose").addEventListener("change", function () {
   this.value = "";
 });
 
-/* ---- 调试模式：流量路径记录（v0.1.119）---- */
-var FLOW_LABEL = { direct: "直连", tun: "进 tun", singbox: "进 sing-box", dns: "DNS", "dns-sb": "DNS(sing-box)" };
+/* ---- 调试模式开关（v0.1.122：面板只留开关，记录在后台日志里看）----
+   不做记录表格：实时刷表格既费电，也没人会盯着看；真出问题时 SSH 里
+   `dert-priv flow show` 比翻网页快得多。这里只回答一个问题：**现在到底记没记**。 */
 function renderFlow(d) {
   d = d || {};
-  var badge = $id("flow-badge");
-  if (badge) {
-    /* 三种状态要分清：配置开着但链没建起来（收敛未跑/被删）、链在记录、已关闭。
-       只按 enabled 显示会掩盖「开着却什么都没记」这种最难查的情况。 */
-    badge.textContent = d.chain_present ? "记录中" : (d.enabled ? "已开启·链未生效" : "已关闭");
-    badge.className = "ru-badge" + (d.chain_present ? " green" : (d.enabled ? " red" : ""));
-  }
-  var sw = $id("flow-switch");
+  var badge = $id("flow-badge"), hint = $id("flow-hint"), sw = $id("flow-switch");
   if (sw) sw.checked = !!d.enabled;
+  if (!badge || !hint) return;
+  /* 三种状态必须分清：配置开着但链没建起来（收敛没跑/被人删了）、真的在记、已关闭。
+     只看 enabled 会把「开着却一条都没记」这种最难查的情况盖住。 */
+  /* 「在记录」= nft 链真的存在。配置开着但链没建起来（没跑收敛/被人删了）
+     是最难查的状态：面板显示开着，实际一条都没记。 */
+  var live = !!d.chain_present;
+  badge.textContent = live ? "记录中" : (d.enabled ? "已开启·未生效" : "已关闭");
+  badge.className = "ru-badge" + (live ? " green" : (d.enabled ? " red" : ""));
 
-  var c = d.counts || {}, parts = [];
-  ["direct", "tun", "singbox", "dns-sb", "dns"].forEach(function (k) {
-    if (c[k]) parts.push(FLOW_LABEL[k] + " " + c[k]);
-  });
-  var stats = $id("flow-stats");
-  if (stats) {
-    stats.textContent = d.total
-      ? "最近 10 分钟共 " + d.total + " 条：" + parts.join(" · ")
-      : (d.enabled ? "最近 10 分钟没有记录——确认设备确实有访问；若一条都没有，可能是内核日志不可读或链未生效" : "调试模式已关闭，未记录任何内容");
+  if (!d.enabled) {
+    hint.textContent = "关闭时不产生任何日志。开启后每台设备的每条新连接记一行（直连 / 进 tun / 进 sing-box），组播与 DNS 不记。";
+    return;
   }
-
-  var tb = $id("flow-tbody");
-  if (!tb) return;
-  var recs = d.records || [];
-  if (!recs.length) { tb.innerHTML = '<tr><td colspan="5" class="ru-empty">暂无记录</td></tr>'; return; }
-  var html = "";
-  recs.forEach(function (r) {
-    var isDirect = r.path === "direct";
-    html += "<tr><td>" + esc(r.t || "—") + "</td>" +
-      "<td>" + esc(r.dev || r.src || "—") + "</td>" +
-      '<td class="mono" data-label="目标">' + esc(r.dst || "—") + "</td>" +
-      '<td data-label="端口">' + esc(r.dpt || "—") + "</td>" +
-      '<td data-label="路径"><span class="ru-badge' + (isDirect ? "" : " blue") + '">' + esc(FLOW_LABEL[r.path] || r.path) + "</span></td></tr>";
+  var p = d.packets || {}, total = 0, parts = [];
+  var label = { direct: "直连", tun: "进 tun", singbox: "进 sing-box" };
+  Object.keys(label).forEach(function (k) {
+    if (p[k]) { total += p[k]; parts.push(label[k] + " " + p[k]); }
   });
-  tb.innerHTML = html;
+  if (live) {
+    hint.textContent = "已记录 " + total + " 条" + (parts.length ? "：" + parts.join(" · ") : "") +
+      "。记录写在系统日志里，查看用 SSH：dert-priv flow show 10。用完记得关掉。";
+  } else {
+    hint.textContent = "配置已开启，但 nft 链不存在——多半是没跑收敛。保存任意网络设置触发一次收敛即可。";
+  }
 }
 function loadFlow() {
   return API.get("/api/flow").then(renderFlow).catch(function (e) {
     if (e.code === "UNAUTH") return;
-    var s = $id("flow-stats");
-    if (s) s.textContent = "读取失败：" + (e.message || "未知错误") + (e.hint ? "（" + e.hint + "）" : "");
+    var h = $id("flow-hint");
+    if (h) h.textContent = "读取失败：" + (e.message || "未知错误") + (e.hint ? "（" + e.hint + "）" : "");
   });
 }
 if ($id("flow-switch")) {
@@ -1112,20 +1104,13 @@ if ($id("flow-switch")) {
     var el = this, on = el.checked;
     API.post("/api/flow", { enabled: on }).then(function (r) {
       toast("ok", on ? "调试模式已开启" : "调试模式已关闭",
-        on ? "每台设备的每条新连接都会出现在下方表格" : "nft 链已移除，不再产生任何日志");
+        on ? "开始记录；需要时告诉我，我登后台看日志" : "nft 链已移除，不再产生任何日志");
       renderFlow(r);
       return loadFlow();
     }).catch(function (e) {
       el.checked = !on;   /* 失败必须回弹，否则开关显示与真实状态相反 */
       apiFail(e);
     });
-  });
-}
-if ($id("btn-flow-refresh")) {
-  $id("btn-flow-refresh").addEventListener("click", function () {
-    var b = this;
-    btnBusy(b, true);
-    loadFlow().then(function () { btnBusy(b, false); });
   });
 }
 

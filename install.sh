@@ -98,9 +98,15 @@ install -m 644 "$SRC_DIR/systemd/dert-netwatch.service" /etc/systemd/system/
 # WAN 出口质量探测（v0.1.119）：health 只看 ppp0 在不在，测不出「在但劣化」
 install -m 644 "$SRC_DIR/systemd/dert-wanq.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/systemd/dert-wanq.timer"   /etc/systemd/system/
+
 install -m 644 "$SRC_DIR/network/systemd/dert-pppoe.service" /etc/systemd/system/
 install -m 644 "$SRC_DIR/network/sysctl/70-dert.conf"  /etc/sysctl.d/
 install -m 644 "$SRC_DIR/network/modules/dert.conf"    /etc/modules-load.d/
+# journald 上限：真机实测日志长到 4.0 GB（55 GB 根分区），而 journald 每写一行
+# 的磁盘开销远大于文本本身（实测 120 秒写 0.89 MB 只为记 0.01 MB 文本）。
+# 上限只约束保留量，不减少写入——但能把 4 GB 压到 200 MB，也让轮转更平稳。
+install -m 644 "$SRC_DIR/systemd/journald.conf.d/dert.conf" /etc/systemd/journald.conf.d/dert.conf 2>/dev/null \
+  || { mkdir -p /etc/systemd/journald.conf.d && install -m 644 "$SRC_DIR/systemd/journald.conf.d/dert.conf" /etc/systemd/journald.conf.d/dert.conf; }
 # sudo 审计日志轮转（复审 N-07）
 install -m 644 "$SRC_DIR/network/logrotate/dert" /etc/logrotate.d/dert
 # sudoers（先语法检查再落盘）

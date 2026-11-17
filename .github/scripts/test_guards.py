@@ -708,6 +708,12 @@ if "burst 40 packets" not in _ng43:
     _p43_bad.append("burst 缺 packets 单位（nft 语法错误）")
 if "netgen.flow_chain_lines()" not in _fo43:
     _p43_bad.append("flowops 自己拼链文本（必须复用 netgen）")
+# 面板不再展示记录（v0.1.122）：只留开关，记录在后台看。
+# 反过来说，面板里不该再出现记录表格——那会把「实时刷表格」带回来。
+if "flow-tbody" in open(os.path.join(ROOT, "panel", "static", "index.html"), encoding="utf-8").read():
+    _p43_bad.append("面板又出现了 flow 记录表格（只该留开关）")
+if '"flow", "show"' in _api42:
+    _p43_bad.append("面板状态接口又去解析日志了（只该读 status）")
 _cfg43 = json.load(open(os.path.join(ROOT, "config", "config.json"), encoding="utf-8"))
 if (_cfg43.get("debug") or {}).get("flow") is not False:
     _p43_bad.append("出厂配置 debug.flow 必须是 false")

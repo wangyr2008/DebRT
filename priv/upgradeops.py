@@ -598,6 +598,12 @@ def apply(pkg):
         _sh(["systemctl", "enable", "--now", "dert-wanq.timer"], timeout=60)
         _sh(["systemctl", "restart", "dert-wanq.timer"], timeout=60)
 
+    # journald 上限（v0.1.122）：真机日志长到 4.0 GB，而根分区只有 55 GB。
+    if os.path.isfile(LIB + "/systemd/journald.conf.d/dert.conf"):
+        _install(LIB + "/systemd/journald.conf.d/dert.conf",
+                 _fs("/etc/systemd/journald.conf.d/dert.conf"), 0o644)
+        _sh(["systemctl", "restart", "systemd-journald"], timeout=60)
+
     for f in glob.glob(LIB + "/*.py") + [LIB + "/lib.sh"]:
         if os.path.isfile(f):
             try:

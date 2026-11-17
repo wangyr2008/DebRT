@@ -17,7 +17,7 @@
 <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='1' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%233aa0ff'/%3E%3Cstop offset='1' stop-color='%230150cf'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14.4' fill='url(%23g)'/%3E%3Cg fill='none' stroke='%23fff' stroke-linecap='round'%3E%3Cpath d='M32 45.5V30.5' stroke-width='4.2'/%3E%3Cpath d='M21.5 45.5H42.5' stroke-width='3.2'/%3E%3C/g%3E%3Crect x='14.6' y='42.1' width='6.8' height='6.8' rx='2' fill='%23fff'/%3E%3Crect x='42.6' y='42.1' width='6.8' height='6.8' rx='2' fill='%23fff'/%3E%3Cpath d='M32 30.5C24.8 30.5 20.4 26 20.7 19.4C27.3 19.7 31.6 24.1 32 30.5Z' fill='%23fff'/%3E%3Cpath d='M32 30.5C39.2 30.5 43.6 26 43.3 19.4C36.7 19.7 32.4 24.1 32 30.5Z' fill='%23fff'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/app.css?v=12">
+<link rel="stylesheet" href="/static/app.css?v=13">
 </head>
 <body>
 <div id="router-ui">
@@ -388,22 +388,17 @@
 
           <!-- ============ 6 其他工具 ============ -->
           <section class="ru-page" id="pg-tools">
-            <!-- 调试模式：把每台设备的转发路径写进日志（v0.1.119） -->
+            <!-- 调试模式：只留开关（v0.1.122）。记录本身在后台日志里看，
+                 面板不做表格——实时刷表格既费电又没人盯着看，排查时 SSH 更快。 -->
             <div class="ru-card">
               <div class="ru-chead">
-                <div><h3>调试模式 · 流量路径</h3><div class="ru-sub">开启后每台设备的每条新连接都会记一条：直连 / 进 tun / 进 sing-box</div></div>
+                <div><h3>调试模式 · 流量路径</h3><div class="ru-sub">开启后记录每台设备的新连接与转发路径，供后台排查</div></div>
                 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
                   <span class="ru-badge" id="flow-badge">—</span>
                   <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500">开启<label class="ru-switch"><input type="checkbox" id="flow-switch" aria-label="调试模式开关"><span></span></label></div>
-                  <button class="ru-btn sm" id="btn-flow-refresh"><i data-lucide="refresh-cw"></i>刷新</button>
                 </div>
               </div>
-              <div class="ru-hint" id="flow-stats">正在读取…</div>
-              <table class="ru-table">
-                <thead><tr><th>时间</th><th>设备</th><th>目标</th><th>端口</th><th>路径</th></tr></thead>
-                <tbody id="flow-tbody"><tr><td colspan="5" class="ru-empty">加载中…</td></tr></tbody>
-              </table>
-              <div class="ru-hint">路径含义：<b>直连</b> 非白名单，或白名单但命中国内规则（不走代理）· <b>进 tun</b> UDP/ICMP 走代理 · <b>进 sing-box</b> TCP 被重定向进 sing-box，再按域名分流。只记录最近 10 分钟、每条新连接一行；组播（SSDP/mDNS）与 DNS 默认不显示——它们占日志量的七成以上，会把要看的连接埋掉（SSH 里 <code>dert-priv flow show 10 --dns</code> 可看 DNS）。关闭后 nft 链立即移除，不留痕迹。</div>
+              <div class="ru-hint" id="flow-hint">正在读取…</div>
             </div>
             <!-- 未安装：一键安装（sb.sh 已随 DebRT 下发，默认不装 sing-box） -->
             <div class="ru-card" id="sb-uninstalled" hidden>
@@ -584,7 +579,7 @@
   <div class="ru-toasts" id="ru-toasts"></div>
 </div>
 
-<script src="/static/icons.js?v=12"></script>
-<script src="/static/app.js?v=12"></script>
+<script src="/static/icons.js?v=13"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>

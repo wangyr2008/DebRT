@@ -327,11 +327,10 @@ def get_leases(body, headers):
 
 # ---------------- 调试模式（流量路径记录）----------------
 def get_flow(body, headers):
-    """最近的转发路径记录。只读，来自内核日志（flowops.py 解析）。"""
+    """调试模式状态。只读配置与 nft 链，不解析日志（v0.1.122 起面板不再展示记录）。"""
     if MOCK:
-        return 200, {"ok": True, "enabled": False, "chain_present": False,
-                     "total": 0, "counts": {}, "records": []}, None
-    return 200, priv("flow", "show", "10", timeout=60), None
+        return 200, {"ok": True, "enabled": False, "chain_present": False, "packets": {}}, None
+    return 200, priv("flow", "status", timeout=30), None
 
 
 def post_flow(body, headers):
