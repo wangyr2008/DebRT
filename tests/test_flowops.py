@@ -286,5 +286,87 @@ class TestFlowLogParse(FlowCase):
         self.assertEqual(d["counts"]["dns"], 1)
 
 
+class TestSingboxJoin(FlowCase):
+    """singbox 路径的真实目标：内核日志里是重定向目标，得靠 sing-box 日志补。
+
+    两边共享连接 ID，用 (源IP, 源端口) 对齐。这里钉三个点：
+    ① 能对上；② IPv6 两种写法能对上；③ 对不上时不能瞎填。
+    """
+
+    SB = (
+        "+0800 2026-11-18 21:41:22 INFO [3571061780 0ms] inbound/tun[tun-in]: "
+        "inbound redirect connection from 192.168.10.117:60002\n"
+        "+0800 2026-11-18 21:41:22 INFO [3571061780 1ms] "
+        "outbound/trojan[WestData| 香港 02]: outbound connection to rr5---sn-x.googlevideo.com:443\n"
+        "+0800 2026-11-18 21:41:23 INFO [282874372 0ms] inbound/tun[tun-in]: "
+        "inbound redirect connection from [2409:8a5e:a50:5bc1:18d8:dbc0:ad1a:437a]:54571\n"
+        "+0800 2026-11-18 21:41:23 INFO [282874372 2ms] "
+        "outbound/direct[Direct]: outbound connection to example.cn:80\n"
+    )
+
+    def test_split_hostport_v4(self):
+        self.assertEqual(self.f._split_hostport("192.168.10.117:60002"),
+                         ("192.168.10.117", "60002"))
+
+    def test_split_hostport_v6(self):
+        self.assertEqual(self.f._split_hostport("[2409:8a5e:a50::1]:54571"),
+                         ("2409:8a5e:a50::1", "54571"))
+
+    def test_map_joins_by_connection_id(self):
+        m = self.f.singbox_map(self.SB)
+        self.assertEqual(m[("192.168.10.117", "60002")],
+                         ("rr5---sn-x.googlevideo.com:443", "WestData| 香港 02"))
+
+    def test_map_normalizes_v6(self):
+        """内核写 0a50、sing-box 写 a50，不规范化就永远匹配不上（而且不报错）。"""
+        m = self.f.singbox_map(self.SB)
+        key = (self.f._norm_ip("2409:8a5e:0a50:5bc1:18d8:dbc0:ad1a:437a"), "54571")
+        self.assertIn(key, m)
+        self.assertEqual(m[key], ("example.cn:80", "Direct"))
+
+    def test_map_strips_ansi_colors(self):
+        """真机实测 sing-box 的日志带 ANSI 颜色码，连接 ID 被包在
+        `\x1b[38;5;45m...\x1b[0m` 里——不剥掉就一条都匹配不上，且不报错。"""
+        sb = ("+0800 2026-11-18 22:15:25 \x1b[36mINFO\x1b[0m [\x1b[38;5;45m789896436\x1b[0m 0ms] "
+              "inbound/tun[tun-in]: inbound redirect connection from 192.168.10.142:53862\n"
+              "+0800 2026-11-18 22:15:25 \x1b[36mINFO\x1b[0m [\x1b[38;5;45m789896436\x1b[0m 8ms] "
+              "outbound/trojan[香港 02]: outbound connection to www.example.com:443\n")
+        m = self.f.singbox_map(sb)
+        self.assertEqual(m[("192.168.10.142", "53862")],
+                         ("www.example.com:443", "香港 02"))
+
+    def test_window_args(self):
+        """只给「最近 N 分钟」时，超过 limit 条就被新记录挤掉，事后复盘看不到
+        当时那一段——所以必须能按时间窗回查。"""
+        self.assertEqual(self.f._window(10), ["--since", "-10min"])
+        self.assertEqual(self.f._window(10, "21:40", "21:45"),
+                         ["--since", "21:40", "--until", "21:45"])
+        self.assertEqual(self.f._window(10, "21:40"), ["--since", "21:40"])
+
+    def test_map_ignores_unpaired(self):
+        only_in = "[1 0ms] inbound/tun[tun-in]: inbound redirect connection from 10.0.0.2:111\n"
+        self.assertEqual(self.f.singbox_map(only_in), {})
+
+    def test_show_fills_real_dst(self):
+        self.f.device_map = lambda: {}
+        self.f.read_journal = lambda m, *a: (
+            "2026-11-18T21:41:22+0800 k: dertflow singbox IN=br-lan OUT= SRC=192.168.10.117 "
+            "DST=192.168.10.1 SPT=60002 DPT=34601 PROTO=TCP SYN\n")
+        self.f.read_singbox = lambda m, *a: self.SB
+        r = self.f.show(10)["records"][0]
+        self.assertEqual(r["dst"], "192.168.10.1", "原始字段保留重定向目标")
+        self.assertEqual(r["real_dst"], "rr5---sn-x.googlevideo.com:443", "真实目标要补上")
+        self.assertEqual(r["node"], "WestData| 香港 02")
+
+    def test_show_leaves_unmatched_empty(self):
+        self.f.device_map = lambda: {}
+        self.f.read_journal = lambda m, *a: (
+            "2026-11-18T21:41:22+0800 k: dertflow singbox IN=br-lan OUT= SRC=192.168.10.117 "
+            "DST=192.168.10.1 SPT=99999 DPT=34601 PROTO=TCP SYN\n")
+        self.f.read_singbox = lambda m, *a: self.SB
+        r = self.f.show(10)["records"][0]
+        self.assertEqual(r["real_dst"], "", "对不上就留空，不能猜一个填进去")
+
+
 if __name__ == "__main__":
     unittest.main()

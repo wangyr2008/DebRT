@@ -34,6 +34,8 @@ nft 在 `dstnat + 10` 打点（见 netgen.flow_chain_lines 的注释），此时
     flowops.py off               关闭
     flowops.py status            当前状态（含链是否真的存在、命中包数）
     flowops.py show [分钟] [--dns]     最近的记录（DNS 默认不显示，太吵）
+    flowops.py show --from 21:40 --until 21:45 [--limit N]
+                                     回查某个时间窗（只给分钟数会被条数上限截断）
 """
 
 import json
@@ -48,6 +50,10 @@ E = _FS + "/etc/dert"
 CFG = E + "/config.json"
 
 RE_KV = re.compile(r"([A-Za-z_]+)=([^\s]+)")
+# 真机实测：sing-box 的日志里带 ANSI 颜色码，连接 ID 会被包成
+# `\x1b[38;5;45m789896436\x1b[0m`，不剥掉的话正则会静默匹配不到——
+# 表现为「join 一条都匹配不上」，而且不报任何错。
+RE_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def run(args, timeout=15, stdin=None):
@@ -188,7 +194,7 @@ def parse_log(text, devs=None):
     if devs is None:
         devs = device_map()
     recs = []
-    for line in (text or "").splitlines():
+    for line in RE_ANSI.sub("", text or "").splitlines():
         i = line.find("dertflow ")
         if i < 0:
             continue
@@ -205,21 +211,119 @@ def parse_log(text, devs=None):
             "path": path,
             "dev": devs.get(src, ""),
             "src": src,
+            "spt": kv.get("SPT", ""),
             "dst": kv.get("DST", ""),
             "dpt": kv.get("DPT", ""),
             "proto": kv.get("PROTO", ""),
+            # 仅 singbox 路径会填：内核日志里那个 DST 是重定向目标，见 singbox_map
+            "real_dst": "",
+            "node": "",
         })
     return recs
 
 
-def read_journal(minutes):
-    rc, out = run(["journalctl", "-k", "--since", "-%dmin" % minutes,
-                   "--no-pager", "-o", "short-iso"], timeout=30)
+def _window(minutes, since=None, until=None):
+    """journalctl 的时间参数。
+
+    支持 `--from 21:40 --to 21:45` 回查某个时间窗——只给「最近 N 分钟」时，
+    一旦超过 limit 条就被新记录挤掉，事后复盘根本看不到当时那一段
+    （今天两次排查都撞上这个）。
+    """
+    if since:
+        args = ["--since", since]
+        if until:
+            args += ["--until", until]
+        return args
+    return ["--since", "-%dmin" % minutes]
+
+
+def read_journal(minutes, since=None, until=None):
+    rc, out = run(["journalctl", "-k"] + _window(minutes, since, until)
+                  + ["--no-pager", "-o", "short-iso"], timeout=45)
     return out if rc == 0 else ""
 
 
-def show(minutes=10, include_dns=False, limit=200):
-    recs = parse_log(read_journal(minutes))
+# ---------------------------------------------------------------------------
+# 真实目标：singbox 路径的内核日志看不到
+# ---------------------------------------------------------------------------
+# 为什么需要这一段：nft 在 `dstnat + 10` 打点，此时 TCP 已经被 redirect 到
+# sing-box 的本地端口（真机实测 34601，每次重启都会变），所以日志里的
+# DST/DPT 是**重定向目标**，不是真实目的地。只看内核日志会把
+# 「访问 googlevideo」读成「连路由器 192.168.10.1:34601」。
+#
+# sing-box 自己的日志里两者都全，而且**共享同一个连接 ID**：
+#   [3571061780 0ms] inbound/tun[tun-in]: inbound redirect connection from 192.168.10.117:60002
+#   [3571061780 1ms] outbound/trojan[香港 02]: outbound connection to rr5---sn-x.googlevideo.com:443
+# 而内核日志里有 SPT，于是可以按 (源IP, 源端口) 精确 join —— 不用改防火墙、
+# 不增加任何日志量。
+#
+# 这条路径只用于 singbox 记录；direct/tun 的 DST 本来就是真实的。
+RE_CID = re.compile(r"\[(\d+)\s+[\d.]+(?:ms|s)\]")
+RE_OUTBOUND = re.compile(r"outbound/([a-z0-9-]+)\[([^\]]*)\]: outbound connection to (\S+)")
+
+
+def _norm_ip(s):
+    """统一 IPv6 写法。
+
+    内核日志打印 `2409:8a5e:0a50:5bc1:...`（每组 4 位补零），sing-box 打印
+    `2409:8a5e:a50:5bc1:...`（压缩）——不规范化的话 v6 的 join 永远匹配不上，
+    而且不会报错，只会静默显示「真实目标为空」。
+    """
+    try:
+        import ipaddress
+        return str(ipaddress.ip_address(s))
+    except Exception:
+        return s
+
+
+def _split_hostport(s):
+    """`[2409:...]:1234` / `1.2.3.4:1234` → (host, port)。"""
+    s = (s or "").strip()
+    if s.startswith("["):
+        host, _, rest = s[1:].partition("]")
+        return host, rest.lstrip(":")
+    host, _, port = s.rpartition(":")
+    return host, port
+
+
+def read_singbox(minutes, since=None, until=None):
+    rc, out = run(["journalctl", "-u", "sing-box"] + _window(minutes, since, until)
+                  + ["--no-pager", "-o", "cat"], timeout=60)
+    return out if rc == 0 else ""
+
+
+def singbox_map(text):
+    """从 sing-box 日志建 {(源IP, 源端口): (真实目标, 出站节点)}。"""
+    id_src, out = {}, {}
+    for line in RE_ANSI.sub("", text or "").splitlines():
+        m = RE_CID.search(line)
+        if not m:
+            continue
+        cid = m.group(1)
+        if "inbound" in line and " connection from " in line:
+            id_src[cid] = _split_hostport(line.rsplit(" connection from ", 1)[-1])
+        else:
+            mo = RE_OUTBOUND.search(line)
+            if mo:
+                out[cid] = (mo.group(3), mo.group(2))
+    res = {}
+    for cid, src in id_src.items():
+        if cid in out and src[0]:
+            res[(_norm_ip(src[0]), src[1])] = out[cid]
+    return res
+
+
+def show(minutes=10, include_dns=False, limit=200, since=None, until=None):
+    recs = parse_log(read_journal(minutes, since, until))
+    # singbox 路径的真实目标不在内核日志里，去 sing-box 日志按连接 ID 补
+    if any(r["path"] == "singbox" for r in recs):
+        try:
+            smap = singbox_map(read_singbox(minutes, since, until))
+        except Exception:
+            smap = {}
+        for r in recs:
+            if r["path"] == "singbox":
+                r["real_dst"], r["node"] = smap.get((_norm_ip(r["src"]), r["spt"]), ("", ""))
     if not include_dns:
         recs = [r for r in recs if r["path"] not in ("dns", "dns-sb")]
     counts = {}
@@ -227,7 +331,8 @@ def show(minutes=10, include_dns=False, limit=200):
         counts[r["path"]] = counts.get(r["path"], 0) + 1
     # 新的在前：排查时关心的是「刚才发生了什么」
     recs = list(reversed(recs))[:limit]
-    return {"ok": True, "minutes": minutes, "enabled": flow_enabled(),
+    return {"ok": True, "minutes": minutes, "since": since or "", "until": until or "",
+            "enabled": flow_enabled(),
             "chain_present": chain_present(), "total": len(recs),
             "counts": counts, "records": recs}
 
@@ -278,10 +383,24 @@ def main(argv=None):
         # DNS 默认不显示：真机实测 45 秒里 555 行有 383 行是 DNS（69%），
         # 会把真正要看的 TCP 连接全埋掉。需要时加 --dns。
         include_dns = "--dns" in argv
-        for a in argv[1:]:
+        since = until = None
+        limit = None
+        for i, a in enumerate(argv):
             if a.isdigit():
                 minutes = max(1, min(1440, int(a)))
-        print(json.dumps(show(minutes, include_dns), ensure_ascii=False))
+            if a in ("--from", "--until", "--limit") and i + 1 < len(argv):
+                if a == "--from":
+                    since = argv[i + 1]
+                elif a == "--until":
+                    until = argv[i + 1]
+                elif a == "--limit" and argv[i + 1].isdigit():
+                    limit = max(1, min(20000, int(argv[i + 1])))
+        # 回查某个时间窗时默认放宽上限：默认 200 条只够覆盖最近十几秒，
+        # 而复盘恰恰要看中间那一段（今天两次都被这个截断坑过）
+        if limit is None:
+            limit = 5000 if since else 200
+        print(json.dumps(show(minutes, include_dns, limit=limit,
+                              since=since, until=until), ensure_ascii=False))
         return 0
 
     print(json.dumps({"ok": False, "code": "USAGE",
