@@ -190,7 +190,7 @@ def config_set(section):
         if merged is None:
             die("MERGE", "升级源保存失败", "请重试；若持续出现请截图反馈")
         try:
-            privlib.write_atomic(CONFIG_JSON, _dump(merged[0]), 0o644)
+            privlib.write_atomic(CONFIG_JSON, _dump(merged[0]), privlib.CONFIG_MODE)
         except SystemExit:
             die("MERGE", "升级源保存失败", "请重试；若持续出现请截图反馈")
         ok_out(message="升级源已保存")
@@ -217,7 +217,7 @@ def config_set(section):
     # 3) 采样 pre_wan（写盘前）→ 落盘。必须先落盘，netgen 读的是这个文件
     pre_wan = wan_route_ok()
     try:
-        privlib.write_atomic(CONFIG_JSON, _dump(cfg), 0o644)
+        privlib.write_atomic(CONFIG_JSON, _dump(cfg), privlib.CONFIG_MODE)
         if secrets:
             privlib.write_atomic(SECRETS_JSON, _dump(secrets), 0o600)
     except SystemExit:

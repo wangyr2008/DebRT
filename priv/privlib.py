@@ -28,6 +28,12 @@ LIB = os.environ.get("DERT_LIB", "/usr/local/lib/dert")
 
 CONFIG_JSON = ETC + "/config.json"
 SECRETS_JSON = ETC + "/secrets.json"
+# config.json 的权限必须只有一处定义。曾经 configops 写 0644、flowops 写 0600，
+# 结果是「开一次调试模式」就把权限降到 600，而面板以 dert 用户运行、直接读这个
+# 文件取 DNS 上游——读失败被 except 吞掉，概览「DNS 服务器」从此一直显示 —，
+# 且不报任何错（真机 2026-11-19 复现）。密码在 secrets.json（0600），
+# config.json 只有 has_password 布尔，0644 是设计意图。
+CONFIG_MODE = 0o644
 
 
 def die(code, message, hint=""):

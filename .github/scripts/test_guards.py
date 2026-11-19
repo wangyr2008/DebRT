@@ -1141,6 +1141,33 @@ _inst_src = open(os.path.join(ROOT, "install.sh"), encoding="utf-8").read()
 assert '"$SRC_DIR/priv/"*.py' in _inst_src, \
     "P3-32 回归：install.sh 不再用 glob 部署 priv/*.py（新增模块会漏装）"
 
+_p44_bad = []
+
+# ---------------------------------------------------------------------------
+# P3-44：面板不得直接读 config.json
+#
+# 真机 2026-11-19：「DNS 服务器」一直显示 —。链路是
+#   ① flowops.write_cfg 硬编码 0600（configops 是 0644）→ 开一次调试模式就把
+#      config.json 变成 root-only；
+#   ② panel/api.py 直接 open(config.json) 取 DNS 上游，面板以 dert 用户运行，
+#      PermissionError 被 except 吞掉 → 返回空列表 → 界面显示 —，全程不报错。
+# 两个都不能再犯：权限只有一处定义，面板只吃 dert-priv 的输出。
+_api44 = open(os.path.join(ROOT, "panel", "api.py"), encoding="utf-8").read()
+if 'open(CONFIG_FILE' in _api44 or 'open("/etc/dert/config.json"' in _api44:
+    _p44_bad.append("面板直接读 config.json（它可能是 root-only，读失败会静默变成 —）")
+_st44 = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").read()
+if 'wan["dns"]' not in _st44:
+    _p44_bad.append("status.py 没有输出 wan.dns（概览「DNS 服务器」会一直是 —）")
+_fo44 = open(os.path.join(ROOT, "priv", "flowops.py"), encoding="utf-8").read()
+if "0o600" in _fo44:
+    _p44_bad.append("flowops.write_cfg 又硬编码 0600（会把 config.json 降成 root-only）")
+if "CONFIG_MODE" not in _fo44:
+    _p44_bad.append("flowops 没用 privlib.CONFIG_MODE（权限必须只有一处定义）")
+_co44 = open(os.path.join(ROOT, "priv", "configops.py"), encoding="utf-8").read()
+if "0o644" in _co44:
+    _p44_bad.append("configops 又硬编码 0o644（应统一用 privlib.CONFIG_MODE）")
+assert _p44_bad == [], "P3-44 回归：%s" % "；".join(_p44_bad)
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
@@ -1148,4 +1175,4 @@ print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落�
       "P3-25字段安全/P3-26下载加固/P3-27shellcheck/P3-28陈旧回收/P3-29看门狗事件化/P3-30全脚本set-u/P3-31发布签名/"
       "P3-32安装glob/P3-34单元硬化/P3-35结构化日志/P3-36sudoers生成/P3-37PWA独立窗口/"
       "P3-38iOS不放大+启动兜底/P3-39静态IP设备进列表/P3-40窄屏版本号/"
-      "P3-41本机DNS走sing-box/P3-42出口质量探测装配/P3-43调试模式约束/观察②③ 全部通过")
+      "P3-41本机DNS走sing-box/P3-42出口质量探测装配/P3-43调试模式约束/P3-44面板不读root-only配置/观察②③ 全部通过")

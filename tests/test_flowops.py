@@ -180,9 +180,18 @@ class TestFlowConfig(FlowCase):
                              "只有布尔 true 才算开；%r 会让「关闭」变成「开启」" % (bad,))
 
     def test_write_cfg_atomic_and_mode(self):
+        """权限必须与 configops 一致（0644），不能各写各的。
+
+        这里曾断言 0600 并写着「含宽带密码」——是错的：密码在 secrets.json
+        （0600），config.json 只有 has_password 布尔。真正的问题是 flowops
+        写 0600、configops 写 0644，于是「开一次调试模式」就把文件降成
+        root-only，而面板以 dert 用户读它取 DNS 上游，概览从此显示 —
+        （真机 2026-11-19）。
+        """
         self.f.write_cfg({"version": 1, "debug": {"flow": True}})
         st = os.stat(self.cfgp)
-        self.assertEqual(st.st_mode & 0o777, 0o600, "config.json 含宽带密码，权限必须是 600")
+        self.assertEqual(st.st_mode & 0o777, 0o644,
+                         "config.json 权限必须与 configops 一致（privlib.CONFIG_MODE）")
         self.assertTrue(self.f.flow_enabled())
 
     def test_schema_rejects_non_bool(self):

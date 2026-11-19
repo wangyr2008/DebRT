@@ -48,6 +48,13 @@ class Env:
         self.route = json.dumps(route or [])
         self.addr = json.dumps(addr or [])
 
+    def upstream(self, text):
+        """写 /run/dert-dns/upstream.conf（dispatcher 维护的上游清单）。"""
+        d = os.path.join(self.root, "run", "dert-dns")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "upstream.conf"), "w") as f:
+            f.write(text)
+
     def run(self, mod, env_extra=None):
         env = dict(os.environ)
         env["DERT_FSROOT"] = self.root
@@ -160,6 +167,55 @@ class Selftest(unittest.TestCase):
         hit = [c for c in d["checks"] if "config.json" in c["name"]]
         self.assertTrue(hit and hit[0]["ok"],
                         "配置存在且可解析时，该项自检必须为真")
+
+
+class WanDns(unittest.TestCase):
+    """概览「DNS 服务器」的取值。
+
+    真机 2026-11-19：这一栏一直是 —。根因不在解析逻辑，而在**谁去读文件**——
+    面板以 dert 用户运行，直接 open(/etc/dert/config.json) 抛 PermissionError，
+    被 except 吞掉后返回空列表，不报错。现在由 status.py（root）负责取，
+    所以这些用例同时钉住「值对」和「不需要读配置也能给出值」。
+    """
+
+    def test_auto_mode_reads_upstream_conf(self):
+        e = Env(base_cfg(wan={"mode": "pppoe", "dns_mode": "auto"}))
+        self.addCleanup(e.close)
+        e.upstream("# 由 networkd-dispatcher 生成\n"
+                   "server=211.138.164.6\n"
+                   "server=221.176.88.95\n"
+                   "server=2409:805e:2000::8888\n")
+        d = e.json("status.py")
+        self.assertEqual(d["wan"]["dns"],
+                         ["211.138.164.6", "221.176.88.95", "2409:805e:2000::8888"])
+
+    def test_auto_mode_dedupes(self):
+        e = Env(base_cfg())
+        self.addCleanup(e.close)
+        e.upstream("server=1.1.1.1\nserver=1.1.1.1\n")
+        self.assertEqual(e.json("status.py")["wan"]["dns"], ["1.1.1.1"])
+
+    def test_missing_file_is_empty_not_error(self):
+        e = Env(base_cfg())
+        self.addCleanup(e.close)
+        d = e.json("status.py")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["wan"]["dns"], [], "文件不存在时给空列表，不能让整个 status 失败")
+
+    def test_manual_mode_uses_config(self):
+        e = Env(base_cfg(wan={"mode": "pppoe", "dns_mode": "manual",
+                              "dns": ["114.114.114.114", "223.5.5.5"]}))
+        self.addCleanup(e.close)
+        e.upstream("server=211.138.164.6\n")
+        self.assertEqual(e.json("status.py")["wan"]["dns"],
+                         ["114.114.114.114", "223.5.5.5"],
+                         "手动模式必须用手配的，不能被 upstream.conf 覆盖")
+
+    def test_dns_key_always_present(self):
+        """字段必须总在——面板据此判断「有没有值」，缺键会退化成 —。"""
+        e = Env(base_cfg())
+        self.addCleanup(e.close)
+        self.assertIn("dns", e.json("status.py")["wan"])
 
 
 if __name__ == "__main__":

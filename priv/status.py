@@ -79,6 +79,36 @@ if wan_dev:
 else:
     wan["connecting"] = mode == "pppoe"
 
+
+def _wan_dns():
+    """概览「DNS 服务器」展示用的上游。
+
+    放在这里而不是面板里，是因为 **config.json 是 root-only**（或至少不该假设
+    非 root 可读），而面板以 dert 用户运行。以前面板直接 open() 配置，读失败
+    被 except 吞掉返回空列表，概览就一直显示 —，不报错（真机 2026-11-19）。
+    本模块由 dert-priv 以 root 调用，读配置与 /run 都没有权限问题。
+
+    手动模式取配置里的 dns；自动模式取 dispatcher 维护的 upstream.conf
+    （dnsmasq 的 servers-file，与它实际使用的上游是同一份）。
+    """
+    w = cfg.get("wan", {})
+    if w.get("dns_mode") == "manual" and w.get("dns"):
+        return list(w["dns"])
+    out = []
+    try:
+        with open(_FS + "/run/dert-dns/upstream.conf", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("server="):
+                    d = line.strip()[len("server="):]
+                    if d and d not in out:
+                        out.append(d)
+    except OSError:
+        pass
+    return out
+
+
+wan["dns"] = _wan_dns()
+
 # IPv6 概览
 v6cfg = cfg.get("ipv6", {})
 v6 = {"enabled": v6cfg.get("enabled", False), "mode": v6cfg.get("mode", "native"), "addr": "", "dns": []}

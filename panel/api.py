@@ -23,7 +23,10 @@ MOCK = False
 PRIV = "/usr/local/lib/dert/dert-priv"
 UPLOAD_DIR = "/var/lib/dert/uploads"
 BACKUP_DIR = "/var/lib/dert/backups"
-CONFIG_FILE = "/etc/dert/config.json"
+# 面板以 dert 用户运行，**不要**直接读取 /etc/dert/config.json：
+# 该文件权限由写入方决定（可能被写成 root-only），读失败会被 except 吞掉，
+# 表现为某个字段永远显示 —，且不报错（真机 2026-11-19 的「DNS 服务器 —」）。
+# 需要配置就读 dert-priv 的输出（config-get / status）。守卫 P3-44 会拦。
 VERSION_FILE = "/usr/local/lib/dert/share/VERSION"
 # WAN 出口质量快照（priv/wanq.py 每 60 秒覆盖写，面板只读）
 WANQ_FILE = "/var/lib/dert/wanq.json"
@@ -104,16 +107,6 @@ def _version():
         return open(VERSION_FILE).read().strip()
     except Exception:
         return "0.0.0"
-
-
-def _lan_ip():
-    if MOCK:
-        return "192.168.10.1"
-    try:
-        cfg = json.load(open(CONFIG_FILE))
-        return cfg.get("lan", {}).get("ip")
-    except Exception:
-        return None
 
 
 def _save_upload(body: bytes, prefix: str) -> str:
@@ -236,20 +229,21 @@ def do_logout(body, headers):
 
 # ---------------- 概览 / 配置 ----------------
 def _wan_dns():
-    """概览页展示用上游 DNS：手动模式取配置；自动模式取 dispatcher 维护的 upstream.conf。"""
-    try:
-        cfg = json.load(open(CONFIG_FILE))
-    except Exception:
-        return []
-    wan = cfg.get("wan", {})
-    if wan.get("dns_mode") == "manual" and wan.get("dns"):
-        return wan["dns"]
+    """兜底：仅在 status 输出里没有 dns 字段时使用（旧版 status.py）。
+
+    **不再读 /etc/dert/config.json**——它可能是 root-only，而面板以 dert 用户
+    运行：open() 抛 PermissionError 被 except 吞掉，返回空列表，概览「DNS 服务器」
+    就一直显示 —，且不报错（真机 2026-11-19，配置被 flowops 写成 0600 触发）。
+    正常路径由 status.py（root）把 dns 一起带出来，见 priv/status.py::_wan_dns。
+    """
     dns = []
     try:
-        with open("/run/dert-dns/upstream.conf") as f:
+        with open("/run/dert-dns/upstream.conf", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("server="):
-                    dns.append(line.strip()[len("server="):])
+                    d = line.strip()[len("server="):]
+                    if d and d not in dns:
+                        dns.append(d)
     except OSError:
         pass
     return dns
@@ -278,7 +272,12 @@ def get_status(body, headers):
     else:
         st = sysinfo.mock_status() if MOCK else priv("status", timeout=30)
         if not MOCK:
-            st.setdefault("wan", {}).setdefault("dns", _wan_dns())
+            # 正常由 status.py 带 dns；只有旧版 status.py 才会走到兜底。
+            # 注意不能写成 setdefault("dns", _wan_dns())：那样 _wan_dns() 每次都会
+            # 被求值（多余的文件读），而且掩盖了「谁该负责这件事」。
+            _w = st.setdefault("wan", {})
+            if "dns" not in _w:
+                _w["dns"] = _wan_dns()
         _status_cache["ts"] = now
         _status_cache["data"] = st
     st["version"] = _version()  # mock/真实统一由 VERSION 文件决定（复审 R-06）

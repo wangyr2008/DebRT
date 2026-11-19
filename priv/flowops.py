@@ -49,6 +49,15 @@ _FS = os.environ.get("DERT_FSROOT", "")
 E = _FS + "/etc/dert"
 CFG = E + "/config.json"
 
+# 权限的定义只有一处（privlib.CONFIG_MODE = 0644）。这里曾硬编码 0600，
+# 于是「开一次调试模式」就把 config.json 降成 root-only，而面板以 dert 用户
+# 运行、直接读它取 DNS 上游——读失败被 except 吞掉，概览「DNS 服务器」从此
+# 一直显示 —，且不报任何错（真机 2026-11-19 复现）。
+try:
+    from privlib import CONFIG_MODE
+except Exception:                    # 极端情况（privlib 不在同目录）下退回同值
+    CONFIG_MODE = 0o644
+
 RE_KV = re.compile(r"([A-Za-z_]+)=([^\s]+)")
 # 真机实测：sing-box 的日志里带 ANSI 颜色码，连接 ID 会被包成
 # `\x1b[38;5;45m789896436\x1b[0m`，不剥掉的话正则会静默匹配不到——
@@ -97,14 +106,19 @@ def flow_enabled(cfg=None):
 
 
 def write_cfg(cfg):
-    """原子写，保留 600 权限。写一半的 config.json 会让收敛直接失败。"""
+    """原子写，权限用 CONFIG_MODE（0644，与 configops 一致）。
+
+    写一半的 config.json 会让收敛直接失败，所以走临时文件 + rename。
+    权限**不能**在这里单独决定：两个写者各写各的，就会出现「开个开关把文件
+    变成 root-only」这种谁也没想到的副作用。
+    """
     d = os.path.dirname(CFG)
     os.makedirs(d, exist_ok=True)
     tmp = CFG + ".tmp." + os.urandom(3).hex()
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=1)
     try:
-        os.chmod(tmp, 0o600)
+        os.chmod(tmp, CONFIG_MODE)
     except OSError:
         pass
     os.replace(tmp, CFG)

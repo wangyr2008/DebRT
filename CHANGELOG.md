@@ -7,6 +7,38 @@
 
 ## [Unreleased]
 
+## [0.1.125] - 2026-11-19
+
+> 概览「DNS 服务器」一直显示 `—`。两个缺陷叠在一起：一个把配置权限写窄了，
+> 一个假设自己读得到那个文件。
+
+### Fixed
+
+- **`config.json` 权限被写成 0600**。`configops` 写 0644，而 `flowops.write_cfg`
+  （调试模式开关用的）硬编码 0600——于是**开一次调试模式**就把配置文件降成
+  root-only，且没有任何提示。密码本来就在 `secrets.json`（0600），
+  `config.json` 只有 `has_password` 布尔，0644 才是设计意图。
+  现在权限只有一处定义：`privlib.CONFIG_MODE`，两个写者都引用它。
+
+- **面板直接读 `/etc/dert/config.json` 取 DNS 上游**。面板以 `dert` 用户运行，
+  读不到就抛 `PermissionError`，被 `except` 吞掉后返回空列表——界面显示 `—`，
+  **日志里一个字都没有**。这与上面的权限变更叠加，就成了「重启后一直显示 —」。
+  现在由 `priv/status.py`（以 root 运行）把 `wan.dns` 一起带出来；
+  面板侧只保留一个读 `upstream.conf`（全局可读）的兜底，供旧版 status 使用。
+
+- 删掉 `panel/api.py::_lan_ip()`：同样的直接读配置、同样的静默 `None`，
+  且已经是死代码——留着就是下一个坑。
+
+### Notes
+
+- 手动 DNS 模式仍然优先用配置里的地址（由 status.py 读取），
+  不会被 `upstream.conf` 覆盖。
+- 新增 `tests/test_status.py::WanDns`（5 用例）：自动模式取 upstream.conf、
+  去重、文件缺失时给空列表而非报错、手动模式优先、`dns` 字段始终存在。
+- 守卫 P3-44：面板不得直接读 config.json、status 必须输出 `wan.dns`、
+  flowops/configops 不得各自硬编码权限。三处破坏均反向验证变红。
+- 全量 387 用例绿。
+
 ## [0.1.124] - 2026-11-18
 
 > 修调试模式的一个盲区：**`singbox` 路径看不到真实目标**。
