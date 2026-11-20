@@ -377,5 +377,47 @@ class TestSingboxJoin(FlowCase):
         self.assertEqual(r["real_dst"], "", "对不上就留空，不能猜一个填进去")
 
 
+class TestFlowNftSync(FlowCase):
+    """flow on/off 必须同步盘上的生成物。
+
+    否则：netgen 的输出取决于 debug.flow，而开关只改内核里的链。下一次
+    收敛比对生成物时必然判「漂移」，走全量路径重启 pppoe —— 真机 2026-11-20
+    把一个已连 44 小时的 PPPoE 会话打断了。这是「配置改了、生成物没跟上」
+    的经典形态，只在下次收敛时才爆，且报错信息里看不出因果。
+    """
+
+    def setUp(self):
+        super().setUp()
+        with open(self.cfgp, "w", encoding="utf-8") as f:
+            json.dump(support.pppoe_config(), f)
+
+    def _nft(self):
+        return os.path.join(self.td, "etc/nftables.d/dert-base.nft")
+
+    def test_on_writes_chain_into_file(self):
+        self.f.main(["on"])
+        with open(self._nft(), encoding="utf-8") as f:
+            self.assertIn("flowlog", f.read(), "开了调试模式，盘上的 nft 文件必须也带链")
+
+    def test_off_removes_chain_from_file(self):
+        self.f.main(["on"])
+        self.f.main(["off"])
+        with open(self._nft(), encoding="utf-8") as f:
+            self.assertNotIn("flowlog", f.read(),
+                             "关了调试模式，盘上的 nft 文件必须也去掉链")
+
+    def test_file_mode_matches_manifest(self):
+        """漂移判定把权限也算一次漂移，所以必须是 0644（netgen 清单里的值）。"""
+        self.f.main(["on"])
+        self.assertEqual(os.stat(self._nft()).st_mode & 0o777, 0o644)
+
+    def test_broken_config_does_not_block_toggle(self):
+        """生成失败不能把开关卡死：链照建，只是盘上文件滞后。"""
+        with open(self.cfgp, "w", encoding="utf-8") as f:
+            f.write('{"version": 1, "debug": {"flow": false}}')
+        self.assertEqual(self.f.main(["on"]), 0)
+        self.assertTrue(self.present, "nft 链仍应建立")
+
+
 if __name__ == "__main__":
     unittest.main()

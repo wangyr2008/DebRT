@@ -7,6 +7,45 @@
 
 ## [Unreleased]
 
+## [0.1.126] - 2026-11-20
+
+> 06:09 宽带自己重拨了一次。原因不是运营商，是**关掉调试模式**留下的一个文件差异。
+
+### Fixed
+
+- **调试模式开关不同步 `/etc/nftables.d/dert-base.nft`**。`flow on/off` 只改内核
+  里的 nft 链，而 netgen 的输出取决于 `debug.flow`——盘上的生成物于是与配置不一致。
+  下一次收敛必然判定「漂移」，走全量路径，把 PPPoE 重启掉。
+
+  真机时间线：11-19 23:58 升级（当时 flow 还是开的，盘上带链）→ 11-20 00:01
+  关掉调试模式（盘上没改）→ **06:09 的 6 小时收敛发现差异**，已连续 **44 小时**
+  的 PPPoE 会话被 SIGTERM 打断（`Connect time 2658.9 minutes`）。
+  现在开关会把该文件一并重新生成（0644，与清单里的 mode 一致）。
+
+- **收敛全量路径无条件重启 networkd / pppoe / dnsmasq**。`ACTIONS` 是写死的
+  五项，所以哪怕只有一个 nft 文件的内容不同，也会重拨宽带、让所有设备的连接
+  全断。现在由「到底哪些生成物变了」推导动作：
+
+  | 漂移的文件 | 重启 |
+  |---|---|
+  | `etc/nftables.d/*.nft` | 只重载 nft（+ cake） |
+  | `etc/dnsmasq.d/*` | dnsmasq |
+  | `etc/systemd/network/*` | networkd（仅 `10-wan` / `25-ppp0` 才连带 pppoe） |
+  | `etc/ppp/*`（含 chap-secrets） | pppoe |
+
+  清单读不出来（`drift=None`）或非收敛调用时才退回全量——那是「不知道改了什么」。
+
+### Notes
+
+- 漂移判定抽成 `drift_list()`，与动作推导共用同一份结论：先算清楚变了什么，
+  再决定重启什么，而不是两处各算一遍。
+- 新增 `tests/test_applyops.py::DriftActions`（9 用例，含「刚部署完无漂移」
+  「只改权限也算漂移」）与 `tests/test_flowops.py::TestFlowNftSync`（4 用例）。
+- 旧用例 `test_drift_triggers_full_deploy` 原本断言「dnsmasq 配置漂移会重启
+  networkd」——那正是本次要改掉的粗放行为，已改为断言相反。
+- 守卫 P3-45：收敛不得无条件跑 `ACTIONS`、开关必须同步生成物（两处都要）。
+  三处破坏反向验证均变红。全量 400 用例绿。
+
 ## [0.1.125] - 2026-11-19
 
 > 概览「DNS 服务器」一直显示 `—`。两个缺陷叠在一起：一个把配置权限写窄了，

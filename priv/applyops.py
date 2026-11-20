@@ -118,6 +118,63 @@ def manifest_files(man_path):
         return None
 
 
+def drift_list(man_path, stage):
+    """逐文件比对生成物与线上，返回漂移的相对路径列表。
+
+    `[]` = 完全一致；`None` = 清单读不出来（调用方必须当作"全部漂移"——
+    宁可多部署一次，也不能因为读不到清单就宣布"无漂移"）。
+
+    内容与权限都比：只改 chmod 不改内容也算漂移。以前只比内容，权限被改坏
+    （比如 chap-secrets 从 600 变 644）会一直"无漂移"地跑下去——那是明文密码。
+    """
+    files = manifest_files(man_path)
+    if files is None:
+        return None
+    out = []
+    for rel, mode in files:
+        dest = _fs("/" + rel)
+        if not os.path.isfile(dest):
+            out.append(rel)
+            continue
+        try:
+            if (os.stat(dest).st_mode & 0o777) != (mode & 0o777):
+                out.append(rel)
+                continue
+            with open(dest, "rb") as f1, open(os.path.join(stage, rel), "rb") as f2:
+                if f1.read() != f2.read():
+                    out.append(rel)
+        except OSError:
+            out.append(rel)
+    return out
+
+
+# 重启顺序有依赖：networkd 先、pppoe 依赖 ppp0 的 .network、dnsmasq 读 servers-file
+_ACTION_ORDER = ("networkd", "pppoe", "dnsmasq", "nft", "cake")
+
+
+def actions_for(drift):
+    """按「到底哪些生成物变了」推导要重启的服务。
+
+    以前全量路径无条件跑 ACTIONS（networkd pppoe dnsmasq nft cake）：真机
+    2026-11-20，**一个 nft 文件的内容差异**就把已连续 44 小时的 PPPoE 会话
+    打断，WAN 掉线数秒、所有设备的连接全断——代价和原因完全不成比例。
+    只改 nft 就只重载 nft；只有 WAN 口的 .network 或 ppp 配置变了才重拨。
+    """
+    if drift is None:
+        return ACTIONS
+    need = {"nft", "cake"}          # 幂等且便宜，总是做
+    for rel in drift:
+        if rel.startswith("etc/systemd/network/"):
+            need.add("networkd")
+            if rel.endswith("25-ppp0.network") or rel.endswith("10-wan.network"):
+                need.add("pppoe")
+        elif rel.startswith("etc/dnsmasq"):
+            need.add("dnsmasq")
+        elif rel.startswith("etc/ppp/"):
+            need.add("pppoe")
+    return " ".join(a for a in _ACTION_ORDER if a in need)
+
+
 def apply_stage_files(stage, man_path):
     files = manifest_files(man_path)
     if files is None:
@@ -553,32 +610,10 @@ def apply_all(convergent=False):
                 "请按上方错误信息在管理页面修正；或从 /var/lib/dert/lastgood 恢复上一份可用配置" +
                 ("。生成器输出：%s" % gen_err if gen_err else ""))
 
+    drift = None          # None = 不知道改了什么（非收敛调用 / 清单读不出来）
     if convergent:
-        files = manifest_files(man)
-        # 清单读不出来 → 当作有漂移，走全量部署。宁可多部署一次，
-        # 也不能因为读不到清单就宣布"无漂移"（那样等于什么都没做还说成功了）。
-        drift = files is None
-        files = files or []
-        for rel, mode in files:
-            dest = _fs("/" + rel)
-            if not os.path.isfile(dest):
-                drift = True
-                break
-            try:
-                # 内容与权限都比：只改 chmod 不改内容也是一次漂移。
-                # 以前只比内容，权限被改坏（比如 chap-secrets 从 600 变 644）
-                # 会一直"无漂移"地跑下去——那是明文宽带密码。
-                if (os.stat(dest).st_mode & 0o777) != (mode & 0o777):
-                    drift = True
-                    break
-                with open(dest, "rb") as f1, open(os.path.join(stage, rel), "rb") as f2:
-                    if f1.read() != f2.read():
-                        drift = True
-                        break
-            except OSError:
-                drift = True
-                break
-        if not drift:
+        drift = drift_list(man, stage)
+        if drift == []:
             # 无漂移：nft 规则不跨重启，缺表则只重建防火墙+QoS；绝不重启
             # networkd/dnsmasq（开机全量重启会让 LAN 客户端闪断——真机实测）
             r = _sh(["nft", "list", "table"] + NFT_TABLE.split(), timeout=30)
@@ -615,7 +650,7 @@ def apply_all(convergent=False):
     cleanup_stale(man)
     cleanup_ifupdown()
     shutil.rmtree(stage, ignore_errors=True)
-    run_actions(ACTIONS)
+    run_actions(actions_for(drift))
     wait_dnsmasq(15)
     sync_dns_upstream()
     maintain_singbox_dropin()

@@ -162,6 +162,43 @@ def _chain_file():
             'table inet dert_base {\n%s\n}\n' % body)
 
 
+NFT_FILE = _FS + "/etc/nftables.d/dert-base.nft"
+
+
+def sync_nft_file():
+    """把 /etc/nftables.d/dert-base.nft 重新生成成与当前配置一致。
+
+    不这么做的话：flow on/off 只改内核里的链、不改盘上的生成物，而 netgen 的
+    输出取决于 debug.flow —— 下一次收敛必然判定「漂移」，走全量路径重启
+    networkd/pppoe，把好好的宽带会话打断。真机 2026-11-20：23:58 升级时
+    flow 还是开的（盘上带链），00:01 关掉调试模式（盘上没改），06:09 的
+    6 小时收敛发现差异，把已连 44 小时的 PPPoE 重拨了。
+
+    权限 0644 与 netgen 清单里该文件的 mode 必须一致，否则漂移判定会把
+    「权限不同」也算一次漂移。
+
+    返回 (ok, err)。**失败不能把开关卡死**：链照建/照删，只是盘上生成物
+    滞后一步，下次收敛会补上（那时只会重载 nft，不会重启 pppoe）。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import netgen
+        body = netgen.gen_nft(read_cfg())
+        d = os.path.dirname(NFT_FILE)
+        os.makedirs(d, exist_ok=True)
+        tmp = NFT_FILE + ".tmp." + os.urandom(3).hex()
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(body)
+        try:
+            os.chmod(tmp, 0o644)
+        except OSError:
+            pass
+        os.replace(tmp, NFT_FILE)
+        return True, ""
+    except Exception as e:                      # noqa: BLE001
+        return False, str(e)[:200]
+
+
 def apply_chain():
     """建链。先删后建，避免重复定义；nft 批量加载是原子的。"""
     if chain_present():
@@ -360,6 +397,7 @@ def main(argv=None):
         cfg = read_cfg()
         cfg.setdefault("debug", {})["flow"] = True
         write_cfg(cfg)
+        synced, _serr = sync_nft_file()   # 盘上的生成物必须跟着变，否则下次收敛判漂移
         ok, err = apply_chain()
         if not ok:
             print(json.dumps({"ok": False, "code": "NFT", "mode": "on",
@@ -367,7 +405,8 @@ def main(argv=None):
                               "hint": err or "请检查 dert_base 表是否存在"}, ensure_ascii=False))
             return 1
         log_event("flow_on")
-        print(json.dumps({"ok": True, "mode": "on", "chain": chain_present()},
+        print(json.dumps({"ok": True, "mode": "on", "chain": chain_present(),
+                          "nft_file_synced": synced},
                          ensure_ascii=False))
         return 0
 
@@ -375,6 +414,7 @@ def main(argv=None):
         cfg = read_cfg()
         cfg.setdefault("debug", {})["flow"] = False
         write_cfg(cfg)
+        synced, _serr = sync_nft_file()   # 同上：不同步就会在 6 小时收敛时打断宽带
         ok, err = remove_chain()
         if not ok:
             print(json.dumps({"ok": False, "code": "NFT", "mode": "off",
@@ -382,7 +422,8 @@ def main(argv=None):
                               "hint": err}, ensure_ascii=False))
             return 1
         log_event("flow_off")
-        print(json.dumps({"ok": True, "mode": "off", "chain": chain_present()},
+        print(json.dumps({"ok": True, "mode": "off", "chain": chain_present(),
+                          "nft_file_synced": synced},
                          ensure_ascii=False))
         return 0
 

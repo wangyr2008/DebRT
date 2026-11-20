@@ -354,7 +354,83 @@ class Convergent(unittest.TestCase):
         self.assertIn("已按配置完成系统收敛", out["message"])
         with open(target, encoding="utf-8") as f:
             self.assertNotEqual(f.read(), "# 被改坏了\n")
-        self.assertTrue(any("restart systemd-networkd" in c for c in self.s.calls()))
+        # 只有 dnsmasq 的配置漂移 → 只重启 dnsmasq。以前这里断言 networkd 也被
+        # 重启，那是「无条件全量」的旧行为：代价是 LAN 客户端闪断（还会连带
+        # 重拨 PPPoE，见 DriftActions 的注释）。
+        self.assertTrue(any("restart dnsmasq.service" in c for c in self.s.calls()))
+        self.assertFalse(any("restart systemd-networkd" in c for c in self.s.calls()),
+                         "dnsmasq 配置漂移不该重启 networkd")
+
+
+class DriftActions(unittest.TestCase):
+    """全量部署该重启哪些服务，取决于「到底哪些生成物变了」。
+
+    真机 2026-11-20：调试模式开关留下一个 nft 文件的差异，6 小时收敛判定
+    漂移后无条件重启 pppoe，把已连 44 小时的宽带打断（WAN 掉线数秒、所有
+    设备的连接全断）。代价和原因完全不成比例——所以这里把「nft 差异只重载
+    nft」钉死。
+    """
+
+    def setUp(self):
+        self.s = Sandbox()
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_none_means_all_actions(self):
+        """不知道改了什么（清单读不出来 / 非收敛调用）才退回全量。"""
+        self.assertEqual(self.s.a.actions_for(None), self.s.a.ACTIONS)
+
+    def test_nft_only_never_touches_pppoe(self):
+        acts = self.s.a.actions_for(["etc/nftables.d/dert-base.nft"])
+        self.assertIn("nft", acts)
+        for svc in ("pppoe", "networkd", "dnsmasq"):
+            self.assertNotIn(svc, acts, "改 nft 不该重启 %s" % svc)
+
+    def test_lan_network_restarts_networkd_only(self):
+        acts = self.s.a.actions_for(["etc/systemd/network/20-lan.network"])
+        self.assertIn("networkd", acts)
+        self.assertNotIn("pppoe", acts, "LAN 侧变化不该把宽带打断")
+
+    def test_wan_network_restarts_pppoe(self):
+        for rel in ("etc/systemd/network/10-wan.network",
+                    "etc/systemd/network/25-ppp0.network"):
+            self.assertIn("pppoe", self.s.a.actions_for([rel]), rel)
+
+    def test_ppp_secrets_restart_pppoe(self):
+        for rel in ("etc/ppp/chap-secrets", "etc/ppp/pap-secrets", "etc/ppp/peers/dert"):
+            self.assertIn("pppoe", self.s.a.actions_for([rel]), rel)
+
+    def test_dnsmasq_conf_restarts_dnsmasq(self):
+        self.assertIn("dnsmasq", self.s.a.actions_for(["etc/dnsmasq.d/dert.conf"]))
+
+    def test_order_preserved(self):
+        acts = self.s.a.actions_for([
+            "etc/ppp/chap-secrets", "etc/dnsmasq.d/dert.conf",
+            "etc/systemd/network/10-wan.network", "etc/nftables.d/dert-base.nft"])
+        self.assertEqual(acts, "networkd pppoe dnsmasq nft cake",
+                         "重启顺序有依赖，不能被集合顺序打乱")
+
+    def test_manifest_missing_is_none(self):
+        self.assertIsNone(self.s.a.drift_list("/nonexistent/manifest.json", "/tmp"))
+
+    def test_drift_detects_content_and_mode(self):
+        stage = tempfile.mkdtemp(dir=self.s.td)
+        ok, _out, err = self.s.a.generate(stage)
+        self.assertTrue(ok, err)
+        man = os.path.join(stage, "manifest.json")
+        self.s.a.apply_stage_files(stage, man)
+        self.assertEqual(self.s.a.drift_list(man, stage), [], "刚部署完不该有漂移")
+
+        nft = os.path.join(self.s.td, "etc/nftables.d/dert-base.nft")
+        with open(nft, "a", encoding="utf-8") as f:
+            f.write("\n# 手工改一行\n")
+        self.assertIn("etc/nftables.d/dert-base.nft", self.s.a.drift_list(man, stage))
+
+        self.s.a.apply_stage_files(stage, man)
+        os.chmod(nft, 0o600)
+        self.assertIn("etc/nftables.d/dert-base.nft", self.s.a.drift_list(man, stage),
+                      "只改权限也算漂移（chap-secrets 从 600 变 644 就是明文密码）")
 
 
 if __name__ == "__main__":

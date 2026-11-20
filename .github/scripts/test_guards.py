@@ -1168,6 +1168,32 @@ if "0o644" in _co44:
     _p44_bad.append("configops 又硬编码 0o644（应统一用 privlib.CONFIG_MODE）")
 assert _p44_bad == [], "P3-44 回归：%s" % "；".join(_p44_bad)
 
+# ---------------------------------------------------------------------------
+# P3-45：收敛只重启「真正变了」的服务；调试模式开关必须同步盘上的生成物
+#
+# 真机 2026-11-20：flow off 只删了内核里的链、没改 /etc/nftables.d/dert-base.nft，
+# 而 netgen 的输出取决于 debug.flow —— 6 小时收敛发现差异后走全量路径，
+# 无条件重启 pppoe，把已连 44 小时的宽带打断。两件事都要钉住：
+#   ① 生成物跟着配置走（否则必然产生一次「假漂移」）；
+#   ② 漂移范围决定重启范围（否则任何小改动都能打断宽带）。
+_p45_bad = []
+_ap45 = open(os.path.join(ROOT, "priv", "applyops.py"), encoding="utf-8").read()
+if "run_actions(ACTIONS)" in _ap45:
+    _p45_bad.append("收敛全量路径又无条件跑 ACTIONS（小改动会打断 PPPoE）")
+if "actions_for(drift)" not in _ap45:
+    _p45_bad.append("收敛没按漂移推导动作")
+if "def drift_list" not in _ap45:
+    _p45_bad.append("缺 drift_list（漂移判定与动作推导必须共用同一份结论）")
+_fo45 = open(os.path.join(ROOT, "priv", "flowops.py"), encoding="utf-8").read()
+# 只数调用行：`def sync_nft_file():` 里也含这个子串，直接 count 会漏掉少一处调用
+_calls45 = [l for l in _fo45.splitlines()
+            if "sync_nft_file()" in l and not l.strip().startswith("def ")]
+if len(_calls45) < 2:
+    _p45_bad.append("flow on/off 没有同步 dert-base.nft（会在下次收敛变成假漂移）")
+if "NFT_FILE" not in _fo45:
+    _p45_bad.append("flowops 没有 dert-base.nft 的路径常量")
+assert _p45_bad == [], "P3-45 回归：%s" % "；".join(_p45_bad)
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"
