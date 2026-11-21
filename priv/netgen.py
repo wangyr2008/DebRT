@@ -233,6 +233,19 @@ def gen_lan_netdev(cfg):
     return "# 由 DebRT 生成 — 请勿手工修改\n[NetDev]\nName=br-lan\nKind=bridge\n"
 
 
+def lan_subnet_id(v6):
+    """LAN 在委派前缀里占第几个子网。默认 1：子网 0 被 WAN 的 IA_NA 占着。
+
+    只在「运营商给的 PD 里有不止一个子网」时才有意义——/64 委派只有一个，
+    LAN 根本分不到（见 status.py 的 pd_too_small）。
+    """
+    try:
+        sid = int(v6.get("subnet_id", 1))
+    except (TypeError, ValueError):
+        return 1
+    return sid if 0 <= sid <= 15 else 1
+
+
 def gen_lan_network(cfg):
     net = lan_net(cfg)
     v6 = cfg.get("ipv6", {})
@@ -312,9 +325,11 @@ def gen_lan_network(cfg):
             uplink = "ppp0" if cfg["wan"]["mode"] == "pppoe" else \
                 next((p["name"] for p in cfg.get("ports", []) if p.get("wan")), "")
             if uplink:
+                # 子网号默认 1（避开 WAN 的 IA_NA 所在的子网 0）；允许配置覆盖，
+                # 但必须是 0–15 的整数。status.py 用同一个默认值判断「PD 是否够长」。
                 lines += ["", "[DHCPPrefixDelegation]",
                           f"UplinkInterface={uplink}",
-                          "SubnetId=1"]
+                          f"SubnetId={lan_subnet_id(v6)}"]
     return "\n".join(lines) + "\n"
 
 

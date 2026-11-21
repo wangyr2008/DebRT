@@ -96,6 +96,19 @@ class TestLANNetwork(unittest.TestCase):
         self.assertNotIn("DHCPPrefixDelegation=yes", body)
         self.assertNotIn("SubnetId", body)
 
+    def test_subnet_id_default_and_override(self):
+        """默认 1（子网 0 被 WAN 占着），允许 0–15 覆盖，非法值退回 1。
+
+        与 status.py 的 pd_too_small 判断必须用同一个默认值，否则
+        「生成物说子网 1、告警按子网 0 判」会给出相反的结论。
+        """
+        self.assertIn("SubnetId=1", self.ng.gen_lan_network(support.pppoe_config()))
+        for val, want in ((3, "SubnetId=3"), (0, "SubnetId=0"),
+                          ("x", "SubnetId=1"), (99, "SubnetId=1")):
+            cfg = support.pppoe_config()
+            cfg["ipv6"]["subnet_id"] = val
+            self.assertIn(want, self.ng.gen_lan_network(cfg), repr(val))
+
     def test_pd_subnet_id_avoids_wan_prefix(self):
         """LAN 必须从 PD 里取**第二个** /64，避开 WAN 自己的地址。
 

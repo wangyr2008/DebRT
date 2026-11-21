@@ -23,6 +23,7 @@ case "$*" in
   *"route show dev"*)     printf '%s' "${FAKE_DEVROUTE_JSON:-[]}" ;;
   *"-4 addr show"*)       printf '%s' "${FAKE_ADDR_JSON:-[]}" ;;
   *"-6 addr show"*)       printf '%s' "${FAKE_ADDR6_JSON:-[]}" ;;
+  *"route show type unreachable"*) printf '%s' "${FAKE_UNREACH:-}" ;;
   *)                      printf '[]' ;;
 esac
 exit 0
@@ -30,7 +31,7 @@ exit 0
 
 
 class Env:
-    def __init__(self, cfg, run_markers=(), route=None, addr=None):
+    def __init__(self, cfg, run_markers=(), route=None, addr=None, unreach=""):
         self.td = tempfile.mkdtemp(prefix="dert-status-")
         self.root = os.path.join(self.td, "root")
         self.bin = os.path.join(self.td, "bin")
@@ -47,6 +48,7 @@ class Env:
         os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
         self.route = json.dumps(route or [])
         self.addr = json.dumps(addr or [])
+        self.unreach = unreach
 
     def upstream(self, text):
         """写 /run/dert-dns/upstream.conf（dispatcher 维护的上游清单）。"""
@@ -61,6 +63,7 @@ class Env:
         env["PATH"] = self.bin + os.pathsep + env.get("PATH", "")
         env["FAKE_ROUTE_JSON"] = self.route
         env["FAKE_ADDR_JSON"] = self.addr
+        env["FAKE_UNREACH"] = self.unreach
         if env_extra:
             env.update(env_extra)
         r = subprocess.run([support.PY, os.path.join(support.PRIV, mod)],
@@ -216,6 +219,63 @@ class WanDns(unittest.TestCase):
         e = Env(base_cfg())
         self.addCleanup(e.close)
         self.assertIn("dns", e.json("status.py")["wan"])
+
+
+class PdAndConflict(unittest.TestCase):
+    """两条「配置看着正常、实际不通」的运行期告警。
+
+    RT-05：PD 只有 /64 时 LAN 分不到独立前缀（子网 0 被 WAN 的 IA_NA 占用）。
+    RT-17：DHCP 拿到的 WAN 地址落在 LAN 网段内 → 路由冲突。
+    两者都只能运行期判断，而且用户不会去翻日志，所以要在概览页直接说出来。
+    """
+
+    def _env(self, **kw):
+        cfg = kw.pop("cfg", None) or base_cfg(ipv6={"enabled": True, "mode": "native"})
+        e = Env(cfg, **kw)
+        self.addCleanup(e.close)
+        return e
+
+    def test_slash64_flagged(self):
+        e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/64 dev lo proto dhcp metric 1024\n")
+        d = e.json("status.py")
+        self.assertEqual(d["ipv6"]["pd_prefixlen"], 64)
+        self.assertTrue(d["ipv6"]["pd_too_small"],
+                        "/64 委派下 LAN 的 SubnetId=1 越界，必须告警")
+
+    def test_slash60_is_fine(self):
+        e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/60 dev lo proto dhcp metric 1024\n")
+        d = e.json("status.py")
+        self.assertEqual(d["ipv6"]["pd_prefixlen"], 60)
+        self.assertFalse(d["ipv6"]["pd_too_small"])
+
+    def test_slash63_is_fine(self):
+        """/63 有两个子网，子网 1 存在。"""
+        e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/63 dev lo proto dhcp metric 1024\n")
+        self.assertFalse(e.json("status.py")["ipv6"]["pd_too_small"])
+
+    def test_no_pd_not_flagged(self):
+        """还没拿到 PD（开机初期）不能误报——那时本来就什么都没有。"""
+        d = self._env().json("status.py")
+        self.assertEqual(d["ipv6"]["pd_prefixlen"], 0)
+        self.assertFalse(d["ipv6"]["pd_too_small"])
+
+    def test_nat6_not_checked(self):
+        """NAT6 用 ULA，不依赖 PD 长度，不该报。"""
+        cfg = base_cfg(ipv6={"enabled": True, "mode": "nat6"})
+        e = self._env(cfg=cfg, unreach="unreachable 2409:8a5e:a57:6060::/64 dev lo proto dhcp metric 1024\n")
+        self.assertFalse(e.json("status.py")["ipv6"]["pd_too_small"])
+
+    def test_wan_in_lan_subnet_flags_conflict(self):
+        e = self._env(route=[{"dev": "enp1s0"}],
+                      addr=[{"addr_info": [{"local": "192.168.10.5", "prefixlen": 24}]}])
+        d = e.json("status.py")
+        self.assertTrue(d["wan"]["lan_conflict"],
+                        "WAN 落在 LAN 网段内必须告警（路由会冲突）")
+
+    def test_wan_outside_lan_no_conflict(self):
+        e = self._env(route=[{"dev": "enp1s0"}],
+                      addr=[{"addr_info": [{"local": "100.64.1.2", "prefixlen": 24}]}])
+        self.assertFalse(e.json("status.py")["wan"]["lan_conflict"])
 
 
 if __name__ == "__main__":

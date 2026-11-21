@@ -328,6 +328,26 @@ function renderOverview(st) {
     (v6.enabled ? kv("IPv6 连接类型", { native: "Native（原生）", nat6: "NAT6", static: "静态 IPv6" }[v6.mode] || v6.mode, true) +
       kv("IPv6 地址", v6.addr) + kv("IPv6 DNS", (v6.dns || []).join("，")) : "");
   $id("ov-net").innerHTML = html;
+
+  /* 两条只在「配置看着正常、实际不通」时才出现的告警。放在这里而不是日志里，
+     因为这两种情况用户根本不会去翻日志：
+       · PD 只给了 /64 → LAN 分不到独立前缀（子网 0 已被 WAN 占用）；
+       · DHCP 拿到的 WAN 地址落在 LAN 网段内 → 路由冲突。 */
+  var pdw = $id("ov-pd-warn"), pdt = $id("ov-pd-warn-text");
+  if (pdw) {
+    pdw.hidden = !(v6.enabled && v6.pd_too_small);
+    if (!pdw.hidden && pdt) {
+      pdt.textContent = "运营商只委派了 /" + (v6.pd_prefixlen || "?") +
+        " 前缀，局域网分不到独立的 IPv6 网段（委派里的子网 0 已被 WAN 占用）。" +
+        "请到「网络设置 → IPv6 设置」改用 NAT6 模式，或向运营商确认能否下发更长的前缀。";
+    }
+  }
+  var lcw = $id("ov-lanconflict-warn"), lci = $id("ov-lanconflict-ip");
+  if (lcw) {
+    lcw.hidden = !(st.wan && st.wan.lan_conflict);
+    if (!lcw.hidden && lci) lci.textContent = st.wan.ip || "—";
+  }
+
   var nb = $id("ov-net-badge");
   nb.textContent = ok ? "已联网" : "未联网";
   nb.className = "ru-badge" + (ok ? " green" : "");

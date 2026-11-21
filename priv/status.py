@@ -12,7 +12,7 @@ _FS = _o.environ.get("DERT_FSROOT", "")
 E = _FS + "/etc/dert"
 V = _FS + "/var/lib/dert"
 R = _FS + "/run/dert"
-import json, os, subprocess, time
+import ipaddress, json, os, re, subprocess, time
 
 cfg = json.load(open(E + "/config.json"))
 ULA_PREFIX_STATIC = "fda1:9e3a:8b7f"
@@ -109,6 +109,20 @@ def _wan_dns():
 
 wan["dns"] = _wan_dns()
 
+# WAN 地址是否落在 LAN 网段内（审计 RT-17 的运行期部分）。
+# 配置层只能校验「静态 WAN」，DHCP 拿到的地址只有运行时才知道。
+# 两者同网段时路由会冲突：发往 LAN 客户端的包可能被送去 WAN，整机不通，
+# 而面板上一切显示正常——最难查的那类。
+wan["lan_conflict"] = False
+try:
+    _lan = cfg.get("lan", {})
+    if wan.get("ip") and _lan.get("ip") and _lan.get("mask"):
+        _net = ipaddress.IPv4Network("%s/%s" % (_lan["ip"], _lan["mask"]),
+                                     strict=False)
+        wan["lan_conflict"] = ipaddress.IPv4Address(wan["ip"]) in _net
+except Exception:
+    pass
+
 # IPv6 概览
 v6cfg = cfg.get("ipv6", {})
 v6 = {"enabled": v6cfg.get("enabled", False), "mode": v6cfg.get("mode", "native"), "addr": "", "dns": []}
@@ -139,6 +153,40 @@ if v6["enabled"]:
                         v6["dns"].append(_d)
     except Exception:
         pass
+
+# 委派前缀长度：networkd 为 PD 在 lo 上放一条 unreachable 路由
+#   unreachable 2409:8a5e:a57:6060::/60 dev lo proto dhcp metric 1024
+# 这是「本机实际拿到多长的前缀」最直接的证据（比猜 links 文件里的字段可靠）。
+def _pd_prefixlen():
+    try:
+        out = run(["ip", "-6", "route", "show", "type", "unreachable"])
+    except Exception:
+        return 0
+    for line in out.splitlines():
+        if " dev lo " in line and " proto dhcp" in line:
+            m = re.search(r"/(\d+)", line)
+            if m:
+                return int(m.group(1))
+    return 0
+
+
+v6["pd_prefixlen"] = 0
+v6["pd_too_small"] = False
+if v6["enabled"] and v6["mode"] == "native":
+    _plen = _pd_prefixlen()
+    v6["pd_prefixlen"] = _plen
+    # LAN 取 PD 里的第 subnet_id 个子网（netgen 用 1，避开 WAN 的 IA_NA 地址）。
+    # /64 委派只有子网 0，而那一个已经被 WAN 占了——此时 LAN 拿不到任何独立
+    # 前缀，调 SubnetId 也挤不出来，只能改用 NAT6（审计 RT-05）。
+    # 与 netgen.lan_subnet_id() 同一套默认值与范围（0 是合法值，不能写 `or 1`）
+    try:
+        _sid = int(v6cfg.get("subnet_id", 1))
+    except (TypeError, ValueError):
+        _sid = 1
+    if not 0 <= _sid <= 15:
+        _sid = 1
+    if _plen and 0 <= 64 - _plen < 32 and _sid >= (1 << (64 - _plen)):
+        v6["pd_too_small"] = True
 
 # 网口
 ports = []

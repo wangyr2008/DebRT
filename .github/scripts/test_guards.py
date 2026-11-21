@@ -1248,7 +1248,7 @@ if _ap46.count("failsafe_nft()") < 3:
 assert _p46_bad == [], "P3-46 回归：%s" % "；".join(_p46_bad)
 
 # ---------------------------------------------------------------------------
-# P3-47：审计 P2/P3 批次（RT-04 / RT-09 / RT-10 / RT-12 / RT-14 / RT-19 / RT-20）
+# P3-47：审计 P2/P3 批次（RT-04 / RT-05 / RT-09 / RT-10 / RT-12 / RT-14 / RT-17 / RT-19 / RT-20）
 _p47_bad = []
 # RT-04 / RT-09 已有行为断言（tests/test_netgen_artifacts.TestNftNatRules、
 # tests/test_dns_split.SyncBehavior.test_mac_is_normalized）——真跑生成器/脚本
@@ -1278,6 +1278,20 @@ if "--unit=dert-pppoe-recheck" not in _ntw_src:
 # RT-12：DHCP 换 IP 后 wan_v4 集合不会自己更新
 if not re.search(r"^ADDR_SYNC=", _ntw_src, re.M):
     _p47_bad.append("netwatch 的 reconcile 没刷新 wan_v4（hairpin 会失效）")
+# RT-05 / RT-17 运行期告警：status 要输出，面板要有对应的位与渲染
+# 查「赋值 / 属性」而不是「出现过」：改名成 x_too_small 之后，
+# 初始化那行 `v6["pd_too_small"] = False` 仍含原字符串（子串陷阱第 5 次）
+_st47 = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").read()
+if 'v6["pd_too_small"] = True' not in _st47:
+    _p47_bad.append("status.py 不再把 pd_too_small 置真（/64 委派不会告警）")
+if 'wan["lan_conflict"] = ipaddress' not in _st47:
+    _p47_bad.append("status.py 不再把 lan_conflict 置真（WAN/LAN 同网段不会告警）")
+_idx47 = open(os.path.join(ROOT, "panel", "static", "index.html"), encoding="utf-8").read()
+_js47 = open(os.path.join(ROOT, "panel", "static", "app.js"), encoding="utf-8").read()
+if 'id="ov-pd-warn"' not in _idx47 or "ov-pd-warn" not in _js47:
+    _p47_bad.append("面板缺「PD 前缀过短」告警（用户看不到为什么没有 IPv6）")
+if 'id="ov-lanconflict-warn"' not in _idx47 or "lan_conflict" not in _js47:
+    _p47_bad.append("面板缺「WAN/LAN 网段冲突」告警")
 assert _p47_bad == [], "P3-47 回归：%s" % "；".join(_p47_bad)
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
