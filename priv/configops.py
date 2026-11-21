@@ -313,6 +313,14 @@ def config_set(section):
             hint_sb = "若已启用 sing-box，建议执行 sb restart 重新绑定出口接口"
     if section == "lan":
         msg = "LAN 设置已生效；若管理地址已变化，请使用新 IP 重新登录"
+        # 必须重启 sing-box：00-dert-dns.json 里的 landns 是它启动时按当时的
+        # LAN IP 写死的，auto_redirect 的本机地址集合也只在启动时构建。
+        # 不重启的话，白名单设备解析 *.lan 会失败、访问新地址也会异常，
+        # 而面板只会提示「请用新 IP 重新登录」，用户根本想不到要手动重启（审计 RT-10）。
+        r = applyops._sh(["systemctl", "is-enabled", "--quiet", "sing-box.service"], timeout=15)
+        if r is not None and r.returncode == 0:
+            applyops._sh(["systemctl", "try-restart", "sing-box.service"], timeout=60)
+            msg = "LAN 设置已生效，sing-box 已重启；若管理地址已变化，请使用新 IP 重新登录"
     ok_out(message=msg, hint_singbox=hint_sb)
 
 

@@ -819,12 +819,14 @@ assert "5353" in _dss and "ip link show tun0" not in _dss, \
 # 原子替换：nft -f 里直接写 `table X { ... }` 对已存在的表是**追加规则**，不是替换。
 # 真机 2026-11-12 实测：netwatch 在运行期多次触发 sync 后，表里堆到 20 条
 # （应为 4 条），最后几条还指向已删除的临时地址。
-# v6 目标地址必须确定性选取：br-lan 可能有多个全局地址（多前缀/手工/隐私地址），
-# 用 "exit 取第一条" 会随内核返回顺序漂移，导致表反复重建
-assert "temporary" in _ntw_src and "sort | head -1" in _ntw_src, \
-    "P3-19 回归：netwatch 的 lan6() 与 sync 选取规则不一致（会反复判为不一致）"
-assert "lan6_pick dynamic" in _ntw_src, \
-    "P3-19 回归：netwatch 的 lan6() 不再优先选 dynamic 地址（与 sync 规则不一致）"
+# RT-08（v0.1.130）：改用 redirect 之后，表里不再写死 LAN 地址，
+# 「netwatch 与 sync 各自算地址、算得不一致就反复重建」这个坑从根上没有了。
+# 现在要守的是：两边都别再回去比地址。
+# 两个检查合成一条断言（预算紧张）：都是「回到按地址 DNAT」这一种退化
+assert "redirect to :" in _dss and 'LAN6="::1"' not in _dss, \
+    "P3-19 回归：sync 又改回 dnat to <LAN 地址> 或恢复 ::1 兜底（br-lan 没有全局 v6 时 v6 DNS 全丢）"
+assert "dnat ip to" not in _ntw_src, \
+    "P3-19 回归：netwatch 又在比对表里的地址（redirect 之后没有地址可比，会永远判过期）"
 # v0.1.65 死代码清理后不应再出现
 assert "TUN4" not in _dss and "TUN6" not in _dss, \
     "P3-19 回归：sync 又读了 tun DNS 地址（新架构白名单走 LAN4:5353，与 tun 无关）"
@@ -1243,6 +1245,21 @@ if "APPLY_PARTIAL" not in _ap46:
 if _ap46.count("failsafe_nft()") < 3:
     _p46_bad.append("失败分支没调用 failsafe_nft（开机失败时 WAN 入站会全开）")
 assert _p46_bad == [], "P3-46 回归：%s" % "；".join(_p46_bad)
+
+# ---------------------------------------------------------------------------
+# P3-47：审计 P2 批次（RT-04 / RT-09 / RT-10）
+_p47_bad = []
+# RT-04 / RT-09 已有行为断言（tests/test_netgen_artifacts.TestNftNatRules、
+# tests/test_dns_split.SyncBehavior.test_mac_is_normalized）——真跑生成器/脚本
+# 断言产物，比断言源码里有没有某段字符串可靠，这里不重复占预算。
+# RT-10：改 LAN IP 后必须重启 sing-box（landns 与 auto_redirect 地址集合都是启动时定的）
+_co47 = open(os.path.join(ROOT, "priv", "configops.py"), encoding="utf-8").read()
+# 从右切：`elif section == "lan":` 里也含 "if section == \"lan\":" 这个子串，
+# 从左切会落到 elif 那一支（同一个子串陷阱第三次踩到）
+_lan47 = _co47.rsplit('if section == "lan":', 1)[1].split("ok_out(")[0]
+if "try-restart" not in _lan47 or "sing-box" not in _lan47:
+    _p47_bad.append("改 LAN IP 后没重启 sing-box（*.lan 解析与访问新地址都会异常）")
+assert _p47_bad == [], "P3-47 回归：%s" % "；".join(_p47_bad)
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"

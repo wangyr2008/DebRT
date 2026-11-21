@@ -585,8 +585,13 @@ def gen_nft(cfg):
         "  chain srcnat {",
         "    type nat hook postrouting priority srcnat; policy accept;",
         "    ip saddr $LAN_NET oifname $WAN_IFS masquerade",
-        "    # hairpin 回程伪装：仅作用于被 DNAT 的连接（全量 LAN→LAN 伪装会破坏 mDNS 等，复审 N-02）",
-        "    oifname $LAN_BR ct status dnat masquerade",
+        "    # hairpin 回程伪装：仅作用于「从 LAN 进来、被 DNAT 到 LAN」的连接。",
+        "    # 必须带 iifname != $WAN_IFS：从 WAN 进来的端口转发连接出接口同样是",
+        "    # br-lan、ct status dnat 同样为真，不带这个条件会把公网访问的来源 IP",
+        "    # 全改成路由器 LAN 地址——服务端日志、fail2ban、按来源 IP 的访问控制",
+        "    # 全部失效（审计 RT-04）。",
+        "    # 用 iifname 而不是 ip saddr $LAN_NET：后者只覆盖 v4，v6 hairpin 会失去伪装。",
+        "    iifname != $WAN_IFS oifname $LAN_BR ct status dnat masquerade",
     ]
     if v6.get("enabled") and v6.get("mode") == "nat6":
         lines.append(f"    ip6 saddr {ULA_PREFIX}::/48 oifname $WAN_IFS masquerade")

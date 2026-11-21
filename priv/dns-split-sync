@@ -55,8 +55,13 @@ ss -lnu 2>/dev/null | grep -q ':5353' || exit 0
 #
 # v0.1.65 起不再读 tun 的 DNS 地址：白名单的 DNS 目标是 br-lan 的 53 端口 + :5353，
 # 与非白名单的 dnsmasq:53 同在一台机器上，跟 tun 的内部地址无关。
+# MAC 统一成小写冒号格式再拼进 nft 规则。
+# include_mac_address 来自 sub-store 下发的配置，写法不受控：sing-box 用 Go 的
+# net.ParseMAC，AA-BB-CC-DD-EE-FF / aabb.ccdd.eeff 都收；nft 只认冒号分隔。
+# 不规范化的话整张表建不起来（报错被吞掉），静默回落到 dnsmasq——白名单设备
+# 拿不到 fakeip，分流悄悄失效，日志里只有一条 table_build_failed（审计 RT-09）。
 WLS=$(python3 - "$CONF" <<'PYEOF'
-import json, sys
+import json, re, sys
 
 try:
     c = json.load(open(sys.argv[1]))
@@ -65,7 +70,20 @@ except Exception:
 
 for ib in c.get("inbounds", []):
     if ib.get("type") == "tun":
-        print(",".join(ib.get("include_mac_address") or []))
+        out, bad = [], []
+        for m in ib.get("include_mac_address") or []:
+            s = re.sub(r"[^0-9a-fA-F]", "", str(m)).lower()
+            if len(s) == 12:
+                mac = ":".join(s[i:i + 2] for i in range(0, 12, 2))
+                if mac not in out:
+                    out.append(mac)
+            else:
+                bad.append(str(m))
+        if bad:
+            # 走 stderr 进 journal：丢掉一台白名单设备必须能查到
+            sys.stderr.write("dert-dns-split: 无法识别的 MAC 已忽略: %s\n"
+                             % ", ".join(bad[:5]))
+        print(",".join(out))
         break
 PYEOF
 )
@@ -79,35 +97,16 @@ if [ -z "$WLS" ]; then
     exit 0
 fi
 
-# DNAT 的目标地址都在 br-lan 上：白名单用 LAN4/LAN6 的 5353（sing-box），
-# 非白名单用 LAN4/LAN6 的 53（dnsmasq）。两者同机不同端口，靠 MAC 决定去向。
-# 同时兼容多行与 ip -o 单行输出：单行格式下 inet 在第 3 列
+# 白名单的 DNS 转到本机 5353（sing-box），非白名单转到 53（dnsmasq）。
+# 两者同机不同端口，靠 MAC 决定去向。
+#
+# LAN4 只用来判断「br-lan 是否已经有 IPv4」——没地址时建表没有意义（客户端
+# 也连不上来）。它**不再**是 DNAT 的目标地址：改用 redirect 之后，目标由内核
+# 按入接口选（见下方建表注释），v6 的 ::1 兜底问题从根上没有了。
 LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
        | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
               $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
 [ -n "$LAN4" ] || exit 0
-
-# v6 目标地址必须**确定性**且优先选 PD 委派来的那个：
-#   · br-lan 上可能不止一个全局地址（多前缀委派、手工加的静态地址、隐私地址），
-#     谁先出现取决于内核顺序。之前用 "exit 取第一条"，地址集合一变就可能选中
-#     另一个 → 表被反复重建，甚至指向一个随后消失的地址。
-#   · PD 委派的地址带 dynamic 标志（有 valid_lft），手工加的是静态（forever）。
-#     DNAT 目标应该用前者——那才是"运营商给本网段的地址"，不会被人随手删掉。
-#   · 同档内按字典序取第一个，保证同一组地址永远选出同一个结果。
-lan6_pick() { # $1 = 额外要求的标志（如 dynamic），空则不限
-    ip -6 addr show dev br-lan scope global 2>/dev/null | awk -v want="$1" '
-        ($1 == "inet6" || $3 == "inet6") {
-            if ($0 ~ /temporary/) next
-            if (want != "" && $0 !~ want) next
-            for (i = 1; i <= NF; i++)
-                if ($i ~ /^[0-9a-fA-F:]+\/[0-9]+$/ && $i ~ /:/) {
-                    split($i, a, "/"); print a[1]; break
-                }
-        }' | sort | head -1
-}
-LAN6=$(lan6_pick dynamic)
-[ -n "$LAN6" ] || LAN6=$(lan6_pick "")
-[ -n "$LAN6" ] || LAN6="::1"
 
 # 记录前缀基线 /run/dert/lan-prefix，供 90-dert-lan-prefix 判断"前缀是否变了"。
 #
@@ -122,8 +121,7 @@ LAN6=$(lan6_pick dynamic)
 #     · 压缩写法的地址在钩子那边变成 fda1:9e3a:8b7f:::/64（非法值），永远对不上；
 #     · br-lan 同时有两个全局前缀时，两边集合大小不同，也会互相判成"变了"。
 #   两种都会导致「前缀变了」→ 废弃正在用的前缀 + 反复重启 sing-box（审计 RT-01）。
-if [ -n "$LAN6" ] && [ "$LAN6" != "::1" ]; then
-    PREFIX6=$(ip -6 addr show dev br-lan scope global 2>/dev/null | python3 -c '
+PREFIX6=$(ip -6 addr show dev br-lan scope global 2>/dev/null | python3 -c '
 import sys, ipaddress
 out = set()
 for line in sys.stdin:
@@ -135,12 +133,11 @@ for line in sys.stdin:
             pass
 print(" ".join(sorted(out)))
 ' 2>/dev/null)
-    if [ -n "$PREFIX6" ]; then
-        mkdir -p "${FSROOT}/run/dert" 2>/dev/null
-        # 原子写：钩子可能并发读，不能让它读到半个前缀
-        if printf '%s\n' "$PREFIX6" > "${FSROOT}/run/dert/lan-prefix.tmp" 2>/dev/null; then
-            mv -f "${FSROOT}/run/dert/lan-prefix.tmp" "${FSROOT}/run/dert/lan-prefix" 2>/dev/null
-        fi
+if [ -n "$PREFIX6" ]; then
+    mkdir -p "${FSROOT}/run/dert" 2>/dev/null
+    # 原子写：钩子可能并发读，不能让它读到半个前缀
+    if printf '%s\n' "$PREFIX6" > "${FSROOT}/run/dert/lan-prefix.tmp" 2>/dev/null; then
+        mv -f "${FSROOT}/run/dert/lan-prefix.tmp" "${FSROOT}/run/dert/lan-prefix" 2>/dev/null
     fi
 fi
 
@@ -162,10 +159,15 @@ table inet dert_dns {
     chain pre {
         type nat hook prerouting priority dstnat - 2; policy accept;
 
-        iifname "br-lan" ether saddr $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4:5353
-        iifname "br-lan" ether saddr $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to [$LAN6]:5353
-        iifname "br-lan" ether saddr != $SET meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 counter dnat ip to $LAN4
-        iifname "br-lan" ether saddr != $SET meta nfproto ipv6 meta l4proto { tcp, udp } th dport 53 counter dnat ip6 to $LAN6
+        # 用 redirect 而不是 dnat to <LAN 地址>：目标地址由内核按**入接口**选，
+        # 不再需要在 shell 里算 LAN4/LAN6。旧写法有两个坑：
+        #   · br-lan 没有全局 v6 时（PD 未下发 / 只有 /64 委派），LAN6 兜底成 ::1，
+        #     而 IPv6 不允许把外部进来的包转发到回环，DNAT 后的包被内核丢掉 →
+        #     局域网的 v6 DNS 全部超时，解析要等回落到 v4（审计 RT-08）；
+        #   · 地址一变就要重建表（netwatch 的对账逻辑）。
+        # redirect 只改端口、不动地址：客户端发给路由器的链路本地地址也照样成立。
+        iifname "br-lan" ether saddr $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+        iifname "br-lan" ether saddr != $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :53
     }
 }
 EOF

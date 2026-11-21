@@ -103,29 +103,52 @@ class SyncBehavior(unittest.TestCase):
         self.h = Harness(["0c:19:f8:64:7c:ac", "44:59:e3:bb:f4:d6"])
         self.addCleanup(self.h.close)
 
-    def test_creates_four_dnat_rules(self):
+    def test_creates_two_redirect_rules(self):
+        """v0.1.130 起用 redirect 而不是 dnat to <LAN 地址>。
+
+        旧写法要把 LAN4/LAN6 算进规则里，而 br-lan 没有全局 v6 时 LAN6 兜底成
+        ::1——IPv6 不允许把外部进来的包转发到回环，DNAT 后的包被内核丢掉，
+        局域网的 v6 DNS 全部超时（审计 RT-08）。redirect 只改端口、地址由内核
+        按入接口选，一类问题从根上没有了。
+        """
         rc, log, _ = self.h.run(self.SCRIPT)
         self.assertEqual(rc, 0)
-        self.assertEqual(log.count("dnat ip to"), 2, "v4 应有白名单/非白名单两条")
-        self.assertEqual(log.count("dnat ip6 to"), 2, "v6 应有白名单/非白名单两条")
+        # 按行尾断言：字符串包含判断会把 "redirect to :5353" 也算成 ":53"
+        ends = [l.rstrip() for l in log.splitlines()]
+        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :5353")), 1,
+                         "白名单一条")
+        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :53")), 1,
+                         "非白名单一条")
+        self.assertNotIn("dnat ip to", log)
+        self.assertNotIn("dnat ip6 to", log)
+        # 只看规则行：注释里提到 "::1 兜底" 是解释历史，不算
+        rule_lines = [l for l in log.splitlines() if l.strip().startswith("iifname")]
+        self.assertFalse(any("::1" in l for l in rule_lines), "规则里不能再用 ::1 兜底")
 
     def test_whitelist_goes_to_5353_non_whitelist_to_53(self):
         _, log, _ = self.h.run(self.SCRIPT)
         macs = "0c:19:f8:64:7c:ac,44:59:e3:bb:f4:d6"
         # 白名单 → 5353（sing-box direct inbound → hijack-dns → fakeip）
         self.assertIn(f'ether saddr {{ {macs} }}', log)
-        self.assertIn("dnat ip to 192.168.10.1:5353", log)
-        # 非白名单 → br-lan 的 53（dnsmasq → 运营商 → 真实 IP）
+        self.assertIn("redirect to :5353", log)
+        # 非白名单 → 53（dnsmasq → 运营商 → 真实 IP）
         self.assertIn(f'ether saddr != {{ {macs} }}', log)
-        self.assertTrue(
-            any(l.rstrip().endswith("dnat ip to 192.168.10.1")
-                for l in log.split("\n")),
-            "非白名单应 DNAT 到 br-lan 的 53（不带端口即 53）")
+        self.assertIn("redirect to :53", log)
 
-    def test_v6_target_prefers_dynamic(self):
+    def test_mac_is_normalized(self):
+        """MAC 来自 sub-store，写法不受控；nft 只认冒号分隔。
+
+        AA-BB-CC-DD-EE-FF / aabb.ccdd.eeff 若不规范化，整张表建不起来，
+        而且报错被吞掉、静默回落到 dnsmasq（审计 RT-09）。
+        """
+        self.h.close()
+        self.h = Harness(["AA-BB-CC-DD-EE-FF", "aabb.ccdd.eeff", "0c:19:f8:64:7c:ac"])
+        self.addCleanup(self.h.close)
         _, log, _ = self.h.run(self.SCRIPT)
-        self.assertIn("[2409:8a5e:a57:a080:4083:aaff:fe47:3121]:5353", log)
-        self.assertNotIn("1111:2222:3333:4444", log, "temporary 隐私地址不能被选为目标")
+        # 两种写法归一后是同一个 MAC → 去重，集合里只出现一次
+        self.assertIn("{ aa:bb:cc:dd:ee:ff,0c:19:f8:64:7c:ac }", log)
+        self.assertEqual(log.count("aa:bb:cc:dd:ee:ff"), 2,
+                         "一条白名单规则 + 一条 != 规则，各出现一次")
 
     def test_atomic_replace_idiom(self):
         # 直接写 table 定义对已存在的表是"追加"而非"替换"（真机堆到 20 条）

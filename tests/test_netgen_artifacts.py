@@ -291,5 +291,32 @@ class TestFullPipeline(unittest.TestCase):
         self.assertIn("ConfigureWithoutCarrier=yes", text)
 
 
+class TestNftNatRules(unittest.TestCase):
+    """srcnat 链里的两条伪装规则。
+
+    审计 RT-04：`oifname $LAN_BR ct status dnat masquerade` 这条本意是 hairpin，
+    但从 WAN 进来、被 DNAT 到 LAN 的端口转发连接出接口同样是 br-lan、
+    ct status dnat 同样为真——于是公网访问的来源 IP 全变成路由器 LAN 地址，
+    服务端日志 / fail2ban / 按来源 IP 的访问控制全部失效。
+    """
+
+    def setUp(self):
+        self.ng = support.load_netgen()
+        self.body = self.ng.gen_nft(support.pppoe_config())
+
+    def _srcnat(self):
+        i = self.body.index("chain srcnat")
+        return self.body[i:self.body.index("\n  }", i)]
+
+    def test_hairpin_excludes_wan_ingress(self):
+        seg = [l for l in self._srcnat().splitlines() if "ct status dnat masquerade" in l]
+        self.assertEqual(len(seg), 1)
+        self.assertIn("iifname != $WAN_IFS", seg[0],
+                      "hairpin 伪装必须排除从 WAN 进来的连接，否则端口转发看不到真实来源 IP")
+
+    def test_lan_to_wan_nat_intact(self):
+        self.assertIn("ip saddr $LAN_NET oifname $WAN_IFS masquerade", self._srcnat())
+
+
 if __name__ == "__main__":
     unittest.main()

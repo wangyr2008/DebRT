@@ -7,6 +7,51 @@
 
 ## [Unreleased]
 
+## [0.1.130] - 2026-11-22
+
+> 审计 P2 批次：4 条「特定配置下静默失效」。其中 RT-08 是这一批里影响面最大的
+> ——只要 br-lan 没有全局 v6，局域网的 v6 DNS 就全部超时。
+
+### Fixed
+
+- **RT-08 分流表把 IPv6 DNS DNAT 到 `[::1]`**。`br-lan` 取不到全局 v6 时
+  （PD 未下发、或只有 /64 委派）`LAN6` 兜底成 `::1`，而 IPv6 **不允许把从外部
+  接口进来的包转发到回环**——DNAT 后的包被内核丢掉，局域网所有 v6 DNS 查询
+  超时，解析要等回落到 v4 才完成，表现为「解析变慢」。白名单和非白名单都受影响。
+
+  改用 `redirect`：只改端口、地址由内核按**入接口**选，`LAN4/LAN6` 那套计算
+  连同 `::1` 兜底一起删掉。真机实测：`dig @192.168.10.1` 与
+  `dig @fe80::…%en1` 都正确落到 sing-box:5353（都拿到 fakeip），
+  清理临时表后常规路径仍返回真实 IP。
+  连带简化 `netwatch`：表里不再写死地址，`lan4()/lan6()/lan6_pick()` 全删，
+  对账逻辑改成「表还是旧的 dnat 写法才重建」。
+
+- **RT-04 回流伪装把端口转发的来源 IP 改成了路由器地址**。
+  `oifname $LAN_BR ct status dnat masquerade` 本意只处理 hairpin，但**从 WAN
+  进来、被 DNAT 到 LAN** 的连接出接口同样是 `br-lan`、`ct status dnat` 同样为真，
+  于是公网访问的来源 IP 全变成 `192.168.10.1`——服务端日志、fail2ban、
+  按来源 IP 的访问控制全部失效。加 `iifname != $WAN_IFS` 限定为「从 LAN 进来」。
+
+- **RT-09 白名单 MAC 未规范化**。`include_mac_address` 来自 sub-store，
+  写法不受控（`AA-BB-CC-DD-EE-FF` / `aabb.ccdd.eeff`），而 nft 只认冒号分隔；
+  不规范化整张表建不起来，且报错被吞掉、静默回落到 dnsmasq——白名单设备
+  拿不到 fakeip，分流悄悄失效。现在统一成小写冒号格式、去重，认不出的
+  MAC 走 stderr 进 journal（丢掉一台白名单设备必须能查到）。
+
+- **RT-10 改 LAN IP 后不重启 sing-box**。`00-dert-dns.json` 里的 `landns` 是
+  启动时按当时的 LAN IP 写死的，auto_redirect 的本机地址集合也只在启动时构建；
+  不重启的话白名单设备解析 `*.lan` 会失败、访问新地址也异常，而面板只提示
+  「请用新 IP 重新登录」。现在保存 LAN 设置后 `try-restart sing-box`。
+
+### Notes
+
+- 测试更新：`test_dns_split` 从「四条 DNAT」改为「两条 redirect」，并新增
+  `test_mac_is_normalized`（两种写法归一后去重）；`test_netgen_artifacts`
+  新增 `TestNftNatRules`（hairpin 必须排除 WAN 入向）。
+- 守卫 P3-19 改成守「别再回去比地址」；新增 P3-47 守 RT-10。
+  RT-04/RT-09 已由行为测试覆盖，不再重复占字符串断言预算（棘轮仍是 133）。
+- 全量 417 用例绿。
+
 ## [0.1.129] - 2026-11-22
 
 > 字标按真机反馈收小，标签页图标改成 iOS 主屏那种白底圆角样式。

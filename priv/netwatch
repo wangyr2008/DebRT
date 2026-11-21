@@ -51,54 +51,17 @@ except Exception:
     sys.exit(1)' /etc/dert/config.json 2>/dev/null
 }
 
-# br-lan 的当前 v4 / 全局 v6 地址（与 dns-split-sync 用同一套取值方式，
-# 兼容多行与 ip -o 单行两种输出）
-lan4() {
-    ip -4 addr show dev br-lan 2>/dev/null \
-      | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
-             $3 == "inet" { split($4, a, "/"); print a[1]; exit }'
-}
-lan6() {
-    # 与 dns-split-sync 完全一致的选取规则（两处必须同步，否则「当前地址」和
-    # 「表里的目标」会因为选取规则不同而永远判为不一致，反复重建）：
-    #   ① 排除 temporary（RFC 4941 隐私地址会轮换）
-    #   ② 优先 dynamic（PD 委派来的，有 valid_lft），其次任意全局
-    #   ③ 同档内按字典序取第一个，保证确定性
-    local v
-    v=$(lan6_pick dynamic)
-    [ -n "$v" ] || v=$(lan6_pick "")
-    printf '%s' "$v"
-}
-
-lan6_pick() { # $1 = 额外要求的标志（如 dynamic），空则不限
-    ip -6 addr show dev br-lan scope global 2>/dev/null | awk -v want="$1" '
-        ($1 == "inet6" || $3 == "inet6") {
-            if ($0 ~ /temporary/) next
-            if (want != "" && $0 !~ want) next
-            for (i = 1; i <= NF; i++)
-                if ($i ~ /^[0-9a-fA-F:]+\/[0-9]+$/ && $i ~ /:/) {
-                    split($i, a, "/"); print a[1]; break
-                }
-        }' | sort | head -1
-}
-
-# nft 分流表的目标地址是否已与 br-lan 当前地址不符。
+# nft 分流表是否需要重建。
 # 只在「5353 真的在监听」时才谈得上重建——否则建出来的表会把白名单 DNS
-# 指向一个没人收的端口。用监听状态而不是 tun 接口存在与否做判据：本表的目标
-# 全在 br-lan 上，不引用 tun 接口，tun 建好也不代表 5353 已 bind。
-# 必须比对而不是无条件重建：nft -f 重建会清零计数器，诊断时很要命。
+# 指向一个没人收的端口。用监听状态而不是 tun 接口存在与否做判据：本表不引用
+# tun 接口，tun 建好也不代表 5353 已 bind。
+# 不能无条件重建：nft -f 重建会清零计数器，诊断时很要命。
 dns_table_stale() {
     ss -lnu 2>/dev/null | grep -q ':5353' || return 1
     nft list table inet dert_dns >/dev/null 2>&1 || return 0
-    local cur4 cur6 got4 got6
-    cur4="$(lan4)"
-    cur6="$(lan6)"
-    [ -n "$cur6" ] || cur6="::1"          # 与 dns-split-sync 的兜底保持一致
-    got4="$(nft list table inet dert_dns 2>/dev/null \
-            | grep -o 'dnat ip to [0-9.]*' | awk '{print $NF}' | sort -u | head -1)"
-    got6="$(nft list table inet dert_dns 2>/dev/null \
-            | grep -o 'dnat ip6 to \[[^]]*\]' | sed 's/.*\[\(.*\)\]/\1/' | sort -u | head -1)"
-    [ "$got4" = "$cur4" ] && [ "$got6" = "$cur6" ] && return 1
+    # 用 redirect 之后表里不再写死地址，br-lan 地址变化不会让表失效——
+    # 只有「表还是旧的 dnat 写法」（升级后第一次、或被人手工改过）才需要重建。
+    nft list table inet dert_dns 2>/dev/null | grep -q 'redirect to :' && return 1
     return 0
 }
 
