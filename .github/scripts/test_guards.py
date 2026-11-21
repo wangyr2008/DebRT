@@ -529,8 +529,9 @@ assert "ExecStartPre" in _dd and "upstream.conf" in _dd and "|| : >" in _dd, \
 # 必须有 PNG/ICO 兜底；面板还要直接响应 /favicon.ico（浏览器会绕过 <link> 请求它）
 _idx = open(os.path.join(ROOT, "panel", "static", "index.html"), encoding="utf-8").read()
 assert 'rel="icon" type="image/png"' in _idx, "P3-16 回归：index.html 缺 PNG favicon（Safari 显示通用图标）"
-# 按 href 断言具体文件：只查 type="image/png" 的话，删掉 32x32 那一行仍会被 16x16 顶住（假绿）
-assert 'href="/static/favicon-32.png"' in _idx and 'href="/static/favicon-16.png"' in _idx, \
+# 按 href 断言具体文件：只查 type="image/png" 的话，删掉 32x32 那一行仍会被 16x16 顶住（假绿）。
+# 允许 ?v=N 缓存参数（Safari 按图标 URL 长期缓存，换图标必须改 URL 才会生效）
+assert all(re.search(r'href="/static/%s(\?v=[^"]*)?"' % _f, _idx) for _f in (r"favicon-32\.png", r"favicon-16\.png")), \
     "P3-16 回归：index.html 缺 32x32/16x16 PNG favicon 链接"
 assert 'rel="apple-touch-icon"' in _idx, "P3-16 回归：index.html 缺 apple-touch-icon"
 for _ico in ("favicon.ico", "favicon-32.png", "apple-touch-icon.png"):
