@@ -1194,6 +1194,55 @@ if "NFT_FILE" not in _fo45:
     _p45_bad.append("flowops 没有 dert-base.nft 的路径常量")
 assert _p45_bad == [], "P3-45 回归：%s" % "；".join(_p45_bad)
 
+# ---------------------------------------------------------------------------
+# P3-46：第三方审计（2026-11-22）确认的几条，逐条钉死
+#
+# 共同特征：**都不会报错，只会让系统悄悄降级**——读不到前缀就把在用的登记为废弃、
+# 服务没起来还报成功、面板永远显示 —。这类只能靠断言锁住。
+_p46_bad = []
+
+# ① RT-02：读不到当前前缀时绝不能登记废弃
+_pr46 = open(os.path.join(ROOT, "priv", "prefix-retire.py"), encoding="utf-8").read()
+if "no_current_prefix" not in _pr46:
+    _p46_bad.append("prefix-retire 又允许「当前前缀为空」时登记废弃（会废掉在用的前缀）")
+
+# ② RT-01：前缀解析必须用 ipaddress，不能 awk 取前 4 段（压缩写法会得到 :::/64）
+_hook46 = open(os.path.join(ROOT, "network", "dispatcher", "90-dert-lan-prefix"),
+               encoding="utf-8").read()
+# 必须查调用而不是 import：只 import 不调用同样会退回非法值（反向验证时踩到）
+if "ipaddress.ip_interface(" not in _hook46:
+    _p46_bad.append("前缀钩子没用 ipaddress.ip_interface 算网段（压缩地址会解析成非法值）")
+if "split(a[1], h" in _hook46:
+    _p46_bad.append("前缀钩子又回到 awk 取前 4 段")
+
+# ③ RT-07：ip-down 不能删掉 upstream.conf（v6 上游要靠它回退）
+_ipd46 = open(os.path.join(ROOT, "network", "ppp", "ip-down.d", "dert"),
+              encoding="utf-8").read()
+if "rm -f /run/dert-dns/upstream.conf" in _ipd46:
+    _p46_bad.append("ip-down 又整份删掉 upstream.conf（重拨后 IPv6 上游会丢）")
+
+# ④ RT-11：flow on/off 必须持锁（读改写 config.json）
+_dp46 = open(os.path.join(ROOT, "priv", "dert-priv"), encoding="utf-8").read()
+# 按「下一个分支标签」取边界，并剥掉注释行——注释里出现 ";;" 会把
+# 分支切碎，这个坑 gen_sudoers 也踩过（同一个原因）。
+_dp46_flow = _dp46.split("flow)")[1].split("\n  *)")[0]
+_dp46_flow = "\n".join(l for l in _dp46_flow.split("\n")
+                       if not l.strip().startswith("#"))
+if "acquire_lock" not in _dp46_flow:
+    _p46_bad.append("dert-priv 的 flow 分支没加锁（会和 config-set 交错写回旧值）")
+
+# ⑤ RT-06：服务重启失败必须上报，不能吞掉后报成功
+_ap46 = open(os.path.join(ROOT, "priv", "applyops.py"), encoding="utf-8").read()
+if "failed = run_actions(" not in _ap46:
+    _p46_bad.append("apply-all 又丢掉了 run_actions 的返回值（服务没起来也报成功）")
+if "APPLY_PARTIAL" not in _ap46:
+    _p46_bad.append("apply-all 没有 APPLY_PARTIAL 失败码（备份恢复不会回滚）")
+
+# ⑥ RT-03：失败路径必须先把防火墙装回去
+if _ap46.count("failsafe_nft()") < 3:
+    _p46_bad.append("失败分支没调用 failsafe_nft（开机失败时 WAN 入站会全开）")
+assert _p46_bad == [], "P3-46 回归：%s" % "；".join(_p46_bad)
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"

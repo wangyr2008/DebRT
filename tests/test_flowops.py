@@ -419,5 +419,39 @@ class TestFlowNftSync(FlowCase):
         self.assertTrue(self.present, "nft 链仍应建立")
 
 
+class TestFlowCfgSafety(FlowCase):
+    """读不到配置时绝不能「读改写」。
+
+    旧行为：read_cfg 异常 → 返回 {} → setdefault + write_cfg 把整份配置改写成
+    `{"debug": {...}}`，下一次收敛就生成不出任何东西——连带开机没有防火墙
+    （审计 RT-11 指出的就是这条链）。
+    """
+
+    def _break(self):
+        with open(self.cfgp, "w", encoding="utf-8") as f:
+            f.write("{ not json")
+
+    def test_read_cfg_raises(self):
+        self._break()
+        with self.assertRaises(Exception):
+            self.f.read_cfg()
+
+    def test_flow_enabled_false_not_raise(self):
+        self._break()
+        self.assertFalse(self.f.flow_enabled(), "只读接口不该因为配置坏了就报错")
+
+    def test_on_leaves_broken_config_untouched(self):
+        self._break()
+        self.assertEqual(self.f.main(["on"]), 1)
+        with open(self.cfgp, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{ not json", "坏配置必须原样保留，不能被覆盖")
+
+    def test_off_leaves_broken_config_untouched(self):
+        self._break()
+        self.assertEqual(self.f.main(["off"]), 1)
+        with open(self.cfgp, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{ not json")
+
+
 if __name__ == "__main__":
     unittest.main()

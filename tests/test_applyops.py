@@ -433,5 +433,123 @@ class DriftActions(unittest.TestCase):
                       "只改权限也算漂移（chap-secrets 从 600 变 644 就是明文密码）")
 
 
+class FailsafeNft(unittest.TestCase):
+    """生成/预检失败时必须保证「有 NAT、WAN 入站是关的」。
+
+    真机核对的结论：nft 规则不跨重启，install.sh 又禁用了 Debian 的
+    nftables.service，开机唯一加载 inet dert_base 的就是这条流水线。它在
+    svc_nft() 之前退出，设备就同时「上不了网」和「WAN 入站全开」——后者没人会想到。
+    """
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.calls = []
+        self.table = False
+
+    def tearDown(self):
+        self.s.close()
+
+    def _fake_sh(self, cmd, timeout=60, **kw):
+        self.calls.append(list(cmd))
+
+        class R:
+            def __init__(self, rc):
+                self.returncode = rc
+        if cmd[:3] == ["nft", "list", "table"]:
+            return R(0 if self.table else 1)
+        if cmd[:2] == ["nft", "-f"]:
+            self.table = True          # 假装加载成功
+            return R(0)
+        return R(0)
+
+    def test_noop_when_table_present(self):
+        self.table = True
+        self.s.a._sh = self._fake_sh
+        self.assertEqual(self.s.a.failsafe_nft(), "present")
+        self.assertFalse([c for c in self.calls if c[:2] == ["nft", "-f"]],
+                         "表还在就不该重装，避免把正在用的规则换成旧版本")
+
+    def test_restores_last_deployed_file(self):
+        nft = os.path.join(self.s.td, "etc/nftables.d/dert-base.nft")
+        os.makedirs(os.path.dirname(nft), exist_ok=True)
+        with open(nft, "w") as f:
+            f.write("table inet dert_base {}\n")
+        self.s.a._sh = self._fake_sh
+        self.assertEqual(self.s.a.failsafe_nft(), "deployed")
+        self.assertIn(["nft", "-f", nft], self.calls)
+
+    def test_minimal_when_no_file(self):
+        self.s.a._sh = self._fake_sh
+        self.assertEqual(self.s.a.failsafe_nft(), "minimal")
+        p = os.path.join(self.s.td, "run/dert/failsafe.nft")
+        with open(p, encoding="utf-8") as f:
+            body = f.read()
+        self.assertIn("jump wan_in", body)
+        self.assertIn("drop", body, "WAN 入站必须默认拒绝")
+        self.assertIn("masquerade", body, "必须有 NAT，否则 LAN 上不了网")
+        self.assertIn("flush table inet dert_base", body, "重载要幂等")
+
+    def test_minimal_excludes_tunnel_and_container_ifaces(self):
+        """配置读不出来时用通配排除，不能用「!= br-lan 就拦」——
+        那会把 tailscale0 / podman 的入站一起拦掉。"""
+        self.s.write_cfg({})           # 读得出但不是合法配置
+        self.s.a._sh = self._fake_sh
+        self.s.a.failsafe_nft()
+        with open(os.path.join(self.s.td, "run/dert/failsafe.nft"), encoding="utf-8") as f:
+            body = f.read()
+        for pat in ("tailscale*", "veth*", "podman*"):
+            self.assertIn(pat, body)
+
+    def test_apply_failure_triggers_failsafe(self):
+        """端到端：生成失败时确实调了兜底（不是只写在函数里）。"""
+        c = self.s.cfg()
+        c["wan"]["mode"] = "x"
+        self.s.write_cfg(c)
+        self.s.a._sh = self._fake_sh
+        with self.assertRaises(SystemExit):
+            self.s.a.apply_all(convergent=True)
+        self.assertTrue(any(c2[:2] == ["nft", "-f"] for c2 in self.calls),
+                        "生成失败后必须把防火墙装回去")
+
+
+class PartialFailure(unittest.TestCase):
+    """服务没起来就不能报成功。
+
+    备份恢复 / 恢复出厂都靠 apply-all 的退出码决定是否回滚。以前全量路径把
+    run_actions() 的返回值丢掉、wait_dnsmasq() 的结果也不看，于是「恢复了一份
+    网口名不匹配的备份」会提示「已恢复并生效」，而 networkd/dnsmasq 根本没起来，
+    设备直接失联（审计 RT-06）。
+    """
+
+    def setUp(self):
+        self.s = Sandbox()
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_restart_failure_is_not_success(self):
+        self.s.rc("systemctl", 1)
+        self.s.a.wait_dnsmasq = lambda n: True          # 别真等 15 秒
+        rc, out = run(self.s.a.apply_all)
+        self.assertEqual(rc, 1, "有服务没起来就不能返回 0")
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("code"), "APPLY_PARTIAL")
+        self.assertIn("networkd", out.get("message", ""))
+        self.assertTrue(os.path.exists(os.path.join(self.s.td, "run/dert/converge-failed")),
+                        "失败要落标记，概览页才显示得出来")
+
+    def test_dnsmasq_not_up_is_not_success(self):
+        self.s.a.wait_dnsmasq = lambda n: False
+        rc, out = run(self.s.a.apply_all)
+        self.assertEqual(rc, 1)
+        self.assertIn("dnsmasq", out.get("message", ""))
+
+    def test_all_good_reports_success(self):
+        rc, out = run(self.s.a.apply_all)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.get("ok"))
+        self.assertFalse(os.path.exists(os.path.join(self.s.td, "run/dert/converge-failed")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,8 +2,18 @@
 # pppd ip-down.d 钩子：会话结束，清掉会话起点（概览页不再显示旧会话时长）
 set -u
 rm -f /run/dert/ppp-session-start 2>/dev/null
-# 上游 DNS 也随之失效，交给下次拨号重建；保留旧文件会让 dnsmasq 指向已失效链路，删掉更干净
-rm -f /run/dert-dns/upstream.conf 2>/dev/null
+# 上游 DNS：只去掉 v4 行，**v6 行要留着**。
+# 70-dert-dns 的 P3-17 说明过：重拨时 routable 事件往往早于 DHCPv6 学到 DNS，
+# 所以那边刻意保留旧文件，让 v6 上游能回退到上一份有效值。整份删掉等于把那条
+# 修复作废——ip-up 想从旧文件 grep v6 会扑空，dispatcher 的回退也落空，
+# 面板「IPv6 DNS」跟着变空，要等下一次 ppp0 事件或 6 小时收敛才恢复（审计 RT-07）。
+# v4 则一定会被 ip-up 用 /etc/ppp/resolv.conf 重写，留着只是指向已失效的旧地址。
+CONF=/run/dert-dns/upstream.conf
+if [ -f "$CONF" ]; then
+    grep -v -E '^server=[0-9.]+$' "$CONF" > "$CONF.$$.tmp" 2>/dev/null \
+      && mv -f "$CONF.$$.tmp" "$CONF" 2>/dev/null \
+      || rm -f "$CONF.$$.tmp" 2>/dev/null
+fi
 systemctl is-active --quiet dnsmasq && pkill -HUP -x dnsmasq 2>/dev/null || true
 
 # 与 ip-up.d/dert 对称：0000usepeerdns 在 down 时也会改写 /etc/resolv.conf

@@ -461,6 +461,100 @@ def svc_restart_networkd():
     return r
 
 
+def _minimal_nft():
+    """内置最小防火墙：LAN 出网 + WAN 入站默认拒绝。
+
+    只在「生成/预检失败，且磁盘上连上一份生成物都没有」时用（首次安装就失败）。
+    配置读不出来时用通配排除法——不能用「!= br-lan 就拦」，那会把
+    tailscale0 / podman 的入站一起拦掉。
+    """
+    wan, br, net = [], "br-lan", None
+    try:
+        with open(CONFIG_JSON, encoding="utf-8") as f:
+            cfg = json.load(f)
+        wan = [p["name"] for p in cfg.get("ports", []) if p.get("wan")]
+        if cfg.get("wan", {}).get("mode") == "pppoe":
+            wan.append("ppp0")          # PPPoE 下真正的 WAN 承载口
+        lan = cfg.get("lan", {})
+        if lan.get("ip") and lan.get("mask"):
+            import ipaddress
+            net = str(ipaddress.IPv4Network("%s/%s" % (lan["ip"], lan["mask"]),
+                                            strict=False))
+    except Exception:
+        pass
+    if wan:
+        define = '  define WAN_IFS = { %s }\n' % ", ".join('"%s"' % w for w in wan)
+        match = "iifname $WAN_IFS"
+    else:
+        define = ""
+        match = ('iifname != { "lo", "br-lan", "tun*", "tailscale*",'
+                 ' "veth*", "podman*", "docker*" }')
+    nat = ("\n  chain srcnat {\n"
+           "    type nat hook postrouting priority srcnat; policy accept;\n"
+           "    ip saddr $LAN_NET oifname $WAN_IFS masquerade\n"
+           "  }\n") if (wan and net) else ""
+    lan_def = '  define LAN_NET = %s\n' % net if net else ""
+    return (
+        "#!/usr/sbin/nft -f\n"
+        "# DebRT 兜底防火墙：生成/预检失败且没有可用的上一份生成物时临时加载\n"
+        "table inet dert_base\n"
+        "flush table inet dert_base\n\n"
+        "table inet dert_base {\n"
+        "%s  define LAN_BR = \"%s\"\n%s\n"
+        "  chain input {\n"
+        "    type filter hook input priority filter; policy accept;\n"
+        "    ct state established,related accept\n"
+        "    %s jump wan_in\n"
+        "  }\n\n"
+        "  chain wan_in {\n"
+        "    ct state invalid drop\n"
+        "    ip protocol icmp accept\n"
+        "    meta l4proto ipv6-icmp accept\n"
+        "    udp dport 68 accept\n"
+        "    meta nfproto ipv6 udp dport 546 accept\n"
+        "    drop\n"
+        "    return\n"
+        "  }\n%s}\n" % (define, br, lan_def, match, nat))
+
+
+def failsafe_nft():
+    """保证「有 NAT、WAN 入站是关的」——失败路径上唯一必须做到的事。
+
+    为什么必须做：nft 规则不跨重启，install.sh 又禁用了 Debian 的
+    nftables.service，开机时唯一加载 inet dert_base 的地方就是这条流水线。
+    它在 svc_nft() 之前退出的话，设备会同时「没有 masquerade（LAN 上不了网）」
+    和「没有 wan_in drop（WAN 入站全开）」——比正常工作时更危险，而用户只会
+    以为「网坏了」，不会想到面板和 SSH 正暴露在上游网络里。
+
+    顺序：表还在就不动 → 否则装磁盘上那份（上一次成功部署的，当时过了预检）
+    → 再没有就用内置最小规则。返回实际走到的分支，便于排查。
+    """
+    r = _sh(["nft", "list", "table"] + NFT_TABLE.split(), timeout=30)
+    if r is not None and r.returncode == 0:
+        return "present"
+    nft = _fs("/etc/nftables.d/dert-base.nft")
+    if os.path.isfile(nft):
+        svc_nft()
+        r = _sh(["nft", "list", "table"] + NFT_TABLE.split(), timeout=30)
+        if r is not None and r.returncode == 0:
+            _log("nft_failsafe", source="deployed")
+            return "deployed"
+    body = _minimal_nft()
+    p = os.path.join(RUN, "failsafe.nft")
+    try:
+        os.makedirs(RUN, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(body)
+        _sh(["nft", "-f", p], timeout=30)
+    except OSError:
+        _log("nft_failsafe", source="write_failed")
+        return "none"
+    r = _sh(["nft", "list", "table"] + NFT_TABLE.split(), timeout=30)
+    ok = r is not None and r.returncode == 0
+    _log("nft_failsafe", source="minimal" if ok else "minimal_failed")
+    return "minimal" if ok else "none"
+
+
 def svc_nft():
     """重载 nft 表 + 补 WAN 地址。nft 失败不能被后面的 wan-addr-sync 掩盖（R-02）。"""
     rc = 0
@@ -598,6 +692,7 @@ def apply_all(convergent=False):
                 if not ok2:
                     sys.stdout.write(out2)
                     mark_converge_failed()
+                    failsafe_nft()
                     shutil.rmtree(stage, ignore_errors=True)
                     die("CONFIG_CORRUPT", "自动迁移后仍无法生成配置",
                         "请按上方错误信息在管理页面修正" +
@@ -605,6 +700,7 @@ def apply_all(convergent=False):
         if not migrated:
             sys.stdout.write(out)  # 透传 netgen 的可操作错误（复审 R-03）
             mark_converge_failed()
+            failsafe_nft()
             shutil.rmtree(stage, ignore_errors=True)
             die("CONFIG_CORRUPT", "配置生成失败",
                 "请按上方错误信息在管理页面修正；或从 /var/lib/dert/lastgood 恢复上一份可用配置" +
@@ -638,6 +734,7 @@ def apply_all(convergent=False):
     good, pf_out = preflight(stage)
     if not good:
         mark_converge_failed()
+        failsafe_nft()
         shutil.rmtree(stage, ignore_errors=True)
         # 透传预检的具体原因（nft -c / dnsmasq --test 的报错行）
         if pf_out:
@@ -650,12 +747,21 @@ def apply_all(convergent=False):
     cleanup_stale(man)
     cleanup_ifupdown()
     shutil.rmtree(stage, ignore_errors=True)
-    run_actions(actions_for(drift))
-    wait_dnsmasq(15)
+    failed = run_actions(actions_for(drift))
+    if not wait_dnsmasq(15):
+        failed.append("dnsmasq")
     sync_dns_upstream()
     maintain_singbox_dropin()
     ensure_own_units()
     retire_old_prefixes()
+    # 服务没起来就不能报成功：备份恢复/恢复出厂都靠这条流水线的退出码决定
+    # 是否回滚。以前这里把 run_actions 的返回值丢掉、wait_dnsmasq 的结果也不看，
+    # 于是「恢复了一份网口名不匹配的备份」会提示「已恢复并生效」，设备直接失联。
+    if failed:
+        mark_converge_failed()
+        die("APPLY_PARTIAL", "部分服务未能启动：%s" % ",".join(failed),
+            "journalctl -u systemd-networkd -u dnsmasq -n 50 查看原因；"
+            "若刚恢复了备份，请换一份与本机网口匹配的备份重试")
     clear_converge_failed()
     ok_out(message="已按配置完成系统收敛" + ("。" + migrated if migrated else ""))
 

@@ -42,6 +42,40 @@ class Retire(unittest.TestCase):
             for ts, p in items:
                 f.write("%d %s\n" % (ts, p))
 
+    def test_no_current_prefix_skips_everything(self):
+        """读不到当前前缀时必须什么都不做。
+
+        真机 2026-11-22：开机时 apply-all 跑在 PD 下发之前，current_prefix()
+        为空 → 旧逻辑 `items = [p for p in seen if p != ""]` 把 seen 里 2 小时内
+        的前缀全登记为废弃，其中就包括上次开机正在用的那个 → 转发链
+        `ip6 saddr @retired_v6 reject` 打断 LAN 的 IPv6，要等 15 分钟后的
+        收敛才恢复（converge.timer 的 OnBootSec=15min）。
+        """
+        now = int(time.time())
+        self.write_seen([(now, "2409:8a5e:a57:6061::/64"),
+                         (now - 600, "2409:8a5e:a54:7ee1::/64")])
+        out = self.run_retire("")
+        self.assertEqual(out["skipped"], "no_current_prefix")
+        self.assertEqual(out["retired"], [], "不知道当前是谁，就一个都别废弃")
+        if os.path.exists(self.dropin):
+            self.assertNotIn("Prefix=", self.dropin_text())
+
+    def test_multiple_current_prefixes_are_all_kept(self):
+        """br-lan 换前缀的瞬间会同时有两个全局地址，两个都是"当前"。"""
+        out = self.run_retire("2409:8a5e:a57:6061::/64 2409:8a5e:a57:6062::/64",
+                              "2409:8a5e:a54:7ee1::/64")
+        self.assertEqual(out["retired"], ["2409:8a5e:a54:7ee1::/64"])
+        body = self.dropin_text()
+        self.assertIn("Prefix=2409:8a5e:a54:7ee1::/64", body)
+        self.assertNotIn("6061", body)
+        self.assertNotIn("6062", body)
+
+    def test_previous_current_stops_being_retired(self):
+        """A 先当当前、再变成「A B」：A 不能被顺手废弃。"""
+        self.run_retire("2409:8a5e:a57:6061::/64")
+        out = self.run_retire("2409:8a5e:a57:6061::/64 2409:8a5e:a57:6062::/64")
+        self.assertEqual(out["retired"], [])
+
     def test_retires_old_prefix_with_zero_lifetime(self):
         out = self.run_retire("2409:8a5e:a57:8570::/64", "2409:8a5e:a56:a2f1::/64")
         self.assertTrue(out["changed"])

@@ -58,7 +58,10 @@ def subcommands(path=PRIV):
     m = re.search(r'case "\$CMD" in(.*?)\nesac', text, re.S)
     if not m:
         raise SystemExit("找不到分发表（case \"$CMD\" in）")
-    body = m.group(1)
+    # 先按行剥掉整行注释再切分：注释里出现 ";;"（解释分发表写法时很自然）
+    # 会把分支切碎，报出「无法识别的分支」这种莫名其妙的错（2026-11-22 踩到）。
+    body = "\n".join(l for l in m.group(1).split("\n")
+                     if not l.strip().startswith("#"))
     out = []
     for chunk in body.split(";;"):
         if not chunk.strip():

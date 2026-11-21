@@ -90,16 +90,26 @@ def log_event(event, **fields):
 # 配置读写（原子）
 # ---------------------------------------------------------------------------
 def read_cfg():
-    try:
-        with open(CFG, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    """读 config.json；**读不出来就抛**，不返回空字典。
+
+    以前异常时返回 {}，而 on/off 紧接着 `cfg.setdefault("debug",{})["flow"]=True`
+    再 write_cfg —— 等于把整份配置改写成「只有 debug 段」，下一次收敛就生成不出
+    任何东西（连带开机没有防火墙）。读失败必须让调用方停下来。
+    """
+    with open(CFG, encoding="utf-8") as f:
+        d = json.load(f)
+    if not isinstance(d, dict) or not d:
+        raise ValueError("config.json 内容不是有效对象")
+    return d
 
 
 def flow_enabled(cfg=None):
-    cfg = read_cfg() if cfg is None else cfg
+    """读不出配置时按「关」处理——status/show 是只读接口，不该因为
+    配置损坏就整个报错（面板会因此显示不出开关状态）。"""
+    try:
+        cfg = read_cfg() if cfg is None else cfg
+    except Exception:
+        return False
     # 只认布尔 True：写 "on"/"1" 这类真值会被 schema_check 拦下，
     # 这里也保持一致，避免「以为关了其实开着」
     return (cfg.get("debug") or {}).get("flow") is True
@@ -393,8 +403,17 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     action = argv[0] if argv else "status"
 
+    if action in ("on", "off"):
+        # 读失败必须停手：后面是「读改写」，读不到就写会清空整份配置
+        try:
+            cfg = read_cfg()
+        except Exception as e:
+            print(json.dumps({"ok": False, "code": "CONFIG_UNREADABLE",
+                              "message": "读取 config.json 失败，未做任何修改",
+                              "hint": str(e)[:120]}, ensure_ascii=False))
+            return 1
+
     if action == "on":
-        cfg = read_cfg()
         cfg.setdefault("debug", {})["flow"] = True
         write_cfg(cfg)
         synced, _serr = sync_nft_file()   # 盘上的生成物必须跟着变，否则下次收敛判漂移
@@ -411,7 +430,6 @@ def main(argv=None):
         return 0
 
     if action == "off":
-        cfg = read_cfg()
         cfg.setdefault("debug", {})["flow"] = False
         write_cfg(cfg)
         synced, _serr = sync_nft_file()   # 同上：不同步就会在 6 小时收敛时打断宽带

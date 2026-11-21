@@ -76,6 +76,12 @@ case "$CMD" in
   # 参数原样透传：on / off / status / show [分钟] [--no-dns]
   # 读内核日志需要 root，所以整个子命令都要求 root，不做「show 免 root」的分裂。
   flow)             require_root
+                    # on/off 会「读改写」config.json：不持锁就会和 config-set
+                    # （最长要等 45 秒以上）交错，把刚保存的配置写回旧值。
+                    # status/show 只读，不加锁。
+                    # 用 if 而不是嵌套 case：分发表由 gen_sudoers 解析，
+                    # 多一个分支结束符会把该分支切碎（守卫 P3-36 会报错）。
+                    if [ "${1:-}" = on ] || [ "${1:-}" = off ]; then acquire_lock; fi
                     exec python3 "${PRIV_DIR}/flowops.py" "$@" ;;
 
   *)                die "USAGE" "未知子命令：${CMD:-（空）}" "合法子命令见安装文档" ;;

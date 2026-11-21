@@ -47,12 +47,26 @@ PYEOF
 exec 9>"$RUNDIR/lan-prefix.lock"
 flock -n 9 2>/dev/null || exit 0
 
-# br-lan 当前全局 v6 前缀，统一成 x:x:x:x::/64，便于与路由表条目直接比对
+# br-lan 当前全局 v6 前缀，统一成 x:x:x:x::/64，便于与路由表条目直接比对。
+# 输出可能是**多个**前缀（换前缀的瞬间 br-lan 会同时有两个全局地址），
+# 用空格连接——prefix-retire.py 按集合处理 argv[1]，dns-split-sync 写基线
+# 用的是同一套算法。
 lan_prefix() {
-    ip -6 addr show dev br-lan scope global 2>/dev/null \
-      | awk '$1 == "inet6" { split($2, a, "/"); if (split(a[1], h, ":") >= 4)
-                               printf "%s:%s:%s:%s::/64\n", h[1], h[2], h[3], h[4] }' \
-      | sort -u | tr '\n' ' ' | sed 's/ *$//'
+    ip -6 addr show dev br-lan scope global 2>/dev/null | python3 -c '
+import sys, ipaddress
+# 必须用 ipaddress 算网段：awk「取前 4 段」在压缩写法下会得到
+# fda1:9e3a:8b7f:::/64 这种非法值（第 4 段是空串），与 dns-split-sync 写的
+# 基线永远对不上 → 被判成「前缀变了」→ 把正在用的前缀登记为废弃 →
+# 转发链 reject 打断 LAN 的 IPv6，还会反复重启 sing-box（审计 RT-01）。
+out = set()
+for line in sys.stdin:
+    p = line.split()
+    if len(p) > 1 and p[0] == "inet6":
+        try:
+            out.add(str(ipaddress.ip_interface(p[1].split("/")[0] + "/64").network))
+        except ValueError:
+            pass
+print(" ".join(sorted(out)))'
 }
 
 # v0.1.66 移除了「首次记录时比对配置里的 v6 前缀」那段逻辑。
@@ -100,6 +114,13 @@ if [ -z "$OLD" ]; then
     # dns-split-sync 每次都按当时的 br-lan 地址重算，调它即可；它自己会判 sing-box
     # 是否在跑（没跑就直接退出），并发调也安全（nft -f 原子加载）。
     /usr/local/lib/dert/dns-split-sync 2>/dev/null || true
+    # 自愈：把当前前缀从「已废弃」集合里移出来。
+    # 开机时 apply-all 跑在 PD 下发之前，那一刻 prefix-retire 读不到前缀，
+    # 旧版会把「正在用的那个」也登记为废弃（转发链 reject 直接打断 LAN 的
+    # IPv6）。PD 到手后本钩子第一次跑就是最早的修复时机——比等 15 分钟后的
+    # 定时收敛快得多。$NEW 可能含多个前缀，加引号整体传给 prefix-retire
+    # （它按集合处理 argv[1]）。
+    python3 /usr/local/lib/dert/prefix-retire.py "$NEW" 2>/dev/null || true
     exit 0
 fi
 [ "$OLD" = "$NEW" ] && exit 0

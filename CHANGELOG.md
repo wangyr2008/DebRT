@@ -7,6 +7,66 @@
 
 ## [Unreleased]
 
+## [0.1.128] - 2026-11-22
+
+> 第三方静态审计（21 条）里确认的 6 条：2 条高、4 条中。全部是「不报错、只悄悄
+> 降级」的类型——读不到前缀就把在用的登记为废弃、服务没起来还报成功。
+
+### Fixed
+
+- **RT-02（高）读不到当前前缀时，把正在用的前缀登记为废弃**。
+  开机时 `dert-apply` 只排在 `systemd-networkd` 之后，不等 PPPoE 也不等 PD，
+  此刻 `current_prefix()` 为空；旧代码 `items = [p for p in seen if p != new]`
+  于是把 `seen-prefixes` 里 2 小时内的**所有**前缀都登记为废弃，包括上次开机
+  正在用的那个 → 转发链 `ip6 saddr @retired_v6 reject` 直接打断 LAN 的 IPv6，
+  要等 `converge.timer` 的 `OnBootSec=15min` 才恢复。
+  现在 `new` 为空直接 `{"skipped": "no_current_prefix"}` 返回；并在
+  `90-dert-lan-prefix` 的「基线为空」分支补一次带参数的调用，PD 一到就自愈。
+  顺带让 `prefix-retire.py` 把 `argv[1]` 当**集合**处理——换前缀的瞬间 br-lan
+  会同时有两个全局地址，旧代码按单个字符串比，两个都会被废弃。
+
+- **RT-03（高）开机收敛失败时 nft 表完全不加载**：没有 masquerade（LAN 上不了网），
+  也没有 `wan_in drop`（WAN 上的面板 80、SSH、53 全暴露给上游）。
+  新增 `failsafe_nft()`，在三个失败分支的 `die()` 之前调用：表还在就不动 →
+  否则装磁盘上那份（上次成功部署的，当时过了预检）→ 再没有就写一份内置最小规则
+  （LAN 出网 + WAN 入站默认拒绝，配置读不出来时用通配排除法，避免把
+  tailscale0 / podman 的入站一起拦掉）。
+
+- **RT-06（中）服务没起来也报成功**：全量路径把 `run_actions()` 的返回值丢掉、
+  `wait_dnsmasq()` 的结果也不看，然后照常 `clear_converge_failed()` + `ok_out`。
+  备份恢复和恢复出厂都靠这条流水线的退出码决定是否回滚，所以永远不会回滚——
+  「恢复了一份网口名不匹配的备份」会提示「已恢复并生效」，设备直接失联。
+  现在失败项汇总后 `mark_converge_failed()` + `die("APPLY_PARTIAL")`。
+
+- **RT-07（中）ip-down 整份删掉 upstream.conf**，把 P3-17 的 v6 回退机制作废：
+  重拨后 ip-up 从旧文件 grep v6 会扑空，dispatcher 的回退也落空，面板
+  「IPv6 DNS」变空。现在只删 v4 行，v6 留给回拨回退。
+
+- **RT-11（低）调试模式开关不持锁**，会与 `config-set`（最长等 45 秒）交错，
+  把刚保存的配置写回旧值。更糟的是 `read_cfg()` 异常时返回 `{}`，`on/off` 紧接着
+  写回一份「只有 debug 段」的配置——结合 RT-03 就是开机没有防火墙。
+  现在 `flow on|off` 持 `apply.lock`；`read_cfg()` 读不出来直接抛，
+  `on/off` 捕获后返回 `CONFIG_UNREADABLE` 且**不写任何东西**；
+  `flow_enabled()` 这类只读接口仍按「关」处理，不因坏配置报错。
+
+- **RT-01（高，本机不触发）前缀钩子解析压缩写法的 IPv6 出错**：
+  `awk` 取前 4 段在 `fda1:9e3a:8b7f::1` 上会得到 `fda1:9e3a:8b7f:::/64`（非法值），
+  与 `dns-split-sync` 写的基线永远对不上 → 判成「前缀变了」→ 废弃正在用的前缀
+  + 反复重启 sing-box。改用 `ipaddress` 算网段，并让 `dns-split-sync` 写基线时
+  用**同一套算法**（两处各算一套，在 br-lan 有两个前缀时也会互相判成「变了」）。
+
+### Notes
+
+- 本机实测：IPv6 是 native/PD，br-lan 地址是 EUI-64（4 段非空），所以 RT-01 的
+  错误值从未产生（`NRestarts=0`、`retired_v6` 为空）；RT-02 的条件（重启前 2 小时内
+  有过收敛）也还没凑齐。两条都是「潜在但一旦触发就很难查」。
+- `gen_sudoers.py` 的分发表解析器加固：先按行剥掉注释再切分。注释里出现 `;;`
+  会把分支切碎，报「无法识别的分支」这种看不出因果的错（这次真踩到了，
+  守卫自己也踩了一次）。
+- 新增 `FailsafeNft`(5)、`PartialFailure`(3)、`prefix-retire`(+3)、
+  `TestFlowCfgSafety`(4) 共 15 个用例；守卫 P3-46 覆盖上述 6 条，
+  六处破坏逐条反向验证变红。全量 415 用例绿。
+
 ## [0.1.127] - 2026-11-22
 
 > 换上新 logo（吉祥物 d + ebrt 字标），替换 Seedrou 时期的种子图案。

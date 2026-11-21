@@ -160,12 +160,30 @@ def reload_networkd():
                    capture_output=True)
 
 
+def _split_set(s):
+    """把「前缀集合」拆成列表。钩子传进来的是空格连接的多个前缀
+    （br-lan 换前缀的瞬间会同时有两个全局地址）。"""
+    return [p for p in (s or "").replace(",", " ").split() if p]
+
+
 def main(argv):
     # 不带参数时自动探测 br-lan 当前前缀——apply-all 每次收敛都调它，
     # 用来兜住"事件漏收"的换前缀。
-    new = argv[1].strip() if len(argv) > 1 else current_prefix()
+    raw = argv[1].strip() if len(argv) > 1 else current_prefix()
     olds = [a.strip() for a in argv[2:] if a.strip()]
     now = int(time.time())
+
+    cur = _split_set(raw)
+    if not cur:
+        # 读不到当前前缀（开机早于 PD 下发 / 重拨中 / v6 关闭）：**无法区分新旧**。
+        # 旧版会把 seen 里 2 小时内的所有前缀都登记为废弃，其中就包括上次开机
+        # 正在用的那个 → 转发链 `ip6 saddr @retired_v6 reject` 直接打断 LAN 的
+        # IPv6，要等下一次收敛才恢复（真机：开机后 15 分钟）。宁可什么都不做。
+        print(json.dumps({"ok": True, "skipped": "no_current_prefix",
+                          "current": "", "retired": [], "changed": False},
+                         ensure_ascii=False))
+        return 0
+    curs = set(cur)
 
     seen = [(ts, p) for ts, p in load_seen() if now - ts < TTL]
     # 迁移：v0.1.107 只有 retired-prefixes，升级后不能把已有的撤销记录丢掉
@@ -173,17 +191,17 @@ def main(argv):
     for ts, p in load():
         if now - ts < TTL and p not in {x for _t, x in seen}:
             seen.append((ts, p))
-    if new:
-        seen = [(ts, p) for ts, p in seen if p != new] + [(now, new)]
+    # 当前前缀（可能多个）刷新时间戳；同一前缀只留一条
+    seen = [(ts, p) for ts, p in seen if p not in curs] + [(now, p) for p in cur]
     for p in olds:
-        if p and p != new and p not in {x for _t, x in seen}:
+        if p and p not in curs and p not in {x for _t, x in seen}:
             seen.append((now, p))
     seen = seen[-32:]
     save_seen(seen)
 
     # 非当前的前缀全部登记为「已废弃」；当前前缀绝不能出现在这里，
     # 否则客户端会把正在用的地址停掉。
-    items = [(ts, p) for ts, p in seen if p != new][-MAX:]
+    items = [(ts, p) for ts, p in seen if p not in curs][-MAX:]
 
     save(items)
     sync_nft([p for _ts, p in items])
@@ -198,7 +216,7 @@ def main(argv):
         os.replace(tmp, DROPIN)
         reload_networkd()
 
-    print(json.dumps({"ok": True, "current": new,
+    print(json.dumps({"ok": True, "current": " ".join(cur),
                       "retired": [p for _ts, p in items],
                       "changed": changed}, ensure_ascii=False))
     return 0

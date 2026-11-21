@@ -117,19 +117,23 @@ LAN6=$(lan6_pick dynamic)
 #   被误判成"首次记录"→ 只写记录就退出 → 既不 prepare 也不重启 sing-box →
 #   00-dert-dns.json 停在旧前缀（真机 2026-11-11 重启复现：cidr 只剩 v4，
 #   非白名单设备的 AAAA 落到 fakeip → v6 黑洞）。
-#   此处 br-lan 的前缀正是 dns-split-prepare 生成 00-dert-dns.json 时用的那个前缀，
-#   语义上就是"本次 sing-box 启动所用的前缀"，作为基线最准确。
+#   基线取「br-lan 当前全部全局前缀」的集合，与钩子的 lan_prefix() **逐字同构**。
+#   以前两边各算一套（这里从 LAN6 单个地址推、那边 awk 取前 4 段），结果是：
+#     · 压缩写法的地址在钩子那边变成 fda1:9e3a:8b7f:::/64（非法值），永远对不上；
+#     · br-lan 同时有两个全局前缀时，两边集合大小不同，也会互相判成"变了"。
+#   两种都会导致「前缀变了」→ 废弃正在用的前缀 + 反复重启 sing-box（审计 RT-01）。
 if [ -n "$LAN6" ] && [ "$LAN6" != "::1" ]; then
-    PREFIX6=$(printf '%s' "$LAN6" | python3 -c '
+    PREFIX6=$(ip -6 addr show dev br-lan scope global 2>/dev/null | python3 -c '
 import sys, ipaddress
-s = sys.stdin.read().strip()
-if s:
-    try:
-        net = ipaddress.ip_interface(s + "/64").network
-        if net.prefixlen == 64:
-            print(net)      # 必须带 /64：裸地址不能与钩子的 lan_prefix() 输出比对
-    except Exception:
-        pass
+out = set()
+for line in sys.stdin:
+    p = line.split()
+    if len(p) > 1 and p[0] == "inet6":
+        try:
+            out.add(str(ipaddress.ip_interface(p[1].split("/")[0] + "/64").network))
+        except ValueError:
+            pass
+print(" ".join(sorted(out)))
 ' 2>/dev/null)
     if [ -n "$PREFIX6" ]; then
         mkdir -p "${FSROOT}/run/dert" 2>/dev/null
