@@ -240,7 +240,17 @@ def gen_lan_network(cfg):
              "[Match]", "Name=br-lan", "",
              "[Network]",
              f"Address={cfg['lan']['ip']}/{net.prefixlen}",
-             "IPForward=yes"]
+             # systemd 256 起 IPForward= 已弃用（每次加载都打一条警告），
+             # 拆成两个明确的键，语义不变（审计 RT-21）。
+             "IPv4Forwarding=yes",
+             "IPv6Forwarding=yes",
+             # 只插 WAN 线开机、或唯一的 AP 重启时，br-lan 会短暂没有载波。
+             # 默认行为是「没载波就不配置 / 掉载波就撤掉地址」——那期间 dnsmasq
+             # 没有可监听的 LAN 地址，dns-split-prepare 读不到 LAN IP 会回退成
+             # 写死的 192.168.10.1（改过 LAN IP 就写错了），netwatch 与前缀钩子
+             # 也会随着地址来回增删被频繁触发（审计 RT-13）。
+             "ConfigureWithoutCarrier=yes",
+             "IgnoreCarrierLoss=yes"]
     # 让 br-lan 的 v6 MTU 与 ppp0 对齐（1480）。注意：systemd-networkd **不会**
     # 把 IPv6MTUBytes 写进 RA 的 MTU 选项（真机抓包验证：RA 长度 80 字节，
     # 有选项时会变成 88），所以它只影响本机转发与 PTB 里报的 MTU，不影响客户端
@@ -325,6 +335,22 @@ def gen_port_networks(cfg):
     return out
 
 
+def dhcp_hostname(name):
+    """设备名 → dnsmasq 能接受的主机名。
+
+    真机实测（dnsmasq 2.91，未编译 IDN）：`PC-1` / `My-PC` / `PC_1` / `PC.1` 通过，
+    带空格的 `My PC` 和中文 `我的电脑` 都被拒（`bad DHCP host name`），
+    而校验层允许这两类名字 → 保存时报「DHCP/DNS 配置校验未通过」，用户无从下手。
+
+    名字只用于显示，所以这里把非法字符折叠成 `-`；折叠后为空就不写主机名——
+    MAC→IP 的绑定照常生效，只是没有 .lan 名字（审计 RT-15）。
+    """
+    h = re.sub(r"[^A-Za-z0-9._-]+", "-", (name or "").strip())
+    h = h.strip("-.")[:63]
+    # 全是数字/符号的残留（"客厅 电视 2" → "2"）没有意义，当作没有主机名
+    return h if re.search(r"[A-Za-z]", h) else ""
+
+
 def gen_dnsmasq(cfg):
     net = lan_net(cfg)
     lan_ip = cfg["lan"]["ip"]
@@ -362,7 +388,8 @@ def gen_dnsmasq(cfg):
         dns = [d for d in (dh.get("dns1"), dh.get("dns2")) if d] or [lan_ip]
         lines.append("dhcp-option=option:dns-server," + ",".join(dns))
     for s in cfg.get("static", []):
-        lines.append(f"dhcp-host={s['mac']},{s['ip']},{s['name']}")
+        h = dhcp_hostname(s.get("name") or "")
+        lines.append("dhcp-host=%s,%s%s" % (s["mac"], s["ip"], ("," + h) if h else ""))
     if not v6.get("enabled"):
         # IPv6 关闭时过滤 AAAA：上游可能返回 AAAA，但本机无 v6 路由只会让客户端
         # 拿着不可达的 v6 地址连接失败（真机首装实测， China Mobile 上游带 v6 DNS）

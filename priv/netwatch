@@ -38,6 +38,7 @@ PREFIX_HOOK=/etc/networkd-dispatcher/routable.d/90-dert-lan-prefix
 SYNC=/usr/local/lib/dert/dns-split-sync
 WATCHDOG=/usr/local/lib/dert/pppoe-watchdog
 MISS_FLAG=/run/dert/pppoe-watchdog-miss
+ADDR_SYNC=/usr/local/lib/dert/wan-addr-sync
 
 log_event() { local e="$1"; shift; logger -t dert-netwatch "event=$e $*" 2>/dev/null || true; }
 
@@ -81,7 +82,13 @@ reconcile() {
         "$SYNC" >/dev/null 2>&1 || true
     fi
 
-    # ③ ppp0 消失 → 立刻交给看门狗，并安排一次 180s 后的有界复查。
+    # ③ WAN 地址变了就刷新 wan_v4 集合。
+    #    DHCP 续约换了 IP 时接口状态一直是 routable，dispatcher 不会再触发钩子，
+    #    集合就停在旧地址——hairpin 访问自己的端口转发会失败（审计 RT-12）。
+    #    脚本是幂等的：地址没变就不动集合。
+    [ -x "$ADDR_SYNC" ] && "$ADDR_SYNC" >/dev/null 2>&1 || true
+
+    # ④ ppp0 消失 → 立刻交给看门狗，并安排一次 180s 后的有界复查。
     #    pppd 的 persist 对"接口被外部删除"不敏感：服务仍 active、进程还在，
     #    但会话没了，既不自愈也不报错（2026-11-05 真机实录）。
     #    netlink 对 link 消失是能立刻收到的，所以快速路径不再依赖每分钟轮询。
@@ -94,7 +101,11 @@ reconcile() {
         if [ ! -f "$MISS_FLAG" ]; then
             log_event ppp0_missing action=mark recheck_after_s=180
             "$WATCHDOG" >/dev/null 2>&1 || true
-            systemd-run --on-active=180s --collect "$WATCHDOG" >/dev/null 2>&1 || true
+            # 固定单元名：同名单元已存在时 systemd-run 直接失败，天然去重。
+            # 以前不带 --unit，拔掉 WAN 线期间每收到一条 netlink 事件就多一个
+            # 180s 的临时定时器，越积越多（审计 RT-20）。
+            systemd-run --unit=dert-pppoe-recheck --on-active=180s --collect \
+                "$WATCHDOG" >/dev/null 2>&1 || true
         fi
     fi
 }

@@ -32,6 +32,11 @@ ip link set ifb0 up 2>/dev/null || true
 # 关闭 QoS 后旧口仍被旧速率限着而面板显示"已关闭"（真机 2026-11-06 实录）
 CLEAN_DEVS="$(python3 -c 'import json;c=json.load(open("/etc/dert/config.json"));print(" ".join([p["name"] for p in c.get("ports",[])]+["ppp0","ifb0"]))' 2>/dev/null || echo "ifb0")"
 for d in $CLEAN_DEVS; do
+  # 当前 WAN 与 ifb0 不在这里删：下面用 replace 覆盖。删了会出现一段
+  # 「完全没有整形」的窗口，而这次调用本来就只是为了刷新参数（审计 RT-19）。
+  if [ "$ENABLED" = "on" ] && { [ "$d" = "$WAN_DEV" ] || [ "$d" = "ifb0" ]; }; then
+    continue
+  fi
   tc qdisc del dev "$d" root 2>/dev/null || true
   tc qdisc del dev "$d" ingress 2>/dev/null || true
 done
@@ -57,7 +62,9 @@ if [ "$WAN_DEV" = "ppp0" ]; then OH="overhead 8"; else OH=""; fi
 tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort nat $OH 2>/dev/null \
   || tc qdisc replace dev "$WAN_DEV" root cake bandwidth "${UP}mbit" besteffort $OH 2>/dev/null || true
 # 入向：把 WAN 收到的包镜像到 ifb0，在 ifb0 上做 ingress cake（上方清扫已删，这里重建）
-tc qdisc add dev "$WAN_DEV" handle ffff: ingress 2>/dev/null || true
+# 不先删：已存在时 add 会失败，退回 replace（同样达到"确保存在"的目的）
+tc qdisc add dev "$WAN_DEV" handle ffff: ingress 2>/dev/null \
+  || tc qdisc replace dev "$WAN_DEV" handle ffff: ingress 2>/dev/null || true
 tc filter del dev "$WAN_DEV" parent ffff: 2>/dev/null || true
 tc filter add dev "$WAN_DEV" parent ffff: protocol all u32 match u32 0 0 action mirred egress redirect dev ifb0 2>/dev/null || true
 # shellcheck disable=SC2086

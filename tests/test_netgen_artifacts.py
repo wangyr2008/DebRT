@@ -66,8 +66,22 @@ class TestLANNetwork(unittest.TestCase):
 
     def test_forwarding_on(self):
         body = self.ng.gen_lan_network(support.pppoe_config())
-        self.assertIn("IPForward=yes", body)
+        # RT-21：IPForward= 在 systemd 256 起弃用（每次加载打警告），拆成两个键
+        self.assertNotIn("IPForward=", body)
+        self.assertIn("IPv4Forwarding=yes", body)
+        self.assertIn("IPv6Forwarding=yes", body)
         self.assertIn("Address=192.168.10.1/24", body)
+
+    def test_survives_carrier_loss(self):
+        """RT-13：LAN 口全都没载波时不能把地址撤掉。
+
+        只插 WAN 线开机、或唯一的 AP 重启时，br-lan 会短暂无载波。默认行为是
+        撤掉地址——那期间 dnsmasq 没有可监听的 LAN 地址，dns-split-prepare
+        读不到 LAN IP 会回退成写死的 192.168.10.1（改过 LAN IP 就写错）。
+        """
+        body = self.ng.gen_lan_network(support.pppoe_config())
+        self.assertIn("ConfigureWithoutCarrier=yes", body)
+        self.assertIn("IgnoreCarrierLoss=yes", body)
 
     def test_ipv6_on(self):
         body = self.ng.gen_lan_network(support.pppoe_config())

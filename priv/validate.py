@@ -236,6 +236,15 @@ def norm_lan(section, data, cur=None):
          f"{ip} 在 {_net} 中是网络/广播地址；请改用网段内的普通主机地址（如 .1）")
     need(ipaddress.IPv4Address(ip).is_private, "LAN_IP_PUBLIC",
          "LAN IP 不能使用公网地址", f"{ip} 属于公网段；请使用 192.168.x.x / 10.x.x.x / 172.16–31.x.x 等私网地址")
+    # 审计 RT-17：Python 的 is_private 对 127/8 与 169.254/16 也返回 True，
+    # 于是 127.0.0.1、169.254.1.1 都能保存成功——保存后整机不可达，
+    # 而面板只提示「请用新 IP 重新登录」。
+    _addr = ipaddress.IPv4Address(ip)
+    need(not (_addr.is_loopback or _addr.is_link_local or _addr.is_multicast
+              or _addr.is_unspecified), "LAN_IP_BAD",
+         f"LAN IP {ip} 不可用",
+         "127.x（回环）、169.254.x（链路本地）、组播与 0.0.0.0 都不能作为局域网地址；"
+         "请使用 192.168.x.x / 10.x.x.x / 172.16–31.x.x")
     if cur and isinstance(cur.get("dhcp"), dict) and cur["dhcp"].get("enabled"):
         ps, pe = cur["dhcp"].get("pool_start"), cur["dhcp"].get("pool_end")
         if isinstance(ps, int) and isinstance(pe, int) and ps <= int(ip.rsplit(".", 1)[1]) <= pe:
@@ -354,6 +363,15 @@ def norm_firewall(section, data):
                  f"外部端口范围 {wport!r} 无效", "需满足 1 ≤ 起始 < 结束 ≤ 65535")
         need(is_ipv4(ip), "FW_IP_BAD", f"目标 IP {ip!r} 无效")
         need(one(lport), "FW_PORT_BAD", f"内部端口 {lport!r} 无效", "内部端口需为 1–65535 的单端口")
+        # 审计 RT-16：外部是范围、内部写了个别的端口时，netgen 会生成
+        # `tcp dport 8000-8010 dnat to <ip>:80` —— 11 个外部端口全转到同一个
+        # 内部端口。以前既不拦也不提示，用户以为是"一一映射"。
+        if RANGE_RE.match(wport) and lport != RANGE_RE.match(wport).group(1):
+            fail("FW_PORT_BAD",
+                 f"外部端口 {wport} 是范围，内部端口 {lport} 对不上",
+                 f"范围转发是逐一映射，内部端口必须等于起始端口 "
+                 f"{RANGE_RE.match(wport).group(1)}；若想把整段都转到同一个端口，"
+                 "请为每个端口单独建一条规则")
         protos = ["tcp", "udp"] if proto == "both" else [proto]
         for pp in protos:
             for (ep, pname) in list(used.items()):
@@ -444,6 +462,31 @@ def cross_validate(section, result, cur):
         fail("V6_NATIVE_STATIC_WAN",
              "切换到静态 WAN 需先调整 IPv6 模式",
              "当前 IPv6 为 Native（PD），静态线路没有 DHCPv6 客户端；请先在「IPv6 设置」改为「静态 IPv6」或关闭")
+    # 审计 RT-17：静态 WAN 与 LAN 同网段 → 路由冲突、整机不通，而保存时毫无提示。
+    # 上级光猫也用 192.168.10.0/24 是最常见的触发场景。
+    # DHCP 拿到的 WAN 地址只能在运行期判断（配置里没有），这里只做静态可判的部分。
+    _lan = cur.get("lan") or {}
+    _wan = cur.get("wan") or {}
+
+    def _v4net(ip, mask):
+        try:
+            return ipaddress.IPv4Network("%s/%s" % (ip, mask), strict=False)
+        except Exception:
+            return None
+
+    _lan_net = _v4net(_lan.get("ip"), _lan.get("mask"))
+    if _lan_net is not None:
+        _w_ip = _w_mask = None
+        if section == "wan" and result.get("mode") == "static":
+            _w_ip, _w_mask = result.get("ip"), result.get("mask")
+        elif section == "lan" and _wan.get("mode") == "static":
+            _w_ip, _w_mask = _wan.get("ip"), _wan.get("mask")
+        _wan_net = _v4net(_w_ip, _w_mask) if (_w_ip and _w_mask) else None
+        if _wan_net is not None and _lan_net.overlaps(_wan_net):
+            fail("WAN_LAN_OVERLAP", "WAN 与 LAN 在同一网段",
+                 "WAN %s 与 LAN %s 重叠，会造成路由冲突、整机不通；"
+                 "请改 LAN 网段（例如 192.168.11.0/24），或确认上级设备用的是哪个网段"
+                 % (_wan_net, _lan_net))
 
 
 def main():

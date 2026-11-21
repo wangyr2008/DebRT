@@ -311,6 +311,18 @@ class Factory(unittest.TestCase):
         self.assertFalse(ports[0]["lan"])
         self.assertTrue(ports[1]["lan"])
 
+    def test_default_ports_natural_order(self):
+        """审计 RT-18：字符串排序会把 enp10s0 排到 enp2s0 前面，
+        「第 1 个口」被选成物理第 10 个口，与机身标注对不上。"""
+        fake = os.path.join(self.s.td, "sysfs2")
+        os.makedirs(fake)
+        for n in ("enp10s0", "enp2s0", "enp1s0", "enp3s0"):
+            os.makedirs(os.path.join(fake, n))
+        ports = self.s.b.default_ports(fake)
+        self.assertEqual([p["name"] for p in ports],
+                         ["enp1s0", "enp2s0", "enp3s0", "enp10s0"])
+        self.assertEqual(ports[0]["name"], "enp1s0", "WAN 应选物理第 1 个口")
+
     def test_default_ports_fallback(self):
         ports = self.s.b.default_ports(os.path.join(self.s.td, "absent"))
         self.assertEqual([p["name"] for p in ports], ["eth0", "eth1"])

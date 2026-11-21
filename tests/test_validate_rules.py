@@ -66,6 +66,56 @@ class TestLANRules(unittest.TestCase):
         rc, err = support.run_validate("lan", {"ip": "192.168.10.1", "mask": "255.255.255.0"})
         self.assertEqual(rc, 0, f"合法 LAN 被拒：{err}")
 
+    def test_loopback_and_link_local_rejected(self):
+        """审计 RT-17：Python 的 is_private 对 127/8 与 169.254/16 也返回 True，
+        这两类地址以前都能保存成功——保存后整机不可达。"""
+        for ip in ("127.0.0.1", "169.254.1.1"):
+            rc, err = support.run_validate("lan", {"ip": ip, "mask": "255.255.255.0"})
+            self.assertNotEqual(rc, 0, f"{ip} 应被拒")
+            self.assertEqual(err.get("code"), "LAN_IP_BAD", ip)
+
+
+class TestFirewallRules(unittest.TestCase):
+    """审计 RT-16：外部是端口范围、内部写了别的端口时，会整段转到同一个端口。"""
+
+    def _fw(self, wport, lport):
+        return support.run_validate("firewall", {
+            "enabled": True,
+            "portfw": [{"enabled": True, "name": "web", "wport": wport,
+                        "lport": lport, "ip": "192.168.10.50", "proto": "tcp"}]})
+
+    def test_range_with_mismatched_inner_port_rejected(self):
+        rc, err = self._fw("8000-8010", "80")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(err.get("code"), "FW_PORT_BAD")
+
+    def test_range_with_matching_inner_port_accepted(self):
+        rc, err = self._fw("8000-8010", "8000")
+        self.assertEqual(rc, 0, f"合法范围转发被拒：{err}")
+
+    def test_single_port_remap_still_allowed(self):
+        rc, err = self._fw("8080", "80")
+        self.assertEqual(rc, 0, f"单端口重映射被拒：{err}")
+
+
+class TestWanLanOverlap(unittest.TestCase):
+    """审计 RT-17：静态 WAN 与 LAN 同网段 → 路由冲突、整机不通。"""
+
+    CUR = {"lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
+           "wan": {"mode": "static"}}
+
+    def test_overlap_rejected(self):
+        got = support.cross_error("wan", {
+            "mode": "static", "ip": "192.168.10.5", "mask": "255.255.255.0",
+            "gw": "192.168.10.1", "dns_mode": "manual", "dns": ["223.5.5.5"]}, self.CUR)
+        self.assertEqual(got, "WAN_LAN_OVERLAP")
+
+    def test_no_overlap_accepted(self):
+        got = support.cross_error("wan", {
+            "mode": "static", "ip": "100.64.1.5", "mask": "255.255.255.0",
+            "gw": "100.64.1.1", "dns_mode": "manual", "dns": ["223.5.5.5"]}, self.CUR)
+        self.assertIsNone(got)
+
 
 class TestDHCPRules(unittest.TestCase):
 

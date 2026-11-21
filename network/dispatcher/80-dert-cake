@@ -3,6 +3,25 @@
 set -u
 IFACE="${1:-}"
 STATE="${2:-}"
+
+# 只在 WAN 口 / ppp0 的事件上动手（审计 RT-19）。
+# 以前不过滤：br-lan、每个 LAN 口、tun0 的 routable 事件都会触发一次
+# qdisc-apply，而它会把所有网口的 qdisc 拆掉重建——于是每次事件都有一段
+# 「不限速窗口」，统计计数也被清零（诊断时很要命）。
+IS_WAN=$(python3 - /etc/dert/config.json "$IFACE" <<'PYEOF'
+import json, sys
+try:
+    c = json.load(open(sys.argv[1]))
+    wans = [p["name"] for p in c.get("ports", []) if p.get("wan")]
+    if c.get("wan", {}).get("mode") == "pppoe":
+        wans.append("ppp0")
+except Exception:
+    wans = []
+print("yes" if sys.argv[2] in wans else "no")
+PYEOF
+)
+[ "$IS_WAN" = "yes" ] || exit 0
+
 [ -x /usr/local/lib/dert/qdisc-apply ] && /usr/local/lib/dert/qdisc-apply
 [ -x /usr/local/lib/dert/wan-addr-sync ] && /usr/local/lib/dert/wan-addr-sync
 exit 0

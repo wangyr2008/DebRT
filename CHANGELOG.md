@@ -7,6 +7,69 @@
 
 ## [Unreleased]
 
+## [0.1.131] - 2026-11-22
+
+> 审计 P3 批次：剩下的 9 条（3 条校验、6 条运行时）。都是低风险，但多数是
+> 「特定配置下悄悄不对」——校验类的三条已经在真机上实测复现过。
+
+### Fixed
+
+- **RT-15 设备名带空格/中文时无法保存静态绑定**。真机实测 dnsmasq 2.91（未编译
+  IDN）只接受 `[A-Za-z0-9._-]`：`My PC` 与 `我的电脑` 都报 `bad DHCP host name`，
+  而校验层允许这两类名字 → 保存时报「DHCP/DNS 配置校验未通过」，用户无从下手。
+  现在写进 dnsmasq 前把非法字符折叠成 `-`，折叠后为空（中文名）就不写主机名
+  ——MAC→IP 绑定照常，只是没有 `.lan` 名字。
+
+- **RT-16 端口范围转发全部落到同一个端口**。外部 `8000-8010` + 内部 `80` 会生成
+  `tcp dport 8000-8010 dnat to <ip>:80`，11 个外部端口全转到 80，而校验层既不拦
+  也不提示。现在要求「外部是范围时内部端口必须等于起始端口」，否则报
+  `FW_PORT_BAD` 并说明范围转发是逐一映射。
+
+- **RT-17 LAN IP 能设成 127.x / 169.254.x；WAN 与 LAN 同网段不报错**。
+  Python 的 `is_private` 对这两类地址也返回 True，于是能保存成功、保存后整机
+  不可达。现在显式拒绝回环/链路本地/组播/未指定；静态 WAN 与 LAN 网段重叠
+  报 `WAN_LAN_OVERLAP`（DHCP 拿到的 WAN 地址只能在运行期判断，暂未覆盖）。
+
+- **RT-13 br-lan 没设 `ConfigureWithoutCarrier`**。只插 WAN 线开机、或唯一的 AP
+  重启时，br-lan 短暂无载波就会撤掉地址——那期间 dnsmasq 没有可监听的 LAN 地址，
+  `dns-split-prepare` 读不到 LAN IP 会回退成写死的 `192.168.10.1`（改过 LAN IP
+  就写错）。加 `ConfigureWithoutCarrier=yes` + `IgnoreCarrierLoss=yes`。
+
+- **RT-21 `IPForward=` 自 systemd 256 起弃用**（每次 networkd 加载都打一条警告）。
+  拆成 `IPv4Forwarding=yes` / `IPv6Forwarding=yes`，语义不变（转发本来也由
+  `70-dert.conf` 的 sysctl 全局开启，真机确认 v4/v6 都是 1）。
+
+- **RT-19 每次 routable 事件都拆掉并重建全部 qdisc**。`80-dert-cake` 不过滤接口，
+  br-lan / 每个 LAN 口 / tun0 的事件都会触发一次；而 `qdisc-apply` 会把所有网口的
+  qdisc 删了重建——于是每次事件都有一段「不限速窗口」，统计计数也被清零。
+  现在钩子只在 WAN 口 / ppp0 上动手；`qdisc-apply` 的清理循环跳过当前 WAN 与
+  ifb0（改用 `replace` 覆盖），ingress 也改成 `add || replace`。
+
+- **RT-20 拔 WAN 线期间临时定时器越积越多**。`systemd-run --on-active=180s`
+  没带单元名，每收到一条 netlink 事件就多一个。现在固定
+  `--unit=dert-pppoe-recheck`，同名单元存在时 systemd-run 直接失败，天然去重。
+
+- **RT-18 网口按字符串排序，自动选出的 WAN 口可能不对**。
+  `enp10s0` 会排在 `enp2s0` 前面，被选成「第 1 个口」。`install.sh` 与
+  `backupops.default_ports()` 都改成自然排序。
+
+- **RT-14 热插拔钩子只看 IPv4**。纯 IPv6 的 PPPoE 线路上 ppp0 永远没有 v4 地址，
+  每次 routable 都会 `try-restart` → 无限重拨。改成「IPv4 或全局 IPv6 任一即可」，
+  与看门狗、`wait-wan` 的 P3-06 口径对齐。
+
+- **RT-12 DHCP 续约换了 WAN IP 后 `wan_v4` 集合不更新**。接口状态一直是 routable，
+  dispatcher 不会再触发钩子，hairpin 访问自己的端口转发会失败。`netwatch` 的
+  `reconcile()` 现在顺带跑一次 `wan-addr-sync`（幂等）。
+
+### Notes
+
+- 新增用例：`TestFirewallRules`(3)、`TestWanLanOverlap`(2)、LAN 回环/链路本地(1)、
+  `dhcp_hostname` 三条、`default_ports_natural_order`、`test_survives_carrier_loss`。
+- 守卫 P3-47 扩到 RT-12/14/19/20；P3-29 的断言放宽为「有 `systemd-run` 且带
+  `--on-active=180s`」（前面多了 `--unit=`）。字符串断言预算仍 133。
+- 反向验证时又踩到子串陷阱：`X_IS_WAN=` 里仍含 `IS_WAN`，检查改成行首正则。
+- 全量 425 用例绿。
+
 ## [0.1.130] - 2026-11-22
 
 > 审计 P2 批次：4 条「特定配置下静默失效」。其中 RT-08 是这一批里影响面最大的

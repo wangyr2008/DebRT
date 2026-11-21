@@ -26,8 +26,14 @@ PYEOF
 )
 [ "$IS_WAN" = "yes" ] || exit 0
 
-# 会话健在（ppp0 有 v4）就不折腾
-ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' && exit 0
+# 会话健在就不折腾：IPv4 或**全局** IPv6 任一即可。
+# 纯 IPv6 的 PPPoE 线路上 ppp0 永远没有 v4 地址，只看 v4 会让每次 routable
+# 事件都 try-restart → 变成无限重拨（审计 RT-14）。看门狗与 wait-wan 早就按
+# P3-06 改成「任一即可」，这里当时漏了。
+if ip -4 addr show ppp0 2>/dev/null | grep -q 'inet ' \
+   || ip -6 addr show ppp0 2>/dev/null | grep -q 'scope global'; then
+    exit 0
+fi
 
 systemctl is-active --quiet dert-pppoe.service 2>/dev/null || {
     systemctl start dert-pppoe.service 2>/dev/null

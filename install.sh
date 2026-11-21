@@ -120,7 +120,11 @@ if [ ! -f "$ETC_DIR/config.json" ]; then
   python3 - <<'PYEOF'
 import json, os, re
 ports = []
-for n in sorted(os.listdir("/sys/class/net")):
+# 自然排序：纯字符串排序会把 enp10s0 排在 enp2s0 前面，于是「第 1 个口」
+# 被选成物理上的第 10 个口，与机身标注对不上（审计 RT-18）
+def _natkey(n):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", n)]
+for n in sorted(os.listdir("/sys/class/net"), key=_natkey):
     if re.match(r"^(eth\d+|en[psox]\S*)$", n):
         ports.append({"name": n, "wan": len(ports) == 0, "lan": len(ports) > 0})
 if not ports:

@@ -41,6 +41,28 @@ class StaticBindingSafety(unittest.TestCase):
         err = support.run_netgen_expect_fail(self._cfg(name="a,b"))
         self.assertEqual(err.get("code"), "CONFIG_SCHEMA")
 
+    def test_name_with_space_is_sanitized(self):
+        """审计 RT-15：dnsmasq 不接受带空格/中文的主机名（真机实测 bad DHCP host name），
+        而校验层允许这类名字 → 保存时报「配置校验未通过」，用户无从下手。
+
+        名字只用于显示，写进 dnsmasq 时折叠成合法主机名。
+        """
+        man = support.run_netgen_full(self._cfg(name="My PC"))
+        text = support.manifest_text(man)["etc/dnsmasq.d/dert.conf"]
+        self.assertIn("dhcp-host=AA:BB:CC:DD:EE:01,192.168.10.50,My-PC", text)
+
+    def test_chinese_name_omits_hostname_but_keeps_binding(self):
+        """中文名折叠后为空 → 不写主机名，但 MAC→IP 绑定必须还在。"""
+        man = support.run_netgen_full(self._cfg(name="客厅电视"))
+        text = support.manifest_text(man)["etc/dnsmasq.d/dert.conf"]
+        self.assertIn("dhcp-host=AA:BB:CC:DD:EE:01,192.168.10.50\n", text)
+
+    def test_digit_only_residue_omits_hostname(self):
+        """「客厅 电视 2」折叠后只剩 "2" —— 那不是用户起的名字，别当主机名。"""
+        man = support.run_netgen_full(self._cfg(name="客厅 电视 2"))
+        text = support.manifest_text(man)["etc/dnsmasq.d/dert.conf"]
+        self.assertIn("dhcp-host=AA:BB:CC:DD:EE:01,192.168.10.50\n", text)
+
     def test_bad_mac_rejected(self):
         err = support.run_netgen_expect_fail(self._cfg(mac="AA:BB:CC:DD:EE"))
         self.assertEqual(err.get("code"), "CONFIG_SCHEMA")

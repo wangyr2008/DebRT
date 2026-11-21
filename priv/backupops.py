@@ -343,7 +343,11 @@ def default_ports(sysfs=None):
     """发现网口：eth*/en* 排除 ppp/tun/br/veth。第一个当 WAN，其余 LAN。"""
     base = sysfs or _fs("/sys/class/net")
     try:
-        names = sorted(n for n in os.listdir(base) if PORT_RE.match(n))
+        # 自然排序，与 install.sh 一致：字符串排序会把 enp10s0 排到 enp2s0 前面，
+        # 「第 1 个口」被选成物理第 10 个口（审计 RT-18）
+        def _natkey(n):
+            return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", n)]
+        names = sorted((n for n in os.listdir(base) if PORT_RE.match(n)), key=_natkey)
     except OSError:
         names = []
     if not names:

@@ -1046,7 +1046,8 @@ assert "OnUnitActiveSec=1min" not in _timer, \
 _ntw = open(os.path.join(ROOT, "priv", "netwatch"), encoding="utf-8").read()
 assert "ip link show ppp0" in _ntw, \
     "P3-29 回归：netwatch 不再检测 ppp0 消失（快速路径失效，只能等 15 分钟兜底）"
-assert "systemd-run --on-active=180s" in _ntw, \
+# 只断言时长：v0.1.131 起前面多了 --unit=（固定单元名去重，RT-20）
+assert "systemd-run" in _ntw and "--on-active=180s" in _ntw, \
     "P3-29 回归：netwatch 缺 180s 有界复查（ppp0 消失后无人判定是否该重启）"
 assert "pppoe-watchdog" in _ntw, \
     "P3-29 回归：netwatch 不再调用看门狗"
@@ -1247,7 +1248,7 @@ if _ap46.count("failsafe_nft()") < 3:
 assert _p46_bad == [], "P3-46 回归：%s" % "；".join(_p46_bad)
 
 # ---------------------------------------------------------------------------
-# P3-47：审计 P2 批次（RT-04 / RT-09 / RT-10）
+# P3-47：审计 P2/P3 批次（RT-04 / RT-09 / RT-10 / RT-12 / RT-14 / RT-19 / RT-20）
 _p47_bad = []
 # RT-04 / RT-09 已有行为断言（tests/test_netgen_artifacts.TestNftNatRules、
 # tests/test_dns_split.SyncBehavior.test_mac_is_normalized）——真跑生成器/脚本
@@ -1259,6 +1260,24 @@ _co47 = open(os.path.join(ROOT, "priv", "configops.py"), encoding="utf-8").read(
 _lan47 = _co47.rsplit('if section == "lan":', 1)[1].split("ok_out(")[0]
 if "try-restart" not in _lan47 or "sing-box" not in _lan47:
     _p47_bad.append("改 LAN IP 后没重启 sing-box（*.lan 解析与访问新地址都会异常）")
+# ---- P3 批次（运行时）----
+# RT-14：纯 IPv6 的 PPPoE 线路上 ppp0 永远没有 v4，只看 v4 会无限重拨
+_hp47 = open(os.path.join(ROOT, "network", "dispatcher", "75-dert-pppoe-hotplug"),
+             encoding="utf-8").read()
+if "scope global" not in _hp47:
+    _p47_bad.append("热插拔钩子只看 IPv4（纯 v6 线路会无限重拨）")
+# RT-19：cake 钩子必须过滤接口，否则 br-lan/tun0 的每个事件都重建全部 qdisc
+_ck47 = open(os.path.join(ROOT, "network", "dispatcher", "80-dert-cake"),
+             encoding="utf-8").read()
+# 行首精确匹配：子串判断会被 X_IS_WAN 这类改名骗过（反向验证时踩到）
+if not re.search(r"^IS_WAN=", _ck47, re.M):
+    _p47_bad.append("cake 钩子不过滤接口（每个 routable 事件都重置整形）")
+# RT-20：临时定时器要固定单元名，否则拔线期间会越积越多
+if "--unit=dert-pppoe-recheck" not in _ntw_src:
+    _p47_bad.append("netwatch 的 180s 复查定时器没有固定单元名（会堆积）")
+# RT-12：DHCP 换 IP 后 wan_v4 集合不会自己更新
+if not re.search(r"^ADDR_SYNC=", _ntw_src, re.M):
+    _p47_bad.append("netwatch 的 reconcile 没刷新 wan_v4（hairpin 会失效）")
 assert _p47_bad == [], "P3-47 回归：%s" % "；".join(_p47_bad)
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
