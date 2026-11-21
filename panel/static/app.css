@@ -37,10 +37,20 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-side{width:232px;flex:none;border-right:1px solid var(--ru-line);padding:22px 14px 16px;display:flex;flex-direction:column;
   position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;background:var(--ru-bg)}
 #router-ui .ru-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
-#router-ui .ru-brandicon{width:36px;height:36px;border-radius:10px;overflow:hidden;flex:none;box-shadow:0 1px 4px rgba(0,0,0,.22)}
-#router-ui .ru-brandicon svg{width:100%;height:100%;display:block}
-#router-ui .ru-brand b{display:block;font-size:14.5px;font-weight:600;letter-spacing:-.01em}
-#router-ui .ru-brand small{display:block;font-size:11.5px;color:var(--ru-text2);margin-top:1px}
+/* 品牌字标（v0.1.127）：吉祥物 d + ebrt，内联 SVG。文字用 currentColor 跟主题走；
+   绿灯浅色下是镂空（白圈会和白底融在一起显小），深色下是白圈，两组图形按主题切换。 */
+#router-ui{--ru-logo-word:#0071e3}
+#router-ui .ru-logo{display:block;flex:none;color:var(--ru-logo-word);line-height:0}
+#router-ui .ru-logo svg{display:block;width:auto;height:100%}
+#router-ui .ru-logo .dl-dark{display:none}
+@media (prefers-color-scheme: dark){
+  #router-ui{--ru-logo-word:#3aa0ff}
+  #router-ui .ru-logo .dl-light{display:none}
+  #router-ui .ru-logo .dl-dark{display:inline}
+}
+#router-ui .ru-sidelogo{height:34px}
+#router-ui .ru-mlogo{height:32px}
+#router-ui .ru-brand small{display:block;font-size:11.5px;color:var(--ru-text2);align-self:flex-end;padding-bottom:4px}
 #router-ui .ru-nav{display:flex;flex-direction:column;gap:2px}
 #router-ui .ru-navitem{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--ru-text);font-family:inherit;font-size:13.5px;font-weight:500;padding:9px 11px;border-radius:9px;cursor:pointer;text-align:left}
 #router-ui .ru-navitem .lucide{width:17px;height:17px;color:var(--ru-text2)}
@@ -55,8 +65,8 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:26px 20px;
   background:radial-gradient(1200px 600px at 50% -10%, rgba(0,113,227,.08), transparent 60%), var(--ru-bg)}
 #router-ui .ru-lcard{width:400px;max-width:100%;background:var(--ru-card);border:1px solid var(--ru-line);border-radius:18px;box-shadow:var(--ru-shadow);padding:34px 32px 26px;text-align:center}
-#router-ui .ru-llogo{width:58px;height:58px;border-radius:14px;overflow:hidden;margin:0 auto 14px;box-shadow:0 8px 22px rgba(1,80,208,.35)}
-#router-ui .ru-llogo svg{width:100%;height:100%;display:block}
+#router-ui .ru-lcard .ru-llogo{height:58px;margin:0 auto 2px}
+#router-ui .ru-llogo svg{margin:0 auto}
 #router-ui .ru-lcard h2{margin:0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 #router-ui .ru-lsub{font-size:12.5px;color:var(--ru-text2);margin-top:4px}
 #router-ui .ru-lcard form{text-align:left;margin-top:24px}
@@ -211,7 +221,6 @@ body { background: var(--ru-bg, #f5f5f7); }
 #router-ui .ru-narrow .ru-mhead{display:block;padding:14px 2px 2px;
   position:sticky;top:-10px;z-index:40;background:var(--ru-bg);
   margin:-10px -16px 0;padding:10px 16px 8px}
-#router-ui .ru-narrow .ru-mtitle{font-size:26px;font-weight:700;letter-spacing:-.02em;padding:0 2px}
 /* 窄屏头部没有侧边栏，版本号得单独占一个位置（桌面端由 .ru-side 的 ru-sidever 显示） */
 #router-ui .ru-mver{font-size:12.5px;font-weight:500;color:var(--ru-text2);align-self:flex-end;padding-bottom:5px}
 #router-ui .ru-mhead .ru-nav{flex-direction:row;overflow-x:auto;gap:8px;padding:12px 2px 6px;scrollbar-width:none}
