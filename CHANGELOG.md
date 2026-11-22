@@ -7,6 +7,73 @@
 
 ## [Unreleased]
 
+## [0.1.134] - 2026-11-22
+
+> 对方复核了我的修复，指出两处：一处是我修得不彻底（提权仍可绕过），一处是我
+> 引入的回归（手动上传升级不可用）。都成立，已改。另外把 Tailscale 的 IPv6
+> 问题在 DebRT 侧修掉了——不用动订阅模板。
+
+### Security
+
+- **`backup-create` 的路径校验可被软链目录绕过**（上一版修得不彻底）。
+  v0.1.133 用 `realpath` 比对目录，而 `/var/lib/dert` 属主是 `dert`，面板用户
+  可以把 `backups` 整个换成指向 `/etc` 的软链——两边都解析成 `/etc`，校验通过，
+  root 就往 `/etc/ld.so.preload` 写文件并 `chown` 给 `dert`，提权依旧成立。
+
+  现在改成：目录用 `O_RDONLY|O_DIRECTORY|O_NOFOLLOW` 打开（软链直接 `ELOOP`），
+  文件用 `O_CREAT|O_EXCL|O_NOFOLLOW` 在**那个 dirfd** 上创建，`fchown`/`fchmod`
+  作用在已打开的 fd 上。这样连「校验完成到 tar 打开文件之间换软链」的 TOCTOU
+  也一并消掉——句柄一旦拿到，路径再怎么变都影响不到它。
+  路径比较也改回**字面比较**（不用 realpath，那正是被绕过的那一步）。
+
+### Fixed
+
+- **手动上传升级包在默认强制验签后一律被拒**（v0.1.133 引入的回归）。
+  上传接口只收 `.tar.gz`，不可能带 `.sig`，而验签改成默认强制 → 每次上传都报
+  `UPG_SIG`，提示还写着「当前配置要求必须验签」，用户从没设置过这一项。
+
+  现在升级包选择框支持**多选**：同时选 `.tar.gz` 与它的 `.sig` 即可。前端把签名
+  读成 base64 放在 `X-Sig-B64`，后端校验大小（≤8KB）后落在包旁边，`upgrade-apply`
+  的 `_verify_signature()` 按 `<pkg>.sig` 取用，用完连同包一起删。
+
+- **Tailscale 的 IPv6 被 bypass，tailnet 的 v6 目标全部超时**（审计 P4，真机确认）。
+  `config.json` 的 bypass 判据是 `ip_is_private`，它覆盖 `fc00::/7`，而
+  `fd7a:115c:a1e0::/48` 正好在里面；三条 `ts-ep` 规则却排在 bypass 之后。
+  于是发往 tailnet 的 v6 包被判 bypass、交回内核，而 endpoint 是用户态实现、
+  主路由表里没有 `fd7a::/48` 的路由 → 从 WAN 发出去 → 超时。
+
+  实测（路由器本机发起，读 `inet sing-box` 的计数器差值）：
+
+  | 目标 | bypass | redirect | 结果 |
+  |---|---|---|---|
+  | `fd7a:115c:a1e0::1:443` | **+1** | +0 | 超时 |
+  | `100.100.100.100:443` | +0 | **+1** | 成功 |
+  | `fc00::2e:443`（fakeip v6） | +0 | **+1** | 成功 |
+
+  fakeip 之所以幸免，是因为预匹配会把它**还原成域名**再匹配，`ip_is_private`
+  对域名不生效；Tailscale 是真实地址，没有这一步。
+
+  修法**不改订阅模板**：`dns-split-prepare` 生成的 `00-dert-dns.json` 会被
+  sing-box 的目录合并排到**最前面**（用 `sing-box merge` 实测：合并后片段的
+  `hijack-dns` 在 [0][1]，config.json 的 bypass 被挤到 [2]）。所以在片段里前置
+  一条 `{"ip_cidr": ["fd7a:115c:a1e0::/48"], "outbound": "<tag>"}` 即可，tag 从
+  `endpoints` 里现读（不写死），没有 tailscale endpoint 时**不加**（否则
+  `sing-box check` 会因为引用了不存在的 outbound 而失败、起不来）。
+
+### Notes
+
+- **更正我上一轮的一个错误判断**：我曾说草图里「`dns` 链第一条 `redirect` 缺
+  `return`，会被第二条覆盖」是致命问题。**这不成立**——`redirect` 本身就是
+  终结性 verdict（`nft_redir_eval()` 把 NAT 结果写进 `regs->verdict.code`）。
+  真机实测：两条都匹配同一端口的规则，第一条计数 3、第二条 0。对方指出得对。
+- `backup-create` 的目录替换攻击只能由**能写 `/var/lib/dert` 的人**发起，也就是
+  面板用户本身；所以它的实际含义是「面板被攻破后能否拿到 root」，不是远程漏洞。
+  但这一层隔离正是 `dert` 用户存在的理由，不能破。
+- 新增用例 11 个（备份软链目录、上传签名 5 个、Tailscale 规则 3 个等）。
+- 守卫 P3-48 扩到 14 条，`reverse_check.sh` 同步扩到 13 项，全部「破坏必红、
+  恢复必绿」。
+- 全量 463 用例绿，字符串断言预算仍 133。
+
 ## [0.1.133] - 2026-11-22
 
 > 第三方审计 v0.1.132 报告里确认的问题。报告本身质量很高（它自己标了「没上真机」），

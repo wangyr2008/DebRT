@@ -1313,7 +1313,7 @@ if "nft delete table inet sing-box" not in _sbc48:
 
 # ③ §4 #1：backup-create 的输出路径必须限制在备份目录
 _bo48 = open(os.path.join(ROOT, "priv", "backupops.py"), encoding="utf-8").read()
-if "BACKUP_PATH" not in _bo48 or "os.path.realpath(out_path)" not in _bo48:
+if "BACKUP_PATH" not in _bo48:
     _p48_bad.append("backup-create 不再限制输出路径（dert 用户可借 chown 提权到 root）")
 
 # ④ N4：无漂移路径清标记前必须查服务
@@ -1356,6 +1356,20 @@ if 'if "allow_lan_proxy" in prev:' not in _va48:
 if '"singbox_api": _api_risk' not in _st48:
     _p48_bad.append("status 不再报告 sing-box API 暴露情况（面板看不到弱口令风险）")
 
+# ---- v0.1.134：审计回应 §2.1 / §2.2 + Tailscale v6 ----
+# §2.1：备份目录被换成软链时 realpath 校验会通过，必须用 dirfd + O_NOFOLLOW
+if "os.O_NOFOLLOW" not in _bo48 or "dir_fd=dirfd" not in _bo48:
+    _p48_bad.append("backup-create 又只靠路径字符串校验（软链换目录即可绕过）")
+if "os.path.realpath(out_path)" in _bo48:
+    _p48_bad.append("backup-create 又用 realpath 校验（软链目录会被解析成目标目录）")
+# §2.2：手动上传必须能带签名，否则默认强制验签后这条路走不通
+_api48 = open(os.path.join(ROOT, "panel", "api.py"), encoding="utf-8").read()
+if "X-Sig-B64" not in _api48:
+    _p48_bad.append("上传接口不接收 .sig（默认强制验签后手动升级不可用）")
+# Tailscale v6：片段必须前置 fd7a 规则（config.json 的 bypass 会把它吃掉）
+_dsp48 = open(os.path.join(ROOT, "priv", "dns-split-prepare"), encoding="utf-8").read()
+if "fd7a:115c:a1e0::/48" not in _dsp48 or '"rules": extra +' not in _dsp48:
+    _p48_bad.append("00-dert-dns.json 不再前置 Tailscale v6 规则（tailnet 的 v6 会超时）")
 assert _p48_bad == [], "P3-48 回归：%s" % "；".join(_p48_bad)
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"

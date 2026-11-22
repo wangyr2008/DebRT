@@ -6,6 +6,7 @@
 - 特权动作全部经 `sudo -n dert-priv <白名单子命令>`，面板永不直接写 /etc。
 - 错误统一 {ok:false, code, message, hint}，message=原因、hint=下一步，中文可操作。
 """
+import base64
 import io
 import json
 import os
@@ -521,13 +522,31 @@ def post_upgrade_upload(body, headers):
         raise ApiError(400, "BAD_TYPE", "仅支持 .tar.gz 升级包",
                        "Debian 系统没有 .bin/.img 固件概念；请使用官方发布的升级包")
     path = _save_upload(body, "upg")
+    # 默认强制验签之后，手动上传必须能带上签名——否则这条路走不通
+    # （v0.1.133 的回归，审计 §2.2）。签名只有几百字节，前端 base64 后放 header，
+    # 落在包旁边，upgrade-apply 的 _verify_signature 会按 <pkg>.sig 取用。
+    sig_path = path + ".sig"
+    b64 = (headers.get("X-Sig-B64") or "").strip()
     try:
+        if b64:
+            try:
+                raw = base64.b64decode(b64, validate=True)
+            except Exception:
+                raise ApiError(400, "BAD_SIG", "签名内容不是合法的 base64",
+                               "请确认选择的是官方发布页里的 .sig 文件")
+            if not raw or len(raw) > 8192:
+                raise ApiError(400, "BAD_SIG", "签名文件大小异常",
+                               "DebRT 的 .sig 是固定长度（几百字节），请确认文件没选错")
+            with open(sig_path, "wb") as f:
+                f.write(raw)
+            os.chmod(sig_path, 0o600)
         out = priv("upgrade-apply", path, timeout=300)
     finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        for p in (path, sig_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
     return 200, out, None
 
 

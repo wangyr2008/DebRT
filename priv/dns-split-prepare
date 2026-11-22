@@ -49,10 +49,35 @@ LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
 #   - 非白名单设备的 DNS 由 nft 直接 DNAT 到 dnsmasq，不经 sing-box，所以这里
 #     也不需要「按源 IP 分流到运营商」的规则（v0.1.57~v0.1.64 的 carrier 已移除）
 
-python3 - "$DNSJSON" "$LAN4" <<'PYEOF'
+python3 - "$DNSJSON" "$LAN4" "$CONF" <<'PYEOF'
 import json, os, sys
 
-path, lan4 = sys.argv[1], sys.argv[2]
+path, lan4, sb_conf = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# 本片段的 route.rules 会被 sing-box 的目录合并**排到最前面**（真机用
+# `sing-box merge` 验证过：合并后 [0][1] 是这里的 hijack-dns，config.json 的
+# bypass 被挤到 [2]）。所以这里是唯一能在不改订阅模板的前提下「抢在 bypass 之前」
+# 的位置。
+#
+# 为什么要抢：config.json 里 bypass 的判据是 ip_is_private，而它覆盖 fc00::/7，
+# Tailscale 的 fd7a:115c:a1e0::/48 正好在里面；三条 ts-ep 规则却排在 bypass 之后。
+# 结果是发往 tailnet 的 v6 包被判 bypass、交回内核，而 endpoint 是用户态实现、
+# 主路由表里没有 fd7a 的路由 → 从 WAN 发出去 → 超时（真机计数器实测：
+# fd7a:: 的 bypass 计数 +1、redirect +0；100.100.100.100 反过来）。
+# fakeip 之所以不受影响，是因为预匹配会把它还原成域名，ip_is_private 对域名不生效。
+#
+# 只加 v6 这一段：100.64.0.0/10 不在 ip_is_private 里，实测本来就是 redirect 的。
+TAILSCALE_V6 = "fd7a:115c:a1e0::/48"
+extra = []
+try:
+    with open(sb_conf, encoding="utf-8") as f:
+        _sb = json.load(f)
+    for e in _sb.get("endpoints") or []:
+        if e.get("type") == "tailscale" and e.get("tag"):
+            extra.append({"ip_cidr": [TAILSCALE_V6], "outbound": e["tag"]})
+            break
+except Exception:
+    pass          # 读不到主配置（首装）或没有 tailscale：不加这条规则
 
 cfg = {
     # 白名单专用 DNS 入口：nft 把白名单设备的 53 端口 DNAT 到这里。
@@ -85,7 +110,7 @@ cfg = {
         }
     ],
     "route": {
-        "rules": [
+        "rules": extra + [
             # 不能带 protocol: "dns" —— direct inbound 不做 sniff，protocol 识别不出来，
             # 规则不匹配就会走默认 direct outbound，把查询转发回 5353 自己，
             # 形成无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。

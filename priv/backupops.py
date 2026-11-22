@@ -28,6 +28,7 @@
 """
 
 import json
+import stat
 import os
 import re
 import shutil
@@ -168,31 +169,61 @@ def backup_create(out_path):
     privlib.require_root()
     if not out_path:
         die("USAGE", "缺少输出路径")
-    # 输出路径必须落在备份目录里。sudoers 给的是 `backup-create *`（任意参数），
-    # 而这里以 root 身份写文件、写完还 chown 给 dert —— 不限制的话
-    #   sudo -u dert dert-priv backup-create /etc/ld.so.preload
-    # 就等于「把任意 root 会读取的文件交给面板用户改写」，直接提权到 root。
-    # 用 realpath 而不是字符串前缀：软链指到目录外也要拦住（审计 §4 #1）。
-    base = os.path.realpath(_fs(BACKUP_DIR))
-    real = os.path.realpath(out_path)
-    if os.path.dirname(real) != base:
+
+    base = _fs(BACKUP_DIR)
+    # 字面比较，**不能**用 realpath：目录被换成指向 /etc 的软链时，realpath
+    # 会把两边都解析成 /etc，校验反而通过（审计 §2.1 的绕过路径）。
+    if os.path.dirname(os.path.normpath(out_path)) != os.path.normpath(base):
         die("BACKUP_PATH", "备份输出路径不合法",
             "只允许写入 %s；面板按固定名生成，正常使用不会碰到这个限制" % BACKUP_DIR)
-    os.makedirs(base, exist_ok=True)
-    subprocess.run(
-        ["tar", "-C", ROOT, "-czf", out_path,
-         "--exclude=var/lib/dert/backups", "--exclude=var/lib/dert/lastgood",
-         "--exclude=etc/dert/secrets.json",
-         "etc/dert", "var/lib/dert/notes.json"],
-        capture_output=True)
-    if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
-        die("BACKUP_FAIL", "备份打包失败", "请检查磁盘空间（df -h）")
-    # 备份不含 secrets（已剔除）：640 归面板用户，仅供下载
+    name = os.path.basename(out_path)
+
+    # 目录本身用 O_NOFOLLOW|O_DIRECTORY 打开：被换成软链就 ELOOP 失败。
+    # 拿到 dirfd 之后一直用它，攻击者再改路径也影响不到手里的句柄——这一条
+    # 同时把「校验完成到 tar 打开文件之间换软链」的 TOCTOU 一起消掉。
     try:
-        shutil.chown(out_path, "dert", "dert")
-    except Exception:
-        pass
-    os.chmod(out_path, 0o640)
+        dirfd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        die("BACKUP_PATH", "备份目录不可用",
+            "%s 不是普通目录（可能被替换成软链）：%s" % (BACKUP_DIR, e))
+    try:
+        # O_EXCL：同名文件存在就失败（不覆盖、不跟随）；O_NOFOLLOW 双保险
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o640, dir_fd=dirfd)
+        except FileExistsError:
+            die("BACKUP_PATH", "备份文件已存在，未覆盖", name)
+        except OSError as e:
+            die("BACKUP_PATH", "无法创建备份文件", str(e))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                die("BACKUP_PATH", "备份目标不是普通文件，已拒绝")
+            r = subprocess.run(
+                ["tar", "-C", ROOT, "-czf", "-",
+                 "--exclude=var/lib/dert/backups", "--exclude=var/lib/dert/lastgood",
+                 "--exclude=etc/dert/secrets.json",
+                 "etc/dert", "var/lib/dert/notes.json"],
+                stdout=fd, stderr=subprocess.PIPE)
+            if os.fstat(fd).st_size <= 0:
+                die("BACKUP_FAIL", "备份打包失败",
+                    "请检查磁盘空间（df -h）%s" % (
+                        ("；tar: " + r.stderr.decode("utf-8", "replace")[:120])
+                        if r and r.stderr else ""))
+            # 用 fchown/fchmod 作用在**已打开的 fd** 上：不会跟随软链。
+            # 备份不含 secrets（已剔除）：640 归面板用户，仅供下载。
+            try:
+                import grp, pwd
+                os.fchown(fd, pwd.getpwnam("dert").pw_uid, grp.getgrnam("dert").gr_gid)
+            except Exception:
+                pass
+            try:
+                os.fchmod(fd, 0o640)
+            except OSError:
+                pass
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dirfd)
     ok_out(path=out_path)
 
 

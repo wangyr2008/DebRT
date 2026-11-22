@@ -89,6 +89,7 @@ function request(method, path, body, opts) {
   var headers = { "X-DebRT": "1" };
   if (opts.raw) headers["X-Filename"] = opts.filename || "upload.bin";
   if (opts.confirm) headers["X-DebRT-Confirm"] = "1";   /* B-06：破坏性上传（恢复备份）API 层校验此头 */
+  if (opts.headers) Object.keys(opts.headers).forEach(function (k) { headers[k] = opts.headers[k]; });
   var init = { method: method, headers: headers, credentials: "same-origin" };
   if (body !== undefined && body !== null) {
     if (opts.raw) { init.body = body; }
@@ -1413,22 +1414,38 @@ $id("btn-upg-source").addEventListener("click", function () {
 });
 $id("upg-drop").addEventListener("click", function () { $id("file-upgrade").click(); });
 $id("file-upgrade").addEventListener("change", function () {
-  var f = this.files && this.files[0];
+  /* 可以一次选两个文件：升级包 + 它的 .sig。默认要求验签（v0.1.134），
+     只选包会被后端拒成 UPG_SIG——这里先把签名读成 base64 一起带上。 */
+  var files = Array.prototype.slice.call(this.files || []);
   this.value = "";
-  if (!f) return;
-  if (!/\.tar\.gz$|\.tgz$/.test(f.name)) {
+  if (!files.length) return;
+  var pkg = files.filter(function (f) { return /\.tar\.gz$|\.tgz$/i.test(f.name); })[0];
+  var sig = files.filter(function (f) { return /\.sig$/i.test(f.name); })[0];
+  if (!pkg) {
     showBad("msg-upg", "仅支持 .tar.gz 升级包（Debian 系统没有 .bin/.img 固件概念）");
     return;
   }
-  if (!window.confirm("上传并校验 " + f.name + "？校验通过后面板将自动完成升级并重启。")) return;
+  var tip = sig ? "" : "（未选择 .sig，若配置要求验签会被拒绝）";
+  if (!window.confirm("上传并校验 " + pkg.name + tip + "？校验通过后面板将自动完成升级并重启。")) return;
   showBad("msg-upg", "");
   toast("ok", "升级包上传中…", "升级期间请勿断电或关闭页面");
-  API.post("/api/upgrade", f, { raw: true, filename: f.name }).then(function (r) {
-    toast("ok", "升级完成", "面板已重启，稍后自动刷新");
-    setTimeout(function () { location.reload(); }, 2500);
-  }).catch(function (e) {
-    showBad("msg-upg", (e.message || "升级失败") + (e.hint ? "。建议：" + e.hint : ""));
-  });
+  var send = function (headers) {
+    API.post("/api/upgrade", pkg, { raw: true, filename: pkg.name, headers: headers })
+      .then(function () {
+        toast("ok", "升级完成", "面板已重启，稍后自动刷新");
+        setTimeout(function () { location.reload(); }, 2500);
+      }).catch(function (e) {
+        showBad("msg-upg", (e.message || "升级失败") + (e.hint ? "。建议：" + e.hint : ""));
+      });
+  };
+  if (!sig) { send({}); return; }
+  var fr = new FileReader();
+  fr.onload = function () {
+    var b64 = String(fr.result || "").replace(/^data:[^,]*,/, "");
+    send({ "X-Sig-B64": b64 });
+  };
+  fr.onerror = function () { showBad("msg-upg", "读取签名文件失败"); };
+  fr.readAsDataURL(sig);
 });
 $id("btn-backup").addEventListener("click", function () {
   var btn = this;

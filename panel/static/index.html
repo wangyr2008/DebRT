@@ -490,8 +490,8 @@
               <div class="ru-dropbox" id="upg-drop">
                 <i data-lucide="upload"></i>
                 <div style="color:var(--ru-text);font-weight:500">手动升级</div>
-                <div>点击选择升级包文件（.tar.gz），将校验完整性后原子替换</div>
-                <input type="file" id="file-upgrade" hidden>
+                <div>点击选择升级包（.tar.gz）与它的签名（.sig，可一起多选），将校验完整性与签名后原子替换</div>
+                <input type="file" id="file-upgrade" multiple hidden>
               </div>
             </div>
 
@@ -582,6 +582,6 @@
 </div>
 
 <script src="/static/icons.js?v=14"></script>
-<script src="/static/app.js?v=17"></script>
+<script src="/static/app.js?v=18"></script>
 </body>
 </html>

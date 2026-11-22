@@ -212,6 +212,44 @@ class PrepareBehavior(unittest.TestCase):
         # v0.1.65 起不再读运营商 DNS（非白名单已由 nft 直连 dnsmasq）
         self.assertNotIn("carrier", text.lower())
 
+    def _prepare_with(self, cfg):
+        h = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h.close)
+        with open(os.path.join(h.root, "etc", "sing-box", "config.json"), "w") as f:
+            json.dump(cfg, f)
+        rc, _, _ = h.run(os.path.join(support.PRIV, "dns-split-prepare"))
+        self.assertEqual(rc, 0)
+        with open(os.path.join(h.root, "etc", "sing-box", "00-dert-dns.json")) as f:
+            return json.load(f)
+
+    def test_tailscale_rule_prepended(self):
+        """Tailscale 的 v6 必须抢在 bypass 之前（审计 P4 / 复核 §2）。
+
+        config.json 的 bypass 判据是 ip_is_private，覆盖 fc00::/7；Tailscale 的
+        fd7a:115c:a1e0::/48 正好在里面，而三条 ts-ep 规则排在 bypass 之后 →
+        发往 tailnet 的 v6 包被交回内核、主路由表没这条路由 → 从 WAN 发出去超时。
+        本片段的规则会被 sing-box 的目录合并排到**最前面**，所以在这里补一条。
+        """
+        cfg = self._prepare_with({"endpoints": [{"type": "tailscale", "tag": "ts-ep"}]})
+        rules = cfg["route"]["rules"]
+        self.assertEqual(rules[0].get("ip_cidr"), ["fd7a:115c:a1e0::/48"])
+        self.assertEqual(rules[0].get("outbound"), "ts-ep")
+        self.assertLess(rules.index(rules[0]),
+                        next(i for i, r in enumerate(rules) if r.get("inbound") == "dns-in"),
+                        "这条规则必须排在最前面")
+
+    def test_no_tailscale_no_extra_rule(self):
+        """没有 tailscale endpoint 时不能凭空引用一个不存在的 tag——
+        那会让 sing-box check 直接失败、起不来。"""
+        cfg = self._prepare_with({"inbounds": []})
+        for r in cfg["route"]["rules"]:
+            self.assertNotIn("fd7a", json.dumps(r), "不该有无主的 tailscale 规则")
+
+    def test_tailscale_tag_is_discovered(self):
+        """tag 不能写死：模板里叫什么就用什么。"""
+        cfg = self._prepare_with({"endpoints": [{"type": "tailscale", "tag": "my-ts"}]})
+        self.assertEqual(cfg["route"]["rules"][0].get("outbound"), "my-ts")
+
     def test_self_dns_entry_on_loopback(self):
         """v0.1.118：路由器自身也要有 DNS 入口（127.0.0.2:53），否则本机查询
         走 dnsmasq → 运营商 DNS，被污染的 www.google.com 会拿到 Twitter 的 IP。"""

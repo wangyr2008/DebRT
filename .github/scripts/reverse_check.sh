@@ -37,6 +37,9 @@ check "7  N2 只看一条"        priv/status.py      's/def _pd_prefixlens\(\)/
 check "8  验签默认关"          priv/upgradeops.py  's/get\("require_signature", True\)/get("require_signature")/'
 check "9  7890 不拦"          priv/netgen.py      's/dport 7890 drop/dport 7890 accept/g'
 check "10 不报 API 风险"      priv/status.py      's/"singbox_api": _api_risk/"sb_api": _api_risk/'
+check "11 备份目录用 realpath"  priv/backupops.py      's/os\.O_NOFOLLOW/os.O_RDONLY/'
+check "12 上传不收签名"        panel/api.py          's/X-Sig-B64/X-Sig-XX/'
+check "13 片段不前置 ts 规则"   priv/dns-split-prepare 's/"rules": extra \+ \[/"rules": [/'
 
 echo "--- 恢复后整体 ---"
 python3 -m py_compile priv/validate.py priv/applyops.py priv/status.py priv/backupops.py priv/upgradeops.py priv/netgen.py \

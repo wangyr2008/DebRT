@@ -270,6 +270,27 @@ class BackupCreate(unittest.TestCase):
         self.assertEqual(out["code"], "BACKUP_PATH")
         self.assertFalse(os.path.exists(evil), "拒绝时不能留下任何文件")
 
+    def test_symlinked_backup_dir_rejected(self):
+        """整个备份目录被换成软链时必须拒绝（审计 §2.1）。
+
+        旧实现用 realpath 比较，两边都解析成 /etc → 校验通过 → root 往
+        /etc/ld.so.preload 写文件再 chown 给 dert，直接提权。
+        现在目录用 O_NOFOLLOW|O_DIRECTORY 打开，软链会 ELOOP。
+        """
+        self.s.write_cfg(support.dhcp_config())
+        base = os.path.join(self.s.td, "var/lib/dert/backups")
+        os.makedirs(base, exist_ok=True)
+        outside = os.path.join(self.s.td, "etc")
+        os.makedirs(outside, exist_ok=True)
+        os.rmdir(base)
+        os.symlink(outside, base)
+        target = os.path.join(base, "ld.so.preload")
+        rc, out = run(self.s.b.backup_create, target)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out["code"], "BACKUP_PATH")
+        self.assertFalse(os.path.exists(os.path.join(outside, "ld.so.preload")),
+                         "拒绝时不能在外面的目录留下任何文件")
+
     def test_symlink_escape_rejected(self):
         """目录里放个指向外部的软链，realpath 之后同样要拦住。"""
         self.s.write_cfg(support.dhcp_config())
