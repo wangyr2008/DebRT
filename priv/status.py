@@ -157,25 +157,32 @@ if v6["enabled"]:
 # 委派前缀长度：networkd 为 PD 在 lo 上放一条 unreachable 路由
 #   unreachable 2409:8a5e:a57:6060::/60 dev lo proto dhcp metric 1024
 # 这是「本机实际拿到多长的前缀」最直接的证据（比猜 links 文件里的字段可靠）。
-def _pd_prefixlen():
+def _pd_prefixlens():
+    """所有 PD 路由的前缀长度。
+
+    运营商可能下发多个 PD，切换上网方式时旧路由也可能还没清掉，所以**不能
+    只看第一条**（审计 N2）。返回空列表 = 还没拿到 PD。
+    """
     try:
         out = run(["ip", "-6", "route", "show", "type", "unreachable"])
     except Exception:
-        return 0
+        return []
+    lens = []
     for line in out.splitlines():
         if " dev lo " in line and " proto dhcp" in line:
             m = re.search(r"/(\d+)", line)
             if m:
-                return int(m.group(1))
-    return 0
+                lens.append(int(m.group(1)))
+    return lens
 
 
 v6["pd_prefixlen"] = 0
 v6["pd_too_small"] = False
 if v6["enabled"] and v6["mode"] == "native":
-    _plen = _pd_prefixlen()
-    v6["pd_prefixlen"] = _plen
-    # LAN 取 PD 里的第 subnet_id 个子网（netgen 用 1，避开 WAN 的 IA_NA 地址）。
+    _lens = _pd_prefixlens()
+    # 展示用最宽的那个（子网最多），与「够不够用」的判断分开
+    v6["pd_prefixlen"] = min(_lens) if _lens else 0
+    # LAN 取 PD 里的第 subnet_id 个子网（netgen 默认 1，避开 WAN 的 IA_NA 地址）。
     # /64 委派只有子网 0，而那一个已经被 WAN 占了——此时 LAN 拿不到任何独立
     # 前缀，调 SubnetId 也挤不出来，只能改用 NAT6（审计 RT-05）。
     # 与 netgen.lan_subnet_id() 同一套默认值与范围（0 是合法值，不能写 `or 1`）
@@ -185,7 +192,11 @@ if v6["enabled"] and v6["mode"] == "native":
         _sid = 1
     if not 0 <= _sid <= 15:
         _sid = 1
-    if _plen and 0 <= 64 - _plen < 32 and _sid >= (1 << (64 - _plen)):
+    # 需要多少位子网号：sid=1 → 1 位（两个子网），sid=2..3 → 2 位，以此类推。
+    # **只要有一条 PD 放得下就不算太短**——取「最长前缀」会误报：
+    # 同时拿到 /60 和 /64 时，/60 已经够用了（审计 N2 的建议方向反了）。
+    _need = _sid.bit_length()
+    if _lens and not any((64 - p) >= _need for p in _lens):
         v6["pd_too_small"] = True
 
 # 网口
@@ -309,6 +320,41 @@ for vp in ("/usr/local/lib/dert/share/VERSION", "/usr/local/lib/dert/VERSION"):
         break
     except OSError:
         continue
+# sing-box 的 API / dashboard 是否对局域网开放、口令是否太弱。
+# 这份配置属于 sub-store（DebRT 只读），所以这里不改它，只把风险说出来——
+# 面板会据此显示一条告警，并指出该改哪个字段（审计 §5.2）。
+_WEAK_SECRETS = {"", "passwd", "password", "123456", "admin", "singbox", "clash", "dert"}
+
+
+def _singbox_api_risk():
+    try:
+        with open(_FS + "/etc/sing-box/config.json", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return {"listen": "", "port": 0, "weak": False}
+    listen, port, secret = "", 0, ""
+    for svc in cfg.get("services") or []:
+        if svc.get("type") == "api":
+            listen = str(svc.get("listen") or "0.0.0.0")
+            port = int(svc.get("listen_port") or 0)
+            secret = str(svc.get("secret") or "")
+            break
+    else:
+        ca = (cfg.get("experimental") or {}).get("clash_api") or {}
+        ctl = str(ca.get("external_controller") or "")
+        if not ctl:
+            return {"listen": "", "port": 0, "weak": False}
+        listen, _, p = ctl.partition(":")
+        port = int(p) if p.isdigit() else 0
+        secret = str(ca.get("secret") or "")
+    # 只听回环就不算暴露（127.0.0.1 / ::1 / localhost）
+    exposed = listen not in ("127.0.0.1", "::1", "localhost")
+    weak = secret.lower() in _WEAK_SECRETS or len(secret) < 8
+    return {"listen": listen, "port": port, "weak": bool(exposed and weak)}
+
+
+_api_risk = _singbox_api_risk()
+
 print(json.dumps({
     "ok": True,
     "converge_failed": os.path.exists(R + "/converge-failed"),
@@ -319,4 +365,5 @@ print(json.dumps({
     "disk_temp": disk_temp,
     "disk_temp_note": (open(R + "/disk-unavailable").read().strip() if os.path.exists(R + "/disk-unavailable") else ""),
     "leases_count": leases,
+    "singbox_api": _api_risk,
 }, ensure_ascii=False))

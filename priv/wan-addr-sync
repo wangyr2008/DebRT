@@ -8,33 +8,61 @@ source "${PRIV_DIR}/lib.sh" 2>/dev/null || true
 
 nft list table inet dert_base >/dev/null 2>&1 || exit 0
 
-ADDRS="$(python3 - <<'PYEOF'
+# 一个 python 进程同时算出「应有」与「现有」，只在真有变化时才动 nft；
+# 变化时输出**一条事务**（flush + add 一起提交）——分成两条命令时中间那一瞬
+# wan_v4 是空的，新建的回流连接拿不到 DNAT（审计 N5）。
+OUT="$(python3 - <<'PYEOF'
 import json, subprocess
+
+
+def run(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return ""
+
+
 try:
     cfg = json.load(open("/etc/dert/config.json"))
 except Exception:
     raise SystemExit
+
 wans = {p["name"] for p in cfg.get("ports", []) if p.get("wan")}
 if cfg.get("wan", {}).get("mode") == "pppoe":
     wans.add("ppp0")
 try:
-    out = subprocess.run(["ip", "-j", "-4", "addr"], capture_output=True, text=True, timeout=5).stdout
-    addrs = json.loads(out or "[]")
+    addrs = json.loads(run(["ip", "-j", "-4", "addr"]) or "[]")
 except Exception:
     raise SystemExit
-ips = []
+
+want = set()
 for a in addrs:
     if a.get("ifname") in wans:
         for ai in a.get("addr_info", []):
             ip = ai.get("local", "")
             if ip and not ip.startswith("169.254."):
-                ips.append(ip)
-print(",".join(sorted(set(ips))))
+                want.add(ip)
+
+cur = set()
+try:
+    j = json.loads(run(["nft", "-j", "list", "set", "inet", "dert_base", "wan_v4"]) or "{}")
+    for item in j.get("nftables", []):
+        st = item.get("set")
+        if st:
+            for e in st.get("elem", []):
+                cur.add(e if isinstance(e, str) else str(e))
+except Exception:
+    pass
+
+if want == cur:
+    print("SAME")
+else:
+    print("flush set inet dert_base wan_v4")
+    if want:
+        print("add element inet dert_base wan_v4 { %s }" % ", ".join(sorted(want)))
 PYEOF
 )"
 
-nft flush set inet dert_base wan_v4 2>/dev/null || exit 0
-if [ -n "$ADDRS" ]; then
-  nft add element inet dert_base wan_v4 "{ $ADDRS }" 2>/dev/null || exit 0
-fi
+[ "$OUT" = "SAME" ] && exit 0
+printf '%s\n' "$OUT" | nft -f - 2>/dev/null || exit 0
 exit 0

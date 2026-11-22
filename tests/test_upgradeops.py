@@ -253,10 +253,16 @@ class Download(unittest.TestCase):
 
 
 class ApplyGuards(unittest.TestCase):
-    """换目录之前的全部拒绝分支。"""
+    """换目录之前的全部拒绝分支。
+
+    这些用例测的是「包内容/版本」类守卫，与签名无关，所以显式关掉验签——
+    v0.1.133 起默认要求签名，不关的话每个用例都会先撞上 UPG_SIG。
+    反过来也说明：不带签名的升级现在必须**主动**写 require_signature=false。
+    """
 
     def setUp(self):
         self.s = Sandbox()
+        self.s.write_cfg({"upgrade": {"source": "acme/dert", "require_signature": False}})
 
     def tearDown(self):
         self.s.close()
@@ -386,6 +392,15 @@ class ApplyGuards(unittest.TestCase):
         rc, out = run(self.s.u.apply, pkg)
         self.assertEqual(rc, 1)
         self.assertEqual(out["code"], "UPG_SIG")
+
+    def test_signature_required_by_default(self):
+        """配置里没写 require_signature 时默认要求签名（审计 §4 #2）。"""
+        self.s.write_cfg({"upgrade": {"source": "acme/dert"}})
+        pkg = make_pkg(os.path.join(self.s.td, "p.tar.gz"))
+        rc, out = run(self.s.u.apply, pkg)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out["code"], "UPG_SIG",
+                         "未签名包默认必须被拒——否则镜像不提供 .sig 就能绕过校验")
 
     def test_signature_present_but_no_pubkey(self):
         pkg = make_pkg(os.path.join(self.s.td, "p.tar.gz"))

@@ -344,6 +344,26 @@ class TestNftNatRules(unittest.TestCase):
     def test_lan_to_wan_nat_intact(self):
         self.assertIn("ip saddr $LAN_NET oifname $WAN_IFS masquerade", self._srcnat())
 
+    def _input(self):
+        i = self.body.index("chain input")
+        return self.body[i:self.body.index("\n  }", i)]
+
+    def test_lan_proxy_port_blocked_by_default(self):
+        """审计 §5.2：mixed 入站在 7890 上没有认证。
+
+        白名单设备走透明代理（tun + redirect），不需要这个端口；开着等于给
+        局域网里任何设备（访客、被入侵的 IoT）一个开放代理。
+        """
+        seg = self._input()
+        self.assertIn("iifname $LAN_BR tcp dport 7890 drop", seg)
+        self.assertIn("iifname $LAN_BR udp dport 7890 drop", seg)
+
+    def test_lan_proxy_port_openable(self):
+        cfg = support.pppoe_config()
+        cfg.setdefault("firewall", {})["allow_lan_proxy"] = True
+        body = self.ng.gen_nft(cfg)
+        self.assertNotIn("dport 7890 drop", body, "显式打开后不能再丢")
+
 
 if __name__ == "__main__":
     unittest.main()

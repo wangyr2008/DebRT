@@ -285,8 +285,12 @@ def _verify_signature(pkg):
                 "包可能被篡改，或不是用 DebRT 官方密钥签发的；已拒绝安装（未做任何改动）")
         _log("sig_ok", pkg=pkg)
         return "已验签"
-    # 没带签名：默认只警告（存量发布尚无签名，一刀切会锁死升级通道）
-    need = bool((_cfg().get("upgrade") or {}).get("require_signature"))
+    # 没带签名：**默认拒绝**。第三方镜像本来就是篡改风险点，而 .sig 与 .sha256
+    # 是同一个发布页上的资产（下载阶段已经一起取），取不到就是异常。
+    # 以前默认只警告，等于「把验签变成可选」——攻击者只要让镜像不提供 .sig，
+    # 校验就被静默跳过（审计 §4 #2）。确实需要绕过时显式写
+    # upgrade.require_signature=false，这是一个需要主动做的动作。
+    need = bool((_cfg().get("upgrade") or {}).get("require_signature", True))
     if need:
         die("UPG_SIG", "升级源未提供签名，已拒绝",
             "当前配置要求必须验签（upgrade.require_signature=true）；请使用带 .sig 的官方发布")

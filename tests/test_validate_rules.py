@@ -98,6 +98,22 @@ class TestFirewallRules(unittest.TestCase):
         self.assertEqual(rc, 0, f"单端口重映射被拒：{err}")
 
 
+class TestAllowLanProxy(unittest.TestCase):
+    """面板防火墙表单没有 allow_lan_proxy，保存时必须保留原值。"""
+
+    def test_preserved_when_absent(self):
+        rc, out = support.run_validate("firewall", {"wan_input_drop": True, "portfw": []},
+                                       current={"firewall": {"allow_lan_proxy": True}})
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out["data"].get("allow_lan_proxy"),
+                        "保存防火墙设置把 allow_lan_proxy 静默关回去了")
+
+    def test_default_false(self):
+        rc, out = support.run_validate("firewall", {"wan_input_drop": True, "portfw": []})
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(out["data"].get("allow_lan_proxy"))
+
+
 class TestWanLanOverlap(unittest.TestCase):
     """审计 RT-17：静态 WAN 与 LAN 同网段 → 路由冲突、整机不通。"""
 
@@ -114,6 +130,28 @@ class TestWanLanOverlap(unittest.TestCase):
         got = support.cross_error("wan", {
             "mode": "static", "ip": "100.64.1.5", "mask": "255.255.255.0",
             "gw": "100.64.1.1", "dns_mode": "manual", "dns": ["223.5.5.5"]}, self.CUR)
+        self.assertIsNone(got)
+
+    # ---- 保存 LAN 段（审计 N1）----
+    # 以前这里比对的是 cur 里的**旧 LAN**，本次提交的 result 完全没参与。
+
+    def test_lan_changed_into_wan_subnet_rejected(self):
+        """把 LAN 改到 WAN 所在网段必须拦住（旧代码拿旧 LAN 比对，漏报）。"""
+        got = support.cross_error("lan", {"ip": "10.0.0.1", "mask": "255.255.255.0"},
+                                  {"lan": {"ip": "192.168.10.1", "mask": "255.255.255.0"},
+                                   "wan": {"mode": "static", "ip": "10.0.0.5",
+                                           "mask": "255.255.255.0"}})
+        self.assertEqual(got, "WAN_LAN_OVERLAP")
+
+    def test_lan_changed_out_of_overlap_allowed(self):
+        """存量已经重叠时，用户把 LAN 改到别的网段是唯一的脱困路径。
+
+        旧代码用旧 LAN（仍重叠）比对，于是永远拒绝——用户没有任何办法改出来。
+        """
+        got = support.cross_error("lan", {"ip": "192.168.11.1", "mask": "255.255.255.0"},
+                                  {"lan": {"ip": "10.0.0.1", "mask": "255.255.255.0"},
+                                   "wan": {"mode": "static", "ip": "10.0.0.5",
+                                           "mask": "255.255.255.0"}})
         self.assertIsNone(got)
 
 

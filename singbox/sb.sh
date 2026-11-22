@@ -224,18 +224,31 @@ sb_do_install() {
         fi
 
         # C-5：三源回退（gh-proxy.org / gh-proxy.com / 直连）——单源不可用曾直接失败
-        local _ok=0
+        #
+        # 不再 `curl | sh`（审计 §4 #23）：管道里 sh 读到的可能是**截断的脚本**，
+        # 半截脚本被 root 执行的行为无法预期；而且执行过什么没有任何留痕。
+        # 改为先落到临时文件，确认非空、有 shebang，把 sha256 记进 journal，
+        # 再执行。上游脚本本身仍是"信任首次获取"——彻底解决要改成下载 .deb 并
+        # 用发布页的 checksums.txt 校验，那会动到安装机制，单独评估。
+        local _ok=0 _tmp
+        _tmp="$(mktemp /tmp/dert-sbinstall.XXXXXX)" || { sb_err "无法创建临时文件"; return 1; }
         for _u in "$INSTALL_URL" \
                   "https://gh-proxy.com/https://raw.githubusercontent.com/SagerNet/sing-box/stable/docs/installation/tools/install.sh" \
                   "https://raw.githubusercontent.com/SagerNet/sing-box/stable/docs/installation/tools/install.sh"; do
           if curl -fsSL --connect-timeout 10 --max-time 60 "$_u" \
-              | sed 's#https://github.com/#https://gh-proxy.org/https://github.com/#' \
-              | sh -s -- $ver_args; then
-            _ok=1
-            break
+              | sed 's#https://github.com/#https://gh-proxy.org/https://github.com/#' > "$_tmp" \
+             && [ -s "$_tmp" ] && head -c 2 "$_tmp" | grep -q '#!' ; then
+            logger -t dert-sb "event=install_script url=$_u sha256=$(sha256sum "$_tmp" | cut -d' ' -f1)"
+            if sh "$_tmp" $ver_args; then
+              _ok=1
+              break
+            fi
+            sb_warn "安装脚本执行失败（$_u）"
+          else
+            sb_warn "安装脚本源不可用或内容异常（$_u），尝试下一个源..."
           fi
-          sb_warn "安装脚本源不可用（$_u），尝试下一个源..."
         done
+        rm -f "$_tmp"
         if [ "$_ok" != 1 ]; then
             sb_err "安装脚本执行失败，请检查网络后重试"
             sb_warn "若提示 API rate limit exceeded，说明 GitHub API 配额用完，"

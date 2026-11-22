@@ -51,6 +51,9 @@ _TAR_CAPS = {}
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
+BACKUP_DIR = "/var/lib/dert/backups"
+
+
 def _fs(path):
     """把绝对路径映射到数据根下（DERT_FSROOT 未设时原样返回）。"""
     if ROOT == "/":
@@ -165,6 +168,17 @@ def backup_create(out_path):
     privlib.require_root()
     if not out_path:
         die("USAGE", "缺少输出路径")
+    # 输出路径必须落在备份目录里。sudoers 给的是 `backup-create *`（任意参数），
+    # 而这里以 root 身份写文件、写完还 chown 给 dert —— 不限制的话
+    #   sudo -u dert dert-priv backup-create /etc/ld.so.preload
+    # 就等于「把任意 root 会读取的文件交给面板用户改写」，直接提权到 root。
+    # 用 realpath 而不是字符串前缀：软链指到目录外也要拦住（审计 §4 #1）。
+    base = os.path.realpath(_fs(BACKUP_DIR))
+    real = os.path.realpath(out_path)
+    if os.path.dirname(real) != base:
+        die("BACKUP_PATH", "备份输出路径不合法",
+            "只允许写入 %s；面板按固定名生成，正常使用不会碰到这个限制" % BACKUP_DIR)
+    os.makedirs(base, exist_ok=True)
     subprocess.run(
         ["tar", "-C", ROOT, "-czf", out_path,
          "--exclude=var/lib/dert/backups", "--exclude=var/lib/dert/lastgood",

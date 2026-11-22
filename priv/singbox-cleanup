@@ -7,14 +7,23 @@ systemctl is-active --quiet sing-box.service && exit 0        # 活着就不动
 ip link show tun0 >/dev/null 2>&1 && exit 0                   # tun 还在（启动中），不动
 
 # nft 残留表（sing-box 重启时会自动重建）
-# 匹配不带 "table " 前缀：nft list tables 输出是 "table inet sing-box"，
-# 带前缀的匹配永远命中不了（v0.1.57 真机首测发现的存量 bug）
-nft list tables 2>/dev/null | grep -q "sing-box" && nft delete table sing-box 2>/dev/null
+#
+# **必须写地址族**：`nft delete table <name>` 省略族名时默认是 ip，而 sing-box
+# 建的是 `inet sing-box` —— 命令会报 "No such file or directory"，错误又被
+# 2>/dev/null 吞掉，于是这条清理从来没生效过（真机实测退出码 1，表仍在）。
+# 后果：sing-box 被 SIGKILL/OOM 后表里的 TCP 重定向还在，白名单设备的连接被
+# 送到没人监听的端口，"崩溃后自动回落直连"失效（审计 N6）。
+# 不先 grep：族名写死会让「换了个族」时静默跳过。两个族各删一次，
+# 不存在的那个直接失败，代价只是失败路径上多一次 exec。
+nft delete table inet sing-box 2>/dev/null || true
+nft delete table ip sing-box 2>/dev/null || true
 
-# DNS 分流表必须一并删除：它把客户端 DNS DNAT 到 tun 的地址（172.19.0.x），
-# sing-box 没了就没人监听，残留会让所有设备断 DNS（比代理失效严重得多）。
+# DNS 分流表必须一并删除：它把客户端 DNS redirect 到本机 5353（sing-box 的
+# dns-in），sing-box 没了就没人监听，残留会让所有设备断 DNS（比代理失效严重得多）。
 # ExecStopPost 已经覆盖绝大多数场景，这里是 OnFailure 路径的双保险。
-nft list tables 2>/dev/null | grep -q "dert_dns" && nft delete table inet dert_dns 2>/dev/null
+if nft list tables 2>/dev/null | grep -q "inet dert_dns"; then
+    nft delete table inet dert_dns 2>/dev/null || true
+fi
 
 # ip rule 残留（特征：fwmark 0x2023/0x2024 + 表 2022）
 while read -r prio rest; do

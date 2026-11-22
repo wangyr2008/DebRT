@@ -96,6 +96,7 @@
               <div id="ov-net"><div class="ru-loading"><span class="ru-spin"></span>正在读取上网信息…</div></div>
               <div class="ru-callout warn" id="ov-pd-warn" hidden><span id="ov-pd-warn-text"></span></div>
               <div class="ru-callout warn" id="ov-lanconflict-warn" hidden><span>WAN 地址 <b id="ov-lanconflict-ip">—</b> 落在 LAN 网段内，路由会冲突、整机可能不通。请到「网络设置」改 LAN 网段（例如 192.168.11.0/24），或确认上级设备用的是哪个网段。</span></div>
+              <div class="ru-callout warn" id="ov-sbapi-warn" hidden><span>sing-box 的 API 监听在 <b id="ov-sbapi-listen">—</b>，口令是弱口令——局域网内任何设备都能改代理节点或读取全部连接。请在订阅模板里把 <code>services[].secret</code> 换成强口令（或把 <code>listen</code> 改成 <code>127.0.0.1</code>）。</span></div>
             </div>
 
             <div class="ru-card">
@@ -581,6 +582,6 @@
 </div>
 
 <script src="/static/icons.js?v=14"></script>
-<script src="/static/app.js?v=16"></script>
+<script src="/static/app.js?v=17"></script>
 </body>
 </html>

@@ -1294,6 +1294,70 @@ if 'id="ov-lanconflict-warn"' not in _idx47 or "lan_conflict" not in _js47:
     _p47_bad.append("面板缺「WAN/LAN 网段冲突」告警")
 assert _p47_bad == [], "P3-47 回归：%s" % "；".join(_p47_bad)
 
+# ---------------------------------------------------------------------------
+# P3-48：第三方审计 v0.1.132（N1~N6 + §4 #1/#2 + §5.2）
+#
+# 共同特征同样是「不报错、只静默降级」：校验用错基准值、清理删不掉表、
+# 兜底规则漏了转发、验签默认关闭、开放代理没认证。
+_p48_bad = []
+
+# ① N1：LAN 段校验必须用本次提交的 result，不能用磁盘上的旧 LAN
+_va48 = open(os.path.join(ROOT, "priv", "validate.py"), encoding="utf-8").read()
+if '_lan_src = (result if section == "lan"' not in _va48:
+    _p48_bad.append("WAN/LAN 重叠校验又用旧 LAN 值（改 LAN 会漏报，且存量重叠时无法脱困）")
+
+# ② N6：删表必须带地址族（不带 = 默认 ip，inet 表删不掉）
+_sbc48 = open(os.path.join(ROOT, "priv", "singbox-cleanup"), encoding="utf-8").read()
+if "nft delete table inet sing-box" not in _sbc48:
+    _p48_bad.append("singbox-cleanup 删表没写 inet（崩溃后重定向残留，回落直连失效）")
+
+# ③ §4 #1：backup-create 的输出路径必须限制在备份目录
+_bo48 = open(os.path.join(ROOT, "priv", "backupops.py"), encoding="utf-8").read()
+if "BACKUP_PATH" not in _bo48 or "os.path.realpath(out_path)" not in _bo48:
+    _p48_bad.append("backup-create 不再限制输出路径（dert 用户可借 chown 提权到 root）")
+
+# ④ N4：无漂移路径清标记前必须查服务
+_ap48 = open(os.path.join(ROOT, "priv", "applyops.py"), encoding="utf-8").read()
+# 查调用赋值而不是函数名：`def degraded_services():` 里也含这个子串（子串陷阱第 6 次）
+if "_bad = degraded_services()" not in _ap48:
+    _p48_bad.append("收敛无漂移路径又不查服务就清标记（开机失败的告警 15 分钟后消失）")
+# ⑤ N3：兜底规则必须有 forward 链
+if '"  chain forward {\\n"' not in _ap48:
+    _p48_bad.append("兜底防火墙没有 forward 链（Native 模式下 LAN 的 IPv6 GUA 暴露给公网）")
+
+# ⑥ N5：wan-addr-sync 必须一条事务提交，不能先 flush 再 add
+_wa48 = open(os.path.join(ROOT, "priv", "wan-addr-sync"), encoding="utf-8").read()
+if "nft -f -" not in _wa48:
+    _p48_bad.append("wan-addr-sync 又分两条命令改集合（中间有空窗，回流连接拿不到 DNAT）")
+if 'nft flush set inet dert_base wan_v4 2>/dev/null' in _wa48:
+    _p48_bad.append("wan-addr-sync 又直接 flush（应只在比对有变化后、作为事务的一部分）")
+
+# ⑦ N2：PD 长度必须看全部路由（只取第一条会在多 PD 时读错）
+_st48 = open(os.path.join(ROOT, "priv", "status.py"), encoding="utf-8").read()
+if "def _pd_prefixlens()" not in _st48:
+    _p48_bad.append("PD 检测又只看第一条路由（多 PD / 切换上网方式时会误判）")
+
+# ⑧ §4 #2：验签默认必须强制
+_uo48 = open(os.path.join(ROOT, "priv", "upgradeops.py"), encoding="utf-8").read()
+if 'get("require_signature", True)' not in _uo48:
+    _p48_bad.append("升级验签又变成默认关闭（镜像不提供 .sig 就能绕过校验）")
+
+# ⑨ §5.2：LAN 到 sing-box mixed 入站必须默认丢掉；status 要报告 API 风险
+_ng48 = open(os.path.join(ROOT, "priv", "netgen.py"), encoding="utf-8").read()
+if "dport 7890 drop" not in _ng48:
+    _p48_bad.append("netgen 不再拦 LAN→7890（无认证开放代理对局域网全开）")
+# 查输出键而不是函数名：`_singbox_api_risk` 里也含这个子串（子串陷阱第 7 次）
+# 面板防火墙表单没有 allow_lan_proxy，保存时必须保留原值（否则静默关回去）
+if 'if "allow_lan_proxy" in prev:' not in _va48:
+    _p48_bad.append("保存防火墙设置会把 allow_lan_proxy 静默重置")
+# 面板防火墙表单没有 allow_lan_proxy，保存时必须保留原值（否则静默关回去）
+if 'if "allow_lan_proxy" in prev:' not in _va48:
+    _p48_bad.append("保存防火墙设置会把 allow_lan_proxy 静默重置")
+if '"singbox_api": _api_risk' not in _st48:
+    _p48_bad.append("status 不再报告 sing-box API 暴露情况（面板看不到弱口令风险）")
+
+assert _p48_bad == [], "P3-48 回归：%s" % "；".join(_p48_bad)
+
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"
       "P2-01清扫/P3-01锁标记/P3-02升级同步/P3-06三处v6/P3-03~05校验/P3-10控制字符/P3-07卸载/P3-08tmp/"
       "P3-12结构兜底/P3-13stage清理/P3-14servers预建/P3-16图标兜底/P3-17DNS回退/P3-18前缀钩子/"

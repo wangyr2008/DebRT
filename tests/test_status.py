@@ -253,6 +253,23 @@ class PdAndConflict(unittest.TestCase):
         e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/63 dev lo proto dhcp metric 1024\n")
         self.assertFalse(e.json("status.py")["ipv6"]["pd_too_small"])
 
+    def test_multiple_pd_takes_widest(self):
+        """多条 PD 时不能只看第一条，也不能取「最长前缀」。
+
+        审计 N2：同时拿到 /60 和 /64 时，/60 已经够 LAN 用——取最长（/64）
+        会误报「PD 太短」。
+        """
+        e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/64 dev lo proto dhcp metric 1024\n"
+                              "unreachable 2409:8a5e:a57:6060::/60 dev lo proto dhcp metric 1025\n")
+        d = e.json("status.py")
+        self.assertEqual(d["ipv6"]["pd_prefixlen"], 60, "展示应取最宽的那个")
+        self.assertFalse(d["ipv6"]["pd_too_small"], "/60 够用，不该报警")
+
+    def test_all_pd_too_small_flagged(self):
+        e = self._env(unreach="unreachable 2409:8a5e:a57:6060::/64 dev lo proto dhcp metric 1024\n"
+                              "unreachable 2409:8a5e:a58:6060::/64 dev lo proto dhcp metric 1025\n")
+        self.assertTrue(e.json("status.py")["ipv6"]["pd_too_small"])
+
     def test_no_pd_not_flagged(self):
         """还没拿到 PD（开机初期）不能误报——那时本来就什么都没有。"""
         d = self._env().json("status.py")
@@ -276,6 +293,53 @@ class PdAndConflict(unittest.TestCase):
         e = self._env(route=[{"dev": "enp1s0"}],
                       addr=[{"addr_info": [{"local": "100.64.1.2", "prefixlen": 24}]}])
         self.assertFalse(e.json("status.py")["wan"]["lan_conflict"])
+
+
+class SingboxApiRisk(unittest.TestCase):
+    """sing-box 的 API 是否对局域网开放 + 弱口令（审计 §5.2）。
+
+    这份配置属 sub-store，DebRT 只读，所以不改它——但「面板看着正常、局域网里
+    任何设备都能改代理节点」这种情况必须能看见。
+    """
+
+    def _env(self, conf):
+        e = Env(base_cfg())
+        self.addCleanup(e.close)
+        d = os.path.join(e.root, "etc", "sing-box")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.json"), "w", encoding="utf-8") as f:
+            json.dump(conf, f)
+        return e
+
+    def test_open_listen_with_weak_secret_flagged(self):
+        e = self._env({"services": [{"type": "api", "listen": "0.0.0.0",
+                                     "listen_port": 9090, "secret": "passwd"}]})
+        d = e.json("status.py")["singbox_api"]
+        self.assertTrue(d["weak"])
+        self.assertEqual(d["port"], 9090)
+
+    def test_loopback_listen_not_flagged(self):
+        e = self._env({"services": [{"type": "api", "listen": "127.0.0.1",
+                                     "listen_port": 9090, "secret": "passwd"}]})
+        self.assertFalse(e.json("status.py")["singbox_api"]["weak"])
+
+    def test_strong_secret_not_flagged(self):
+        e = self._env({"services": [{"type": "api", "listen": "0.0.0.0",
+                                     "listen_port": 9090, "secret": "Q7!k2mZp9vRt"}]})
+        self.assertFalse(e.json("status.py")["singbox_api"]["weak"])
+
+    def test_legacy_clash_api_form(self):
+        """老写法 experimental.clash_api 也要认。"""
+        e = self._env({"experimental": {"clash_api": {
+            "external_controller": "0.0.0.0:9090", "secret": "admin"}}})
+        d = e.json("status.py")["singbox_api"]
+        self.assertTrue(d["weak"])
+        self.assertEqual(d["port"], 9090)
+
+    def test_missing_config_is_quiet(self):
+        e = Env(base_cfg())
+        self.addCleanup(e.close)
+        self.assertFalse(e.json("status.py")["singbox_api"]["weak"])
 
 
 if __name__ == "__main__":

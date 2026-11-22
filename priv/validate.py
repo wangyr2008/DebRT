@@ -331,10 +331,24 @@ def norm_qos(section, data):
     return out
 
 
-def norm_firewall(section, data):
+def norm_firewall(section, data, cur=None):
     out = {"wan_input_drop": True, "portfw": []}
     if "wan_input_drop" in data:
         out["wan_input_drop"] = bool(data.get("wan_input_drop"))
+    # 是否允许局域网设备直连 sing-box 的 mixed 入站（默认 7890）。
+    # 白名单设备走的是透明代理（tun/redirect），不需要这个端口；而它没有认证，
+    # 开着等于给局域网任何设备（含访客、被入侵的 IoT）一个开放代理。
+    # 默认关闭 = 防火墙丢掉 LAN 到该端口的连接（审计 §5.2）。
+    #
+    # 面板的防火墙表单里没有这个字段，所以「保存防火墙设置」时必须保留原值——
+    # 否则用户用 config-set 打开后，点一下保存就被静默关回去（与 require_signature
+    # 同一类问题，见 v0.1.74 的注释）。
+    if "allow_lan_proxy" in data:
+        out["allow_lan_proxy"] = bool(data.get("allow_lan_proxy"))
+    else:
+        prev = (cur or {}).get("firewall") or {}
+        if "allow_lan_proxy" in prev:
+            out["allow_lan_proxy"] = bool(prev["allow_lan_proxy"])
     rules = data.get("portfw")
     if rules is None:
         return out
@@ -465,7 +479,6 @@ def cross_validate(section, result, cur):
     # 审计 RT-17：静态 WAN 与 LAN 同网段 → 路由冲突、整机不通，而保存时毫无提示。
     # 上级光猫也用 192.168.10.0/24 是最常见的触发场景。
     # DHCP 拿到的 WAN 地址只能在运行期判断（配置里没有），这里只做静态可判的部分。
-    _lan = cur.get("lan") or {}
     _wan = cur.get("wan") or {}
 
     def _v4net(ip, mask):
@@ -474,7 +487,13 @@ def cross_validate(section, result, cur):
         except Exception:
             return None
 
-    _lan_net = _v4net(_lan.get("ip"), _lan.get("mask"))
+    # LAN 侧必须用**本次提交的值**：保存 LAN 段时新值在 result 里，cur 里是旧的。
+    # 用旧值会两头错（实测）：
+    #   · 把 LAN 改成 WAN 所在网段 → 拿旧 LAN 比对，判为不重叠 → 漏报；
+    #   · 存量已重叠、用户把 LAN 改到别的网段想脱困 → 拿旧 LAN 比对，仍然重叠
+    #     → 误报，用户**没有任何办法通过面板改出来**。
+    _lan_src = (result if section == "lan" else cur.get("lan")) or {}
+    _lan_net = _v4net(_lan_src.get("ip"), _lan_src.get("mask"))
     if _lan_net is not None:
         _w_ip = _w_mask = None
         if section == "wan" and result.get("mode") == "static":
@@ -522,7 +541,7 @@ def main():
         "dhcp": lambda: norm_dhcp(section, data, cur.get("lan") if cur else None),
         "static": lambda: norm_static(section, data.get("list", [])),
         "qos": lambda: norm_qos(section, data),
-        "firewall": lambda: norm_firewall(section, data),
+        "firewall": lambda: norm_firewall(section, data, cur),
         "upgrade": lambda: norm_upgrade(section, data, cur),
     }
     fn = fns.get(section)

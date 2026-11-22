@@ -29,6 +29,10 @@ FAKE = """#!/bin/sh
 n=$(basename "$0")
 echo "$n $*" >> "$FAKELOG"
 if [ "$n" = systemctl ] && [ "${1:-}" = list-unit-files ]; then exit 1; fi
+if [ "$n" = systemctl ]; then
+  for a in "$@"; do last="$a"; done
+  [ -f "$FAKEDIR/rc.unit.$last" ] && exit "$(cat "$FAKEDIR/rc.unit.$last")"
+fi
 [ -f "$FAKEDIR/rc.$n" ] && exit "$(cat "$FAKEDIR/rc.$n")"
 exit 0
 """
@@ -90,6 +94,11 @@ class Sandbox:
 
     def clear_calls(self):
         open(self.log, "w").close()
+
+    def unit_rc(self, unit, code):
+        """让某个 systemd 单元单独返回失败（不影响其他单元）。"""
+        with open(os.path.join(self.bindir, "rc.unit." + unit), "w") as f:
+            f.write(str(code))
 
     def rc(self, name, code):
         with open(os.path.join(self.bindir, "rc." + name), "w") as f:
@@ -489,6 +498,44 @@ class FailsafeNft(unittest.TestCase):
         self.assertIn("masquerade", body, "必须有 NAT，否则 LAN 上不了网")
         self.assertIn("flush table inet dert_base", body, "重载要幂等")
 
+    def test_minimal_has_forward_chain(self):
+        """兜底规则必须挡住 WAN→LAN 的新连接。
+
+        审计 N3：只拦到本机的入站时，Native/PD 模式下 LAN 设备的 IPv6 GUA
+        会直接暴露给公网——转发路径是 policy accept。
+        """
+        self.s.a._sh = self._fake_sh
+        self.s.a.failsafe_nft()
+        with open(os.path.join(self.s.td, "run/dert/failsafe.nft"), encoding="utf-8") as f:
+            body = f.read()
+        self.assertIn("chain forward", body)
+        self.assertIn("hook forward", body)
+        self.assertIn("ct state established,related accept", body,
+                      "回程必须放行，否则 LAN 出网的回应包被丢")
+
+    def test_minimal_nft_parses(self):
+        """两种输出都过一遍 nft 语法检查（真机上跑的，CI 没 nft 就跳过）。
+
+        审计 N3 指出 FailsafeNft 把 nft 也 mock 掉了，证明不了规则能加载。
+        """
+        nft = shutil.which("nft")
+        if not nft:
+            self.skipTest("本机没有 nft")
+        import subprocess
+        cases = {"with-cfg": {}, "no-cfg": {"CONFIG_JSON": "/nonexistent/config.json"}}
+        for name, patch in cases.items():
+            old = self.s.a.CONFIG_JSON
+            self.s.a.CONFIG_JSON = patch.get("CONFIG_JSON", old)
+            try:
+                body = self.s.a._minimal_nft()
+            finally:
+                self.s.a.CONFIG_JSON = old
+            p = os.path.join(self.s.td, "chk-%s.nft" % name)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+            r = subprocess.run([nft, "-c", "-f", p], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, "%s: %s" % (name, r.stderr[:200]))
+
     def test_minimal_excludes_tunnel_and_container_ifaces(self):
         """配置读不出来时用通配排除，不能用「!= br-lan 就拦」——
         那会把 tailscale0 / podman 的入站一起拦掉。"""
@@ -549,6 +596,54 @@ class PartialFailure(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(out.get("ok"))
         self.assertFalse(os.path.exists(os.path.join(self.s.td, "run/dert/converge-failed")))
+
+
+class NoDriftKeepsFailure(unittest.TestCase):
+    """无漂移路径不能把「服务没起来」的失败标记清掉。
+
+    审计 N4：开机 dert-apply 失败（标记已置上），15 分钟后首次收敛因为文件
+    早就部署出去了，判定无漂移直接 clear_converge_failed() —— 告警消失，
+    问题一点没变。备份恢复也走这条路。
+    """
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.flag = os.path.join(self.s.td, "run/dert/converge-failed")
+
+    def tearDown(self):
+        self.s.close()
+
+    def _converged(self):
+        """先全量部署一次，让后续收敛走「无漂移」分支。"""
+        rc, out = run(self.s.a.apply_all)
+        self.assertEqual(rc, 0, out)
+        self.s.clear_calls()
+
+    def test_degraded_dnsmasq_keeps_marker(self):
+        self._converged()
+        os.makedirs(os.path.dirname(self.flag), exist_ok=True)
+        open(self.flag, "a").close()
+        self.s.unit_rc("dnsmasq.service", 1)
+        rc, out = run(self.s.a.apply_all, convergent=True)
+        self.assertEqual(rc, 0, "无漂移路径不该因为降级而失败（会让定时器反复重启）")
+        self.assertTrue(os.path.exists(self.flag),
+                        "dnsmasq 没在跑，失败标记不能被清掉")
+
+    def test_healthy_clears_marker(self):
+        self._converged()
+        os.makedirs(os.path.dirname(self.flag), exist_ok=True)
+        open(self.flag, "a").close()
+        rc, out = run(self.s.a.apply_all, convergent=True)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(self.flag), "服务都在跑，标记该清掉")
+
+    def test_degraded_networkd_keeps_marker(self):
+        self._converged()
+        os.makedirs(os.path.dirname(self.flag), exist_ok=True)
+        open(self.flag, "a").close()
+        self.s.unit_rc("systemd-networkd.service", 1)
+        run(self.s.a.apply_all, convergent=True)
+        self.assertTrue(os.path.exists(self.flag))
 
 
 if __name__ == "__main__":

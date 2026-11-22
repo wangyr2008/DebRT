@@ -514,7 +514,15 @@ def _minimal_nft():
         "    meta nfproto ipv6 udp dport 546 accept\n"
         "    drop\n"
         "    return\n"
-        "  }\n%s}\n" % (define, br, lan_def, match, nat))
+        "  }\n\n"
+        # forward 链：只挡「从 WAN 新发起」的连接，LAN 出网与回程都不受影响。
+        # 没有这条时，Native/PD 模式下 LAN 设备的 IPv6 GUA 会直接暴露给公网
+        # ——兜底规则只拦了到本机的入站，转发路径是 policy accept（审计 N3）。
+        "  chain forward {\n"
+        "    type filter hook forward priority filter; policy accept;\n"
+        "    ct state established,related accept\n"
+        "    %s drop\n"
+        "  }\n%s}\n" % (define, br, lan_def, match, match, nat))
 
 
 def failsafe_nft():
@@ -631,6 +639,30 @@ def wait_dnsmasq(seconds):
     return False
 
 
+def degraded_services():
+    """返回没在运行的核心服务名列表。
+
+    只用于「无漂移」路径判断失败标记能不能清：那条路径不重启任何服务，
+    如果开机时 networkd/dnsmasq/pppoe 根本没起来，这里必须看得出来。
+    读配置失败时按「不检查 pppoe」处理——宁可少报一个服务，
+    也不能因为读不到配置就把标记永久留着（那会让告警永远下不去）。
+    """
+    names = ["systemd-networkd", "dnsmasq"]
+    try:
+        with open(CONFIG_JSON, encoding="utf-8") as f:
+            mode = (json.load(f).get("wan") or {}).get("mode")
+    except Exception:
+        mode = None
+    if mode == "pppoe":
+        names.append("dert-pppoe")
+    bad = []
+    for n in names:
+        r = _sh(["systemctl", "is-active", "--quiet", n + ".service"], timeout=10)
+        if r is None or r.returncode != 0:
+            bad.append(n)
+    return bad
+
+
 def _migrate_mask():
     """存量 LAN_MASK_TOO_WIDE → 掩码迁回 /24（保留 IP 与地址池）。返回说明或空串。"""
     try:
@@ -722,7 +754,15 @@ def apply_all(convergent=False):
             # 排序中的启动任务互相等待形成死锁（真机实测）。崩溃恢复靠 Restart=on-failure。
             maintain_singbox_dropin()
             ensure_own_units()
-            clear_converge_failed()
+            # 清标记前必须确认服务真的在跑。开机时 dert-apply 失败（标记已置上），
+            # 15 分钟后首次收敛因为「文件早就部署出去了」判定无漂移，走到这里——
+            # 无条件清标记就会把「服务没起来」的告警抹掉，而问题一点没变（审计 N4）。
+            _bad = degraded_services()
+            if _bad:
+                mark_converge_failed()
+                _log("converge_degraded", services=",".join(_bad))
+            else:
+                clear_converge_failed()
             # stage 必须删：这是"无漂移"的提前返回，早于下方全量路径的清理。
             # 漏了它 = 每次开机/6h 收敛/每次升级都在 /run/dert 留一份完整生成物，
             # 其中 etc/ppp/chap-secrets 是明文宽带密码（真机 2026-11-09 实测）。

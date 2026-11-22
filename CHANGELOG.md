@@ -7,6 +7,101 @@
 
 ## [Unreleased]
 
+## [0.1.133] - 2026-11-22
+
+> 第三方审计 v0.1.132 报告里确认的问题。报告本身质量很高（它自己标了「没上真机」），
+> 我逐条核下来 5 条成立、1 条半成立，另有 3 处判断不成立（见 Notes）。
+
+### Security
+
+- **`backup-create` 可以写任意路径 → 面板用户提权到 root**（§4 #1）。
+  sudoers 给的是 `backup-create *`（任意参数），而这个子命令以 root 身份写文件、
+  写完还 `chown` 给 `dert`。于是
+  `sudo -u dert dert-priv backup-create /etc/ld.so.preload`
+  就等于「把任意 root 会读取的文件交给面板用户改写」。现在输出路径必须落在
+  `/var/lib/dert/backups`（用 `realpath` 比对，软链指到目录外也拦住）。
+
+- **升级验签默认关闭**（§4 #2）。以前只在配置里显式写了
+  `upgrade.require_signature=true` 才强制；攻击者只要让镜像不提供 `.sig`，
+  校验就被静默跳过。现在默认强制，确实要绕过时需**主动**写
+  `require_signature=false`。
+
+- **sing-box 的 mixed 入站（7890）对局域网无认证开放**（§5.2）。
+  白名单设备走的是透明代理（tun + redirect），根本不需要这个端口；开着等于给
+  局域网里任何设备（访客、被入侵的 IoT）一个开放代理。防火墙现在默认丢掉
+  LAN→7890（`firewall.allow_lan_proxy=true` 可打开）。
+  真机确认升级前 7890/9090 均无活动连接。
+
+- **安装 sing-box 不再 `curl | sh`**（§4 #23）。管道里 sh 读到的可能是截断的
+  脚本，且执行过什么没有留痕。改为先落盘、校验非空且有 shebang、把 sha256
+  写进 journal 再执行。上游脚本仍是「信任首次获取」——彻底解决要改成下载
+  .deb + 发布页 checksums 校验，那会动到安装机制，单独评估。
+
+### Fixed
+
+- **N1（中）保存 LAN 设置时，WAN/LAN 重叠校验用的是旧 LAN 值**。
+  `cross_validate()` 无论哪一段都拿 `cur` 里的旧 LAN 比对，本次提交的 `result`
+  完全没参与。两个方向都错：把 LAN 改成 WAN 所在网段会**漏报**；存量已经重叠时
+  把 LAN 改到别的网段想脱困会被**误拒**——用户没有任何办法通过面板改出来。
+
+- **N6（中）`singbox-cleanup` 删表漏写地址族**。
+  `nft delete table sing-box` 省略族名时默认 `ip`，而 sing-box 建的是
+  `inet sing-box`，命令报 `No such file or directory` 又被 `2>/dev/null` 吞掉
+  ——这条清理**从来没生效过**（真机实测退出码 1，表仍在）。sing-box 被
+  SIGKILL/OOM 后重定向规则残留，白名单设备的连接被送到没人监听的端口，
+  「崩溃后回落直连」失效。顺手修掉注释里过时的「DNAT 到 172.19.0.x」。
+
+- **N4（低中）收敛失败标记被下一次无漂移收敛清掉**。
+  开机 `dert-apply` 失败会置标记，15 分钟后首次收敛因为「文件早就部署出去了」
+  判定无漂移，走到提前返回分支无条件 `clear_converge_failed()`——告警消失而
+  问题还在。现在清标记前检查 `systemd-networkd` / `dnsmasq` /（PPPoE 时）
+  `dert-pppoe` 是否 `is-active`，不在运行就保留标记并记 `converge_degraded`。
+
+- **N3（低）兜底防火墙没有 forward 链**。只拦到本机的入站时，Native/PD 模式下
+  LAN 设备的 IPv6 GUA 会直接暴露给公网（转发路径是 policy accept）。
+  补一条最小 forward 链：`ct state established,related accept` + 从 WAN 新发起
+  的丢弃。另加一个用真 `nft -c` 校验两种输出的用例（以前 `FailsafeNft` 把 nft
+  也 mock 掉了，证明不了规则能加载）。
+
+- **N5（低）`wan-addr-sync` 的 flush 与 add 分两条命令**。中间那一瞬 `wan_v4`
+  是空的，新建的回流连接拿不到 DNAT；注释写的「地址没变就不动集合」在实现里
+  根本不存在。现在一个 python 进程同时算「应有/现有」，只在有变化时输出
+  **一条事务**（flush + add 一起提交）。
+
+- **N2（低）PD 长度只看第一条路由**。运营商下发多个 PD、或切换上网方式时旧路由
+  还没清掉，会读到错的长度。现在收集全部 PD 路由，展示取最宽的那个，
+  「够不够用」按**存在任一放得下**判断。
+
+  > 报告建议「取所有匹配项里最长的前缀长度」，方向是反的：同时拿到 /60 和 /64 时
+  > 取最长（/64）会误报「PD 太短」，而 /60 已经够 LAN 用了。
+
+- **`allow_lan_proxy` 会被面板保存静默重置**。面板的防火墙表单没有这个字段，
+  `norm_firewall` 以前会把它重置成默认值——与 v0.1.74 修过的
+  `require_signature` 同一类问题。现在缺省时保留原值。
+
+### Notes
+
+- 报告里**不成立**的三处，已实测核对：
+  - **N3-1「通配符集合语法没验证过」**：`nft -c -f` 两种输出都退出 0，语法没问题。
+  - **P3「v6 fakeip 可能被 bypass 误放行」**：实测 fakeip `fc00::2e:443` 走
+    `redirect`（计数 +1）、`bypass` 计数 +0；对照的真实 CN 公网 v6 才 bypass（+7）。
+  - **P4「Tailscale 可能被误放行」**：真机没有 `tailscale0`，模板里的 `ts-ep`
+    未启用，不适用。
+- **9090 只告警不拦**。那份配置属于 sub-store（DebRT 只读），改监听地址会与
+  订阅更新互相覆盖；而 Clash dashboard 是实际在用的功能，拦掉就是功能回退。
+  所以 `status.py` 新增 `singbox_api` 检测（监听非回环 + 弱口令），概览页给出
+  告警并指出该改 `services[].secret`。真机当前：`0.0.0.0:9090` + `passwd` → 会亮。
+- 新增用例 26 个（N1 两条、N2 两条、N3 两条、N4 三条、备份路径两条、
+  7890 两条、API 风险五条、allow_lan_proxy 两条、验签默认一条、其它）。
+- 守卫 **P3-48** 覆盖上述 11 条，**逐条反向验证**（`.github/scripts/reverse_check.sh`，
+  这次是「破坏后必须变红 + 恢复后必须变绿」双向校验）。
+- 反向验证过程本身踩到两次教训，都已修：
+  - 用上一轮残留的 `/tmp/b1` 做恢复，把 `validate.py` 写成了别的脚本；
+    第一轮 10 个「抓到」其实都是语法错误——**恢复必须校验**。
+  - 子串陷阱第 6、7 次：`def degraded_services():` 含 `degraded_services()`、
+    `_singbox_api_risk` 含 `singbox_api`，检查改成精确表达式才抓得住。
+- 全量 454 用例绿，字符串断言预算仍 133。
+
 ## [0.1.132] - 2026-11-22
 
 > 审计最后两条。**至此 21 条全部处理完毕。**

@@ -555,6 +555,15 @@ def gen_nft(cfg):
         "    type filter hook input priority filter; policy accept;",
         "    ct state established,related accept",
         "    iifname $WAN_IFS jump wan_in",
+    ]
+    # sing-box 的 mixed 入站在 7890 上**没有认证**：白名单设备走的是透明代理
+    # （tun + redirect），根本不需要它；开着只是给局域网里任何设备一个开放代理
+    # （访客、被入侵的 IoT 都能用，日志里看不出来源意图）。默认丢掉。
+    # 需要从局域网直接用它时把 firewall.allow_lan_proxy 打开（审计 §5.2）。
+    if not fw.get("allow_lan_proxy", False):
+        lines += ["    iifname $LAN_BR tcp dport 7890 drop  # mixed 入站无认证：白名单走透明代理，不需要它",
+                  "    iifname $LAN_BR udp dport 7890 drop"]
+    lines += [
         "  }",
         "",
         "  chain wan_in {",

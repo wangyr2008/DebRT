@@ -342,6 +342,15 @@ function renderOverview(st) {
         "请到「网络设置 → IPv6 设置」改用 NAT6 模式，或向运营商确认能否下发更长的前缀。";
     }
   }
+  /* sing-box API 对局域网开放 + 弱口令。这份配置属 sub-store，DebRT 只读，
+     所以只告警不动手——但必须说出来：否则「面板看着一切正常」而局域网里
+     任何设备都能改代理节点。 */
+  var saw = $id("ov-sbapi-warn"), sal = $id("ov-sbapi-listen");
+  if (saw) {
+    var api = st.singbox_api || {};
+    saw.hidden = !api.weak;
+    if (!saw.hidden && sal) sal.textContent = (api.listen || "0.0.0.0") + ":" + (api.port || "?");
+  }
   var lcw = $id("ov-lanconflict-warn"), lci = $id("ov-lanconflict-ip");
   if (lcw) {
     lcw.hidden = !(st.wan && st.wan.lan_conflict);

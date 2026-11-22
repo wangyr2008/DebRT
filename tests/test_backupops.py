@@ -241,7 +241,8 @@ class BackupCreate(unittest.TestCase):
     def test_package_excludes_secrets(self):
         self.s.write_cfg(support.dhcp_config())
         self.s.write_sec({"pppoe_password": "secret"})
-        out_path = os.path.join(self.s.td, "out.tar.gz")
+        out_path = os.path.join(self.s.td, "var/lib/dert/backups/out.tar.gz")
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
         rc, out = run(self.s.b.backup_create, out_path)
         self.assertEqual(rc, 0, out)
         with tarfile.open(out_path) as tf:
@@ -254,6 +255,34 @@ class BackupCreate(unittest.TestCase):
         rc, out = run(self.s.b.backup_create, "")
         self.assertEqual(rc, 1)
         self.assertEqual(out["code"], "USAGE")
+
+    def test_path_outside_backup_dir_rejected(self):
+        """审计 §4 #1：sudoers 是 `backup-create *`，dert 用户可传任意路径。
+
+        root 写完还会 chown 给 dert —— 于是 `backup-create /etc/ld.so.preload`
+        等于把任意 root 会读取的文件交给面板用户改写，直接提权。
+        """
+        self.s.write_cfg(support.dhcp_config())
+        evil = os.path.join(self.s.td, "etc/ld.so.preload")
+        os.makedirs(os.path.dirname(evil), exist_ok=True)
+        rc, out = run(self.s.b.backup_create, evil)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out["code"], "BACKUP_PATH")
+        self.assertFalse(os.path.exists(evil), "拒绝时不能留下任何文件")
+
+    def test_symlink_escape_rejected(self):
+        """目录里放个指向外部的软链，realpath 之后同样要拦住。"""
+        self.s.write_cfg(support.dhcp_config())
+        base = os.path.join(self.s.td, "var/lib/dert/backups")
+        os.makedirs(base, exist_ok=True)
+        outside = os.path.join(self.s.td, "etc")
+        os.makedirs(outside, exist_ok=True)
+        link = os.path.join(base, "escape.tar.gz")
+        os.symlink(os.path.join(outside, "target.tar.gz"), link)
+        rc, out = run(self.s.b.backup_create, link)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out["code"], "BACKUP_PATH")
+        self.assertFalse(os.path.exists(os.path.join(outside, "target.tar.gz")))
 
 
 class Factory(unittest.TestCase):
