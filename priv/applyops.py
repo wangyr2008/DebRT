@@ -639,6 +639,37 @@ def wait_dnsmasq(seconds):
     return False
 
 
+def refresh_dns_fragment():
+    """重生成 00-dert-dns.json，内容变了就重启 sing-box。
+
+    这个片段只在 sing-box 启动时由 ExecStartPre 生成，而且**不在 netgen 的清单里**
+    ——所以「升级改了生成逻辑」不会产生漂移、也不会重启 sing-box，改动就一直不生效
+    （v0.1.134 的 Tailscale 规则就撞上了：升级完线上还是旧片段）。
+    sing-box 的配置只在启动时读取，所以重生成之后必须重启才会加载。
+    """
+    src = os.path.join(LIB, "dns-split-prepare")
+    if not os.path.isfile(src):
+        return
+    frag = _fs("/etc/sing-box/00-dert-dns.json")
+    try:
+        with open(frag, "rb") as f:
+            before = f.read()
+    except OSError:
+        before = b""
+    _sh([src], timeout=60)
+    try:
+        with open(frag, "rb") as f:
+            after = f.read()
+    except OSError:
+        return
+    if after == before:
+        return
+    r = _sh(["systemctl", "is-active", "--quiet", "sing-box.service"], timeout=15)
+    if r is not None and r.returncode == 0:
+        _sh(["systemctl", "try-restart", "sing-box.service"], timeout=60)
+        _log("dns_fragment_refreshed", restarted=True)
+
+
 def degraded_services():
     """返回没在运行的核心服务名列表。
 
@@ -753,6 +784,7 @@ def apply_all(convergent=False):
             # 此处**不能** start dnsmasq：收敛单元 Before=dnsmasq，同步 start 会与
             # 排序中的启动任务互相等待形成死锁（真机实测）。崩溃恢复靠 Restart=on-failure。
             maintain_singbox_dropin()
+            refresh_dns_fragment()
             ensure_own_units()
             # 清标记前必须确认服务真的在跑。开机时 dert-apply 失败（标记已置上），
             # 15 分钟后首次收敛因为「文件早就部署出去了」判定无漂移，走到这里——
@@ -792,6 +824,7 @@ def apply_all(convergent=False):
         failed.append("dnsmasq")
     sync_dns_upstream()
     maintain_singbox_dropin()
+    refresh_dns_fragment()
     ensure_own_units()
     retire_old_prefixes()
     # 服务没起来就不能报成功：备份恢复/恢复出厂都靠这条流水线的退出码决定

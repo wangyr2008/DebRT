@@ -1370,6 +1370,12 @@ if "X-Sig-B64" not in _api48:
 _dsp48 = open(os.path.join(ROOT, "priv", "dns-split-prepare"), encoding="utf-8").read()
 if "fd7a:115c:a1e0::/48" not in _dsp48 or '"rules": extra +' not in _dsp48:
     _p48_bad.append("00-dert-dns.json 不再前置 Tailscale v6 规则（tailnet 的 v6 会超时）")
+# 片段改了必须重启 sing-box（否则升级后线上还是旧片段，改动静默不生效）
+# 数「调用行」而不是出现次数：`def refresh_dns_fragment():` 里也含这个子串
+# （子串陷阱第 8 次）
+_calls48 = [l for l in _ap48.splitlines() if l.strip() == "refresh_dns_fragment()"]
+if len(_calls48) < 2:
+    _p48_bad.append("收敛/升级不再刷新 00-dert-dns.json（改了生成逻辑也不生效）")
 assert _p48_bad == [], "P3-48 回归：%s" % "；".join(_p48_bad)
 
 print("审计守卫: 撤销表/546/PD新键/nat6矩阵/跨段组合/静态v6落盘/PPPoE-IPv6/热插拔守卫/B-2保留/C-6载波/"

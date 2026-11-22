@@ -646,5 +646,53 @@ class NoDriftKeepsFailure(unittest.TestCase):
         self.assertTrue(os.path.exists(self.flag))
 
 
+class DnsFragmentRefresh(unittest.TestCase):
+    """片段（00-dert-dns.json）改了要重启 sing-box 才生效。
+
+    这个文件只在 sing-box 启动时由 ExecStartPre 生成，而且不在 netgen 的清单里
+    ——「升级改了生成逻辑」既不产生漂移、也不重启 sing-box，改动就一直不生效。
+    v0.1.134 的 Tailscale 规则就撞上了这个：升级完线上还是旧片段。
+    """
+
+    def setUp(self):
+        self.s = Sandbox()
+        self.frag = os.path.join(self.s.td, "etc/sing-box/00-dert-dns.json")
+        os.makedirs(os.path.dirname(self.frag), exist_ok=True)
+
+    def tearDown(self):
+        self.s.close()
+
+    def _fake_prepare(self, body):
+        p = os.path.join(self.s.bindir, "dns-split-prepare")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nprintf '%s' '" + body + "' > " + self.frag + "\n")
+        os.chmod(p, 0o755)
+
+    def test_changed_content_restarts_singbox(self):
+        with open(self.frag, "w", encoding="utf-8") as f:
+            f.write('{"v":1}')
+        self._fake_prepare('{"v":2}')
+        self.s.a.refresh_dns_fragment()
+        with open(self.frag, encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{"v":2}')
+        self.assertTrue(any("try-restart sing-box.service" in c for c in self.s.calls()),
+                        "片段变了却没重启 sing-box，改动不会生效")
+
+    def test_unchanged_content_does_not_restart(self):
+        with open(self.frag, "w", encoding="utf-8") as f:
+            f.write('{"v":2}')
+        self._fake_prepare('{"v":2}')
+        self.s.a.refresh_dns_fragment()
+        self.assertFalse(any("try-restart sing-box.service" in c for c in self.s.calls()),
+                         "内容没变不该重启（会白白打断代理连接）")
+
+    def test_missing_script_is_noop(self):
+        with open(self.frag, "w", encoding="utf-8") as f:
+            f.write('{"v":1}')
+        self.s.a.refresh_dns_fragment()          # 不该抛
+        with open(self.frag, encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{"v":1}')
+
+
 if __name__ == "__main__":
     unittest.main()
