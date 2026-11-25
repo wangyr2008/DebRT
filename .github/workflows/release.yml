@@ -74,5 +74,13 @@ jobs:
         run: |
           ASSETS=("dert-${VER}.tar.gz" "dert-${VER}.tar.gz.sha256")
           [ -f "dert-${VER}.tar.gz.sig" ] && ASSETS+=("dert-${VER}.tar.gz.sig")
-          gh release create "v${VER}" "${ASSETS[@]}" \
-            --title "DebRT v${VER}" --generate-notes --repo "$GITHUB_REPOSITORY"
+          # --verify-tag：tag 已经由 git push 建好了，让 gh 直接关联、不要尝试重建。
+          # 失败时把 gh 的 stderr 打成 annotation——否则只剩一句 exit code 1，
+          # 排查要登录网页翻日志（v0.1.136 连红三次就是这么瞎猜的）。
+          if ! gh release create "v${VER}" "${ASSETS[@]}" \
+               --title "DebRT v${VER}" --generate-notes --verify-tag \
+               --repo "$GITHUB_REPOSITORY" 2>/tmp/gh-err.log; then
+            echo "::error::gh release create 失败"
+            tail -15 /tmp/gh-err.log | sed 's/^/::error::/'
+            exit 1
+          fi
