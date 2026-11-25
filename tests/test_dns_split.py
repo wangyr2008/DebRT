@@ -27,6 +27,8 @@ FAKE = {
     # 5353 必须"在监听"，否则脚本等待 10 秒后退出
     "ss": '#!/bin/sh\necho "UNCONN 0 0 *:5353 *:*"\nexit 0\n',
     "logger": '#!/bin/sh\nexit 0\n',
+    # v0.1.136：out 链要排除 sing-box 自己的 uid，脚本用 id -u 查
+    "id": '#!/bin/sh\n[ "$1" = "-u" ] && echo 986\nexit 0\n',
 }
 
 FAKE_IP = """#!/bin/sh
@@ -115,8 +117,8 @@ class SyncBehavior(unittest.TestCase):
         self.assertEqual(rc, 0)
         # 按行尾断言：字符串包含判断会把 "redirect to :5353" 也算成 ":53"
         ends = [l.rstrip() for l in log.splitlines()]
-        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :5353")), 1,
-                         "白名单一条")
+        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :5353")), 3,
+                         "白名单一条 + 本机 v4/v6 各一条（v0.1.136）")
         self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :53")), 1,
                          "非白名单一条")
         self.assertNotIn("dnat ip to", log)
@@ -134,6 +136,38 @@ class SyncBehavior(unittest.TestCase):
         # 非白名单 → 53（dnsmasq → 运营商 → 真实 IP）
         self.assertIn(f'ether saddr != {{ {macs} }}', log)
         self.assertIn("redirect to :53", log)
+
+    def test_local_output_chain(self):
+        """v0.1.136：本机 DNS 也走 5353，和局域网共用一条路。
+
+        以前用 127.0.0.2 的 dns-self inbound，本机要读两个 nameserver、
+        靠 glibc 收 ICMP 端口不可达回落；现在是同一条 nft 链路，
+        resolv.conf 只剩 127.0.0.1。
+        """
+        _, log, _ = self.h.run(self.SCRIPT)
+        self.assertIn("chain out {", log)
+        # 必须排除 sing-box 自己，否则它的 local DNS server 查 127.0.0.1 会死循环
+        self.assertIn("meta skuid 986 return", log)
+        # v4 和 v6 各一条（v6 是 dns-self 时代缺的通道）
+        self.assertIn("ip  daddr 127.0.0.1", log)
+        self.assertIn("ip6 daddr ::1", log)
+        # out 链必须在 output hook 上，且早于 sing-box 的 output_udp_icmp（mangle+2）
+        self.assertIn("type nat hook output priority dstnat - 2", log)
+
+    def test_no_uid_skips_output_chain(self):
+        """查不到 sing-box 用户时不建 out 链。
+
+        本机退回 dnsmasq（等于"没有 sing-box"），而不是把 DNS 指向没人监听的
+        5353。否则用户被删/改名时本机会静默失去 DNS。
+        """
+        self.h.close()
+        self.h = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(self.h.close)
+        self.h._write_bin("id", "#!/bin/sh\nexit 1\n")
+        _, log, _ = self.h.run(self.SCRIPT)
+        self.assertNotIn("chain out", log)
+        # pre 链仍要建：白名单设备的 DNS 不该被这个降级影响
+        self.assertIn("chain pre", log)
 
     def test_mac_is_normalized(self):
         """MAC 来自 sub-store，写法不受控；nft 只认冒号分隔。
@@ -250,9 +284,13 @@ class PrepareBehavior(unittest.TestCase):
         cfg = self._prepare_with({"endpoints": [{"type": "tailscale", "tag": "my-ts"}]})
         self.assertEqual(cfg["route"]["rules"][0].get("outbound"), "my-ts")
 
-    def test_self_dns_entry_on_loopback(self):
-        """v0.1.118：路由器自身也要有 DNS 入口（127.0.0.2:53），否则本机查询
-        走 dnsmasq → 运营商 DNS，被污染的 www.google.com 会拿到 Twitter 的 IP。"""
+    def test_no_self_inbound(self):
+        """v0.1.136：不再生成 dns-self（127.0.0.2）。
+
+        本机 DNS 改由 dert_dns 的 out 链 redirect 到 5353。inbound 和 hijack 规则
+        必须同进同退：删 inbound 留规则，sing-box check 会因为引用不存在的
+        inbound 失败；删规则留 inbound，则是死代码。
+        """
         h = Harness(["0c:19:f8:64:7c:ac"])
         self.addCleanup(h.close)
         rc, _, _ = h.run(os.path.join(support.PRIV, "dns-split-prepare"))
@@ -261,24 +299,16 @@ class PrepareBehavior(unittest.TestCase):
         with open(p) as fh:
             cfg = json.load(fh)
 
-        tags = {i.get("tag"): i for i in cfg["inbounds"]}
-        self.assertIn("dns-self", tags, "缺路由器自身的 DNS 入口")
-        me = tags["dns-self"]
-        # 必须绑 127.0.0.2 而不是 127.0.0.1：后者是 dnsmasq，要留着做兜底
-        self.assertEqual(me.get("listen"), "127.0.0.2", me)
-        self.assertEqual(me.get("listen_port"), 53, me)
-        self.assertEqual(me.get("type"), "direct", me)
-        # 和 dns-in 一样不能写死 network=udp（客户端会用 TCP 重试）
-        self.assertNotEqual(me.get("network"), "udp", me)
+        tags = {i.get("tag") for i in cfg["inbounds"]}
+        self.assertNotIn("dns-self", tags, "dns-self 已由 out 链取代")
+        self.assertEqual(tags, {"dns-in"}, tags)
+        # hijack 规则也只能剩 dns-in，不能有引用不存在 inbound 的残留
+        hijacked = {r.get("inbound") for r in cfg["route"]["rules"]
+                    if r.get("action") == "hijack-dns"}
+        self.assertEqual(hijacked, {"dns-in"}, hijacked)
 
-        hijack = [r for r in cfg["route"]["rules"]
-                  if r.get("action") == "hijack-dns" and r.get("inbound") == "dns-self"]
-        self.assertEqual(len(hijack), 1, "dns-self 必须 hijack-dns，否则查询会转发回自己")
-        # 不能带 protocol 条件（direct inbound 不做 sniff，规则会静默不匹配 → 无限循环）
-        self.assertNotIn("protocol", hijack[0], hijack[0])
-
-    def test_self_dns_does_not_break_whitelist_entry(self):
-        """加 dns-self 后，白名单入口的 5353/双栈/hijack 一个都不能少。"""
+    def test_whitelist_entry_intact(self):
+        """去掉 dns-self 后，白名单入口的 5353/双栈/hijack 一个都不能少。"""
         h = Harness(["0c:19:f8:64:7c:ac"])
         self.addCleanup(h.close)
         rc, _, _ = h.run(os.path.join(support.PRIV, "dns-split-prepare"))
@@ -291,7 +321,7 @@ class PrepareBehavior(unittest.TestCase):
         self.assertEqual(tags["dns-in"].get("listen_port"), 5353)
         inbounds_hijacked = {r.get("inbound") for r in cfg["route"]["rules"]
                              if r.get("action") == "hijack-dns"}
-        self.assertEqual(inbounds_hijacked, {"dns-in", "dns-self"}, inbounds_hijacked)
+        self.assertEqual(inbounds_hijacked, {"dns-in"}, inbounds_hijacked)
 
 
 if __name__ == "__main__":

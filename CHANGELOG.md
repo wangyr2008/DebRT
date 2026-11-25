@@ -7,6 +7,62 @@
 
 ## [Unreleased]
 
+## [0.1.136] - 2026-11-25
+
+> 本机 DNS 从「独立入口 127.0.0.2」改成「和局域网共用 nft 分流」。
+> 这不是修 bug，是去掉一套重复机制；顺带补上一直缺的本机 v6 DNS。
+
+### Changed
+
+- **本机 DNS 改由 `dert_dns` 的 `out` 链引流**：
+  - `priv/dns-split-sync` 建表时新增 `out` 链（`type nat hook output
+    priority dstnat - 2`），把本机发往 `127.0.0.1:53` / `[::1]:53` 的查询
+    `redirect to :5353`，与白名单设备共用 `dns-in`。
+  - 该链**排除 sing-box 自身的 uid**（建表时 `id -u sing-box` 现查）。
+    config.json 模板里有 `type: local` 的 DNS server，它会读 `resolv.conf`
+    再查 `127.0.0.1`——不排除就是「查询 → redirect 5353 → 再查 127.0.0.1」
+    的死循环（真机用 `setpriv` 复现过）。**查不到 uid 时不建 out 链**，
+    本机退回 dnsmasq（等于"没有 sing-box"），而不是把 DNS 指向没人监听的端口。
+  - `priv/dns-split-prepare` 删除 `dns-self` inbound（`127.0.0.2:53`）及其
+    `hijack-dns` 规则。两处必须同进同退：删 inbound 留规则会让 `sing-box
+    check` 因引用不存在的 inbound 失败。
+  - 三处 `resolv.conf` 写入点（`install.sh`、`network/ppp/ip-up.d/dert`、
+    `ip-down.d/dert`）改为只写 `nameserver 127.0.0.1`，去掉
+    `options timeout:2 attempts:1`。
+
+### 收益
+
+- **机制从两套变一套**：本机不再需要 127.0.0.2 这个"魔法地址"，排查时
+  本机 DNS 就是 `127.0.0.1`，和没装 sing-box 的路由器一样。
+- **补上本机 v6 DNS**：`dns-self` 只监听 v4，以前 `resolv.conf` 不能写
+  `::1`（写了会绕回 dnsmasq、污染照旧），本机 v6 查询一直缺一条通道；
+  现在 `ip6 daddr ::1` 也 redirect 到 5353。
+- **回落路径统一且与 resolver 实现无关**：sing-box 停止 → `ExecStopPost`
+  删表 → 本机和白名单设备一起回到 dnsmasq。不再依赖 glibc 的多 nameserver
+  行为（Go 的 netgo、musl、c-ares 各有差异，"2 秒自动兜底"只对一部分程序成立）。
+- **故障域更清楚**：谁用代理谁受代理影响。非白名单设备与 sing-box 零耦合。
+
+### 真机验证
+
+| 测试 | 结果 |
+|---|---|
+| `dig @127.0.0.1 www.google.com` | `198.19.0.12`（fakeip） |
+| `dig @::1 www.google.com` | `198.19.0.12`（v6 通道生效） |
+| `dig +tcp @127.0.0.1 www.google.com` | `198.19.0.12`（TCP DNS） |
+| `dig @127.0.0.1 <设备>.lan` | 局域网地址（landns 未受影响） |
+| `setpriv --reuid=986 ... dig @127.0.0.1 www.google.com` | 真实 IP（skuid 排除生效） |
+| `nft list chain inet dert_dns out` | v4 / v6 两条 redirect 计数器均增长 |
+
+### 测试
+
+- `tests/test_dns_split.py`：删 `dns-self` 的两个用例，改为
+  `test_no_self_inbound`（断言 inbound 与 hijack 同步删除）和
+  `test_whitelist_entry_intact`；新增 `test_local_output_chain`
+  （out 链、skuid、v4/v6 两条规则）与 `test_no_uid_skips_output_chain`
+  （uid 查不到时不建链）。
+- 守卫 **P3-41** 反转：三处 `resolv.conf` 必须写 `127.0.0.1`，
+  **不得**再出现 `127.0.0.2`。
+
 ## [0.1.135] - 2026-11-22
 
 > 0.1.134 升级完发现线上还是旧片段——改了生成逻辑，但没有任何东西触发 sing-box

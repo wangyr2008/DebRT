@@ -642,21 +642,25 @@ if "V0.1.0" in _idx:
     _p40_bad.append("index.html 又出现硬编码版本号 V0.1.0（升级后不会变）")
 assert _p40_bad == [], "P3-40 回归：%s" % "；".join(_p40_bad)
 
-# P3-41：路由器自身 DNS 必须走 sing-box（v0.1.118）
+# P3-41：路由器自身 DNS 必须走 sing-box
 # 以前 resolv.conf 指向 dnsmasq(127.0.0.1)，而 dnsmasq 上游是运营商 DNS：路由器
 # 自己查 www.google.com 拿到污染结果（真机实测 104.244.42.197，Twitter 的 IP），
-# 走代理也连不上。现在首选 sing-box 的 dns-self（127.0.0.2:53）。
-# 三处写入点必须一致，且不能再写 ::1（dns-self 只监听 v4，::1 会让本机 v6 查询
-# 绕回 dnsmasq，污染照旧）。
+# 走代理也连不上。
+# v0.1.118~v0.1.135 用 127.0.0.2 的 dns-self inbound；v0.1.136 起改由 dert_dns
+# 的 out 链把 127.0.0.1:53 / [::1]:53 redirect 到 5353，resolv.conf 只写 127.0.0.1。
+# 三处写入点必须一致：不能再出现 127.0.0.2（那个 inbound 已删，没人监听），
+# 也不该写 ::1（out 链已覆盖 v6，多写一行会让人误以为要靠它）。
 _p41_bad = []
 for _rel41 in ("install.sh",
                os.path.join("network", "ppp", "ip-up.d", "dert"),
                os.path.join("network", "ppp", "ip-down.d", "dert")):
     _txt41 = open(os.path.join(ROOT, _rel41), encoding="utf-8").read()
-    if "nameserver 127.0.0.2" not in _txt41:
-        _p41_bad.append("%s 没写 nameserver 127.0.0.2" % _rel41)
+    if "nameserver 127.0.0.1" not in _txt41:
+        _p41_bad.append("%s 没写 nameserver 127.0.0.1" % _rel41)
+    if "nameserver 127.0.0.2" in _txt41:
+        _p41_bad.append("%s 还写着 127.0.0.2（dns-self 已删，该地址没人监听）" % _rel41)
     if "nameserver ::1" in _txt41:
-        _p41_bad.append("%s 还写着 nameserver ::1（本机 v6 查询会绕回 dnsmasq）" % _rel41)
+        _p41_bad.append("%s 还写着 nameserver ::1" % _rel41)
 assert _p41_bad == [], "P3-41 回归：%s" % "；".join(_p41_bad)
 
 # P3-42：WAN 出口质量探测必须真的接上（v0.1.119）

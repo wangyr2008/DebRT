@@ -144,6 +144,36 @@ fi
 # 拼 MAC 集合：0c:19:...,44:59:...
 SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
 
+# 本机 DNS 入口（v0.1.136）：把本机发往 127.0.0.1:53 / [::1]:53 的查询也 redirect
+# 到 5353，和局域网白名单设备走同一条路。这样 resolv.conf 只剩一行 127.0.0.1，
+# 不再需要 127.0.0.2 和「两个 nameserver + glibc 换下一个」那套回落。
+#
+# 必须排除 sing-box 自己：config.json 模板里有 type: local 的 DNS server，它会读
+# resolv.conf 再查 127.0.0.1——不排除就是「查询 → redirect 5353 → 再查 127.0.0.1」
+# 的死循环（真机验证时用 setpriv 复现过）。
+#
+# uid 查不到（用户被删/改名）时不建 out 链：本机继续走 dnsmasq，退化成「没有
+# sing-box」的状态。这比把本机 DNS 指到一个没人监听的端口安全。
+SB_UID=$(id -u sing-box 2>/dev/null || true)
+OUT_CHAIN=""
+if [ -n "$SB_UID" ]; then
+    OUT_CHAIN=$(cat <<CHAIN
+    chain out {
+        type nat hook output priority dstnat - 2; policy accept;
+
+        # 排除 sing-box 自身（它的 local DNS server 会查 127.0.0.1，不排除会死循环）
+        meta skuid $SB_UID return
+
+        # 本机查询统一进 5353；v6 的 ::1 也一起，补上 dns-self 时代缺的 v6 通道
+        ip  daddr 127.0.0.1 meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+        ip6 daddr ::1       meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+    }
+CHAIN
+)
+else
+    logger -t dert-dns-split "event=local_entry_skipped reason=no_singbox_uid"
+fi
+
 # 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表。
 #
 # 开头的 add + delete 是「原子替换」的固定写法，不能省：
@@ -169,6 +199,7 @@ table inet dert_dns {
         iifname "br-lan" ether saddr $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
         iifname "br-lan" ether saddr != $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :53
     }
+$OUT_CHAIN
 }
 EOF
 then
