@@ -21,13 +21,16 @@ _FS = os.environ.get("DERT_FSROOT", "")
 CONFIG_PATH = _FS + "/etc/dert/config.json"
 SECRETS_PATH = _FS + "/etc/dert/secrets.json"
 ULA_PREFIX = "fda1:9e3a:8b7f"   # DebRT 固定默认 ULA（见 COEXISTENCE.md，避开 sing-box fdfe:dcba::/126）
-# PPPoE 链路的 MTU。取 1480 而不是 1492，是**实测偏好**：
-#   同一台设备、同一批客户端，1480 时网页打开明显更快，1492 时偏慢。
-# 用 ping6 -M do 从 LAN 源测到阿里/Cloudflare，1492 是通的，所以这不是
-# "路径 MTU 更小"，而是 1480 让客户端从一开始就不发接近上限的包——
-# QUIC/UDP 没有 MSS 钳制，1500 字节的包只能靠 PTB 纠正，重传一次就够慢。
-# 代价：v4 每包少 12 字节（包数约多 0.8%），实测无感。
-PPPOE_MTU = 1480
+# PPPoE 链路的 MTU。上限是 1500 − 8 = 1492（PPPoE 头 8 字节），标准值就是 1492。
+#
+# v0.1.105 曾改成 1480，理由是「1480 让客户端不发接近上限的包，减少 QUIC 的 PTB」。
+# 但那个论证站不住：客户端是 1500 MTU，QUIC 按 1500 发，1480 和 1492 都会超
+# （超 20 字节 vs 8 字节），PTB 一样触发——并没有「不发接近上限的包」这回事。
+# 代价是每包少 12 字节、包数多约 0.8%，白丢带宽。
+#
+# v0.1.137 改回 1492。注意 v6 也走 PPPoE（ppp0 有全局 v6 地址、enp4s0 没有），
+# 所以 v6 的 MTU 上限同样是 1492，不存在「v6 走原生 1500」。
+PPPOE_MTU = 1492
 
 ERR = {"ok": False, "code": "NETGEN", "message": "", "hint": ""}
 
@@ -264,7 +267,8 @@ def gen_lan_network(cfg):
              # 也会随着地址来回增删被频繁触发（审计 RT-13）。
              "ConfigureWithoutCarrier=yes",
              "IgnoreCarrierLoss=yes"]
-    # 让 br-lan 的 v6 MTU 与 ppp0 对齐（1480）。注意：systemd-networkd **不会**
+    # 让 br-lan 的 v6 MTU 与 ppp0 对齐（=PPPOE_MTU，v0.1.137 起为 1492）。
+    # 注意：systemd-networkd **不会**
     # 把 IPv6MTUBytes 写进 RA 的 MTU 选项（真机抓包验证：RA 长度 80 字节，
     # 有选项时会变成 88），所以它只影响本机转发与 PTB 里报的 MTU，不影响客户端
     # 从 RA 读到的值。RA 照常发送——早前"设了它就不发 RA"的判断是抓包工具
@@ -514,9 +518,6 @@ def gen_nft(cfg):
     else:
         wifs = wan_ifaces(cfg)
     wan_set = ", ".join(f'"{i}"' for i in wifs)
-    # v6 的 MSS 上限 = MTU - IPv6 头(40) - TCP 头(20)。PPPoE 用 PPPOE_MTU（见其注释），
-    # 其他接入方式按 1500 算。
-    v6_mss = (PPPOE_MTU if cfg["wan"].get("mode") == "pppoe" else 1500) - 60
     net = lan_net(cfg)
     fw = cfg.get("firewall", {})
     v6 = cfg.get("ipv6", {})
@@ -592,10 +593,12 @@ def gen_nft(cfg):
         "  chain forward_mss {",
         "    type filter hook forward priority mangle - 5; policy accept;",
         "    meta nfproto ipv4 oifname $WAN_IFS tcp flags syn tcp option maxseg size set rt mtu",
-        # v6 单独算：MSS = MTU - 40(IPv6 头) - 20(TCP 头)。用显式值而不是 rt mtu，
-        # 是因为 rt mtu 在 v6 下取的是路由 MTU，实测没能把客户端的 1440 压下来
-        # （PTB 计数一直在涨）。显式 1420 让 SYN 一落地就定死。
-        f"    meta nfproto ipv6 oifname $WAN_IFS tcp flags syn tcp option maxseg size set {v6_mss}",
+        # v6 也用 rt mtu（v0.1.137 起）：实测确认它在 v6 下生效——客户端 SYN 1440
+        # 到 ppp0 出口变成 1432（MTU 1492）。早期版本写「rt mtu 在 v6 下压不下来」，
+        # 那是在 MTU=1480、且可能受 tun MTU 干扰的环境下得出的结论，已不成立。
+        # 统一用 rt mtu 的好处：MTU 一变（比如运营商改 PPPoE 封装），MSS 自动跟随，
+        # 不需要再同步改一个常量。
+        "    meta nfproto ipv6 oifname $WAN_IFS tcp flags syn tcp option maxseg size set rt mtu",
         "  }",
         "",
         "  # dnsmasq 的上游 DNS 查询必须绕过 sing-box 的 auto_redirect。",

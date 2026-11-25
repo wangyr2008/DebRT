@@ -53,10 +53,12 @@ class TestPppdPeer(unittest.TestCase):
         self.assertIn("mtu %d" % self.ng.PPPOE_MTU, body)
         self.assertIn("mru %d" % self.ng.PPPOE_MTU, body)
 
-    def test_mtu_is_1480(self):
-        # 实测偏好：1480 时网页明显更快，1492 时偏慢（ping -M do 证明 1492 可通，
-        # 所以不是路径 MTU 问题，而是别让客户端发接近上限的包）。
-        self.assertEqual(self.ng.PPPOE_MTU, 1480)
+    def test_mtu_is_1492(self):
+        # PPPoE 上限是 1500 − 8 = 1492，标准值就是 1492。
+        # v0.1.105 曾用 1480（理由是「减少 QUIC 的 PTB」），但那个论证不成立：
+        # 客户端是 1500 MTU，QUIC 按 1500 发，1480 和 1492 都会超，PTB 一样触发。
+        # v0.1.137 改回 1492。
+        self.assertEqual(self.ng.PPPOE_MTU, 1492)
 
 
 class TestLANNetwork(unittest.TestCase):
@@ -210,13 +212,16 @@ class TestNftBase(unittest.TestCase):
 
     def test_forward_mss_clamp(self):
         self.assertIn("chain forward_mss", self.body)
-        # v4 沿用 rt mtu；v6 必须显式给值——rt mtu 在 v6 下压不住客户端的 1440，
-        # 结果就是每个连接都靠 PTB 纠一次，而部分路径连 PTB 都没有
+        # v4 和 v6 都用 rt mtu（v0.1.137 起）。早期 v6 硬编码 1420 的理由是
+        # 「rt mtu 在 v6 下压不住客户端的 1440」——真机复测已不成立：
+        # 客户端 SYN 1440 → ppp0 出口 1432（MTU 1492）。统一用 rt mtu 后，
+        # MTU 一变 MSS 自动跟随，不用再同步改常量。
         self.assertIn("meta nfproto ipv4 oifname $WAN_IFS tcp flags syn "
                       "tcp option maxseg size set rt mtu", self.body)
         self.assertIn("meta nfproto ipv6 oifname $WAN_IFS tcp flags syn "
-                      "tcp option maxseg size set %d" % (self.ng.PPPOE_MTU - 60),
-                      self.body)
+                      "tcp option maxseg size set rt mtu", self.body)
+        # 不允许再出现硬编码的 MSS 数值（1420 / 1432 之类）
+        self.assertNotIn("maxseg size set 1", self.body)
 
     def test_rejects_retired_v6_source(self):
         """RFC 7084 L-14：用已失效前缀作源地址的转发包要回 ICMPv6 不可达。
