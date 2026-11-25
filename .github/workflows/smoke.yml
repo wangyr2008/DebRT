@@ -170,6 +170,18 @@ jobs:
           tar -czf "/tmp/dert-${VER}.tar.gz" --exclude='__pycache__' --exclude='*.pyc' \
             panel priv config systemd network singbox sudoers install.sh uninstall.sh VERSION README.md
           sha256sum "/tmp/dert-${VER}.tar.gz" > "/tmp/pkg.sha256"
+          # v0.1.133 起 upgrade-apply 默认强制验签（require_signature=true），
+          # 无 .sig 直接 UPG_SIG 拒绝——P-03 从那时起一直红，因为这里从来没签过。
+          # 不能复用仓库公钥：对应私钥只在 Release 的 DERT_SIGNING_KEY 里。
+          # 所以生成一次性密钥对，私钥签包、公钥装到 LIB（install.sh 本来就从
+          # priv/ 装公钥）。验签发生在换目录之前，临时公钥有效；换完之后 LIB
+          # 里的公钥会变成包内那份，正是安装流程的期望结果。
+          openssl genpkey -algorithm ED25519 -out /tmp/smoke.key
+          openssl pkey -in /tmp/smoke.key -pubout -out /tmp/smoke.pub
+          sudo install -m 644 /tmp/smoke.pub /usr/local/lib/dert/dert-signing.pub.pem
+          openssl pkeyutl -sign -inkey /tmp/smoke.key -rawin \
+            -in "/tmp/dert-${VER}.tar.gz" -out "/tmp/dert-${VER}.tar.gz.sig"
+          rm -f /tmp/smoke.key
           # 同版本重装是允许路径；这一步会真实执行"解压→自检→换目录→延迟重启面板"
           sudo /usr/local/lib/dert/dert-priv upgrade-apply "/tmp/dert-${VER}.tar.gz" | tee /tmp/upg.json
           grep -q '"ok": true' /tmp/upg.json || { echo "::error::upgrade-apply 失败（P-03 回归）"; exit 1; }
