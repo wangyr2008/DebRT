@@ -6,6 +6,11 @@ on:
 
 permissions:
   contents: write
+  # --generate-notes 要读 PR 列表来生成发布说明。GitHub 的权限模型是「workflow
+  # 一旦声明 permissions，未列出的权限一律置为 none」——只写 contents: write
+  # 会让 pull-requests 变成 none，新版 gh 在生成 notes 时直接失败。
+  # v0.1.135 还能过，v0.1.136 连续两次红在「上传到 Release」，就是这个原因。
+  pull-requests: read
 
 jobs:
   build:
