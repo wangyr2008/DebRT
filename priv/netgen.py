@@ -296,14 +296,19 @@ def gen_lan_network(cfg):
         # 拿到的前缀由 networkd 经 IPv6SendRA 自动宣告（man 原文同）
         if v6.get("mode") == "native" and cfg["wan"].get("mode") in ("dhcp", "pppoe"):
             lines.append("DHCPPrefixDelegation=yes")
-        # RA 的两个时间必须留足余量：RouterLifetimeSec 只比发送间隔大一点点时，
+        # RA 的寿命必须留足余量：RouterLifetimeSec 只比发送间隔大一点点时，
         # 客户端会在下一条 RA 到达前就把默认路由过期掉——表现是"用着好好的，
         # 十几分钟后全屋 v6 突然上不去，重连 Wi-Fi 又好了（RS 会触发一次 RA）"。
         # 真机 2026-11-13 15:51 就这么断过一次：15:41 发过一条 RA，
         # 600 秒后客户端到期，而下一条恰好也在这个点。
-        # 按 RFC 4861 的建议取 3 倍关系：间隔 ≤200 秒，寿命 1800 秒。
+        #
+        # **不能配置 RA 的发送间隔**：`MaxRtrAdvIntervalSec` 不是 networkd 支持的键，
+        # 写了会被静默忽略（真机日志 "Unknown key 'MaxRtrAdvIntervalSec' in section
+        # [IPv6SendRA], ignoring"，v0.1.105 起一直是无效的）。实际间隔是 networkd
+        # 内部的 RFC 4861 默认值（200–600 秒随机），所以寿命取 1800 是安全的。
+        # 前缀变化后要尽快让客户端拿到新地址，靠 90-dert-lan-prefix 钩子里的
+        # `networkctl reconfigure`（主动触发一次 RA），不靠调这个间隔。
         lines += ["IPv6SendRA=yes", "", "[IPv6SendRA]",
-                  "MaxRtrAdvIntervalSec=200",
                   "RouterLifetimeSec=1800",
                   "EmitDNS=yes"]
         if v6.get("mode") in ("nat6", "static"):

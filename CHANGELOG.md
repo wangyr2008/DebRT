@@ -7,6 +7,29 @@
 
 ## [Unreleased]
 
+## [0.1.141] - 2026-11-27
+
+> 删掉无效的 `MaxRtrAdvIntervalSec`（networkd 不认这个键）。
+
+### Fixed
+
+- **`20-lan.network` 里的 `MaxRtrAdvIntervalSec=200` 是无效键**（v0.1.105 起一直
+  被静默忽略）：networkd 的 `[IPv6SendRA]` 段不支持它，真机日志
+  `Unknown key 'MaxRtrAdvIntervalSec' in section [IPv6SendRA], ignoring`。
+  实际 RA 间隔是 RFC 4861 默认的 200–600 秒随机。删掉它避免误导，注释里
+  写明「不能配置 RA 间隔」，`RouterLifetimeSec=1800` 保留（≥ 3 倍默认上限）。
+
+### 说明
+
+- **「前缀变化后立即发 RA」本次没做**：真机验证过 `networkctl reconfigure
+  br-lan` 和 `down/up br-lan` 都**不发 RA**，只有 `systemctl restart
+  systemd-networkd` 会——但它会把 ppp0 重建（接口号 26→41，等于二次重拨），
+  不能放在前缀钩子里（会形成循环）。要立刻发 RA 只能引入 radvd（新依赖 +
+  与 networkd 的 `IPv6SendRA` 二选一），留作已知限制。
+- 现状：PPPoE 重拨换 PD 前缀后，客户端最多等 200–600 秒（一次周期 RA）才能
+  拿到新地址。期间有 v4 兜底，用户通常无感；真要立刻恢复，关一下 Wi-Fi
+  再打开（RS 会触发一次 RA）。
+
 ## [0.1.140] - 2026-11-27
 
 > 局域网 DNS 劫持从 `dert_dns` 移到 `dert_base`，不再依赖 sing-box 状态。

@@ -141,13 +141,18 @@ class TestLANNetwork(unittest.TestCase):
         真机 2026-11-13：寿命 600 秒、间隔上限也是 600 秒，15:41 发过一条之后
         15:51 全屋 v6 突然断（默认路由到期，下一条 RA 恰好还没到），
         断开 Wi-Fi 重连才恢复——因为 RS 会立刻触发一次 RA。
-        按 RFC 4861 取 3 倍关系。
+
+        注意：**不能配 `MaxRtrAdvIntervalSec`**——它不是 networkd 支持的键，
+        写了会被静默忽略（真机日志 "Unknown key ... ignoring"，v0.1.105 起
+        一直无效）。实际间隔是 RFC 4861 默认的 200–600 秒，所以寿命取 1800
+        是安全的（≥ 3 倍上限）。
         """
         body = self.ng.gen_lan_network(support.pppoe_config())
+        self.assertNotIn("MaxRtrAdvIntervalSec", body,
+                         "networkd 不支持这个键，写了只会误导")
         life = int(re.search(r"RouterLifetimeSec=(\d+)", body).group(1))
-        gap = int(re.search(r"MaxRtrAdvIntervalSec=(\d+)", body).group(1))
-        self.assertGreaterEqual(life, gap * 3,
-                                "RA 寿命 %d 秒 vs 间隔 %d 秒，余量不足" % (life, gap))
+        self.assertGreaterEqual(life, 1800,
+                                "RA 寿命必须 ≥ 3 倍默认间隔上限（600s）")
 
     def test_ipv6_mtu_matches_pppoe(self):
         """br-lan 的 v6 MTU 要与 ppp0 对齐。
