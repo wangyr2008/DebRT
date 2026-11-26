@@ -88,14 +88,12 @@ for ib in c.get("inbounds", []):
 PYEOF
 )
 
-# 白名单为空：不建表。所有 DNS 走 dnsmasq:53（真实 IP）。
-# 注意此时 tun 的 include_mac_address 也为空 = 不限 MAC = 流量仍全部进 tun，
-# 但没有 fakeip 就反查不出域名，只能靠 IP 规则——属退化组合，保持现状不特殊处理。
-if [ -z "$WLS" ]; then
-    nft delete table inet dert_dns 2>/dev/null
-    logger -t dert-dns-split "event=table_skipped reason=no_whitelist fallback=dnsmasq"
-    exit 0
-fi
+# 白名单为空 / br-lan 没有 IPv4：这两个条件只影响 pre 链（局域网设备的 DNS），
+# **不影响 out 链**（本机 DNS）。早期版本在这里直接 exit，结果是白名单一清空、
+# 或 br-lan 短暂没有 v4，本机 DNS 就悄悄退回运营商——而 v0.1.135 的本机 DNS
+# 并不依赖这两者，属于行为回退（审计 §C2）。现在改成「只决定生成哪条链」。
+WLS_EMPTY=0
+[ -z "$WLS" ] && WLS_EMPTY=1
 
 # 白名单的 DNS 转到本机 5353（sing-box），非白名单转到 53（dnsmasq）。
 # 两者同机不同端口，靠 MAC 决定去向。
@@ -106,7 +104,8 @@ fi
 LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
        | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
               $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
-[ -n "$LAN4" ] || exit 0
+LAN4_EMPTY=0
+[ -z "$LAN4" ] && LAN4_EMPTY=1
 
 # 记录前缀基线 /run/dert/lan-prefix，供 90-dert-lan-prefix 判断"前缀是否变了"。
 #
@@ -144,6 +143,27 @@ fi
 # 拼 MAC 集合：0c:19:...,44:59:...
 SET="{ $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
 
+# pre 链：白名单与 br-lan 的 v4 都就绪才生成（缺一个，局域网设备的 DNS 就没法分流）
+PRE_CHAIN=""
+if [ "$WLS_EMPTY" = 0 ] && [ "$LAN4_EMPTY" = 0 ]; then
+    PRE_CHAIN=$(cat <<PRE
+    chain pre {
+        type nat hook prerouting priority dstnat - 2; policy accept;
+
+        # 用 redirect 而不是 dnat to <LAN 地址>：目标地址由内核按**入接口**选，
+        # 不再需要在 shell 里算 LAN4/LAN6。旧写法有两个坑：
+        #   · br-lan 没有全局 v6 时（PD 未下发 / 只有 /64 委派），LAN6 兜底成 ::1，
+        #     而 IPv6 不允许把外部进来的包转发到回环，DNAT 后的包被内核丢掉 →
+        #     局域网的 v6 DNS 全部超时，解析要等回落到 v4（审计 RT-08）；
+        #   · 地址一变就要重建表（netwatch 的对账逻辑）。
+        # redirect 只改端口、不动地址：客户端发给路由器的链路本地地址也照样成立。
+        iifname "br-lan" ether saddr $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+        iifname "br-lan" ether saddr != $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :53
+    }
+PRE
+)
+fi
+
 # 本机 DNS 入口（v0.1.136）：把本机发往 127.0.0.1:53 / [::1]:53 的查询也 redirect
 # 到 5353，和局域网白名单设备走同一条路。这样 resolv.conf 只剩一行 127.0.0.1，
 # 不再需要 127.0.0.2 和「两个 nameserver + glibc 换下一个」那套回落。
@@ -174,6 +194,14 @@ else
     logger -t dert-dns-split "event=local_entry_skipped reason=no_singbox_uid"
 fi
 
+# 两条链都生成不了（白名单空或无 LAN4，且查不到 sing-box uid）：不建表，
+# 全部 DNS 回到 dnsmasq。这是唯一应该「删表退出」的情形。
+if [ -z "$PRE_CHAIN" ] && [ -z "$OUT_CHAIN" ]; then
+    nft delete table inet dert_dns 2>/dev/null
+    logger -t dert-dns-split "event=table_skipped reason=no_pre_no_out fallback=dnsmasq"
+    exit 0
+fi
+
 # 一次性加载整张表：nft 的批量加载是原子的，中途失败不会留下半张表。
 #
 # 开头的 add + delete 是「原子替换」的固定写法，不能省：
@@ -186,19 +214,7 @@ if ! nft -f - <<EOF 2>/dev/null
 add table inet dert_dns
 delete table inet dert_dns
 table inet dert_dns {
-    chain pre {
-        type nat hook prerouting priority dstnat - 2; policy accept;
-
-        # 用 redirect 而不是 dnat to <LAN 地址>：目标地址由内核按**入接口**选，
-        # 不再需要在 shell 里算 LAN4/LAN6。旧写法有两个坑：
-        #   · br-lan 没有全局 v6 时（PD 未下发 / 只有 /64 委派），LAN6 兜底成 ::1，
-        #     而 IPv6 不允许把外部进来的包转发到回环，DNAT 后的包被内核丢掉 →
-        #     局域网的 v6 DNS 全部超时，解析要等回落到 v4（审计 RT-08）；
-        #   · 地址一变就要重建表（netwatch 的对账逻辑）。
-        # redirect 只改端口、不动地址：客户端发给路由器的链路本地地址也照样成立。
-        iifname "br-lan" ether saddr $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
-        iifname "br-lan" ether saddr != $SET meta l4proto { tcp, udp } th dport 53 counter redirect to :53
-    }
+$PRE_CHAIN
 $OUT_CHAIN
 }
 EOF
@@ -210,6 +226,10 @@ then
 fi
 
 # 用 awk 数字段：tr | wc -l 数的是换行符，最后一项没有换行会少算一台（真机首测踩到）
-COUNT=$(printf '%s' "$WLS" | awk -F, '{print NF}')
-logger -t dert-dns-split "event=table_rebuilt whitelist=$COUNT"
+# 白名单为空时 awk 对空串会返回 1，这里显式给 0。
+COUNT=0
+[ -n "$WLS" ] && COUNT=$(printf '%s' "$WLS" | awk -F, '{print NF}')
+PRE_FLAG=0; [ -n "$PRE_CHAIN" ] && PRE_FLAG=1
+OUT_FLAG=0; [ -n "$OUT_CHAIN" ] && OUT_FLAG=1
+logger -t dert-dns-split "event=table_rebuilt whitelist=$COUNT pre=$PRE_FLAG out=$OUT_FLAG"
 exit 0

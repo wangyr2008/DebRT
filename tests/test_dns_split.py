@@ -151,8 +151,17 @@ class SyncBehavior(unittest.TestCase):
         # v4 和 v6 各一条（v6 是 dns-self 时代缺的通道）
         self.assertIn("ip  daddr 127.0.0.1", log)
         self.assertIn("ip6 daddr ::1", log)
-        # out 链必须在 output hook 上，且早于 sing-box 的 output_udp_icmp（mangle+2）
+        # 优先级 dstnat-2（-102）**晚于** sing-box 的 output_udp_icmp（mangle+2 = -148），
+        # 所以 sing-box 的链先执行、把本地地址（127.0.0.0/8）return 掉，本机 DNS
+        # 才会落到这里。这条依赖是隐式的，写在这里免得以后误改成更早的优先级。
         self.assertIn("type nat hook output priority dstnat - 2", log)
+        # skuid 排除必须写在两条 redirect 之前——顺序反了就是死循环
+        lines = [l.strip() for l in log.splitlines()]
+        i_skuid = next(i for i, l in enumerate(lines) if l.startswith("meta skuid"))
+        i_v4 = next(i for i, l in enumerate(lines) if "daddr 127.0.0.1" in l)
+        i_v6 = next(i for i, l in enumerate(lines) if "daddr ::1" in l)
+        self.assertLess(i_skuid, i_v4, "skuid 排除必须在 v4 redirect 之前")
+        self.assertLess(i_skuid, i_v6, "skuid 排除必须在 v6 redirect 之前")
 
     def test_no_uid_skips_output_chain(self):
         """查不到 sing-box 用户时不建 out 链。
@@ -208,14 +217,41 @@ class SyncBehavior(unittest.TestCase):
 
 
 class EmptyWhitelist(unittest.TestCase):
-    """白名单为空 → 不建表（全部走 dnsmasq 拿真实 IP）。"""
+    """白名单为空 → 不建 pre 链，但 out 链（本机 DNS）仍要建。
 
-    def test_no_table_created(self):
+    v0.1.136 的早期实现在这里直接删表退出，导致本机 DNS 退回运营商——
+    而 v0.1.135 的本机 DNS 不依赖白名单，属于行为回退（审计 §C2）。
+    """
+
+    def test_only_out_chain(self):
         h = Harness([])
         self.addCleanup(h.close)
         rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
         self.assertEqual(rc, 0)
-        self.assertNotIn("dnat ip", log, "空白名单不该建任何 DNAT 规则")
+        self.assertNotIn("chain pre", log, "空白名单不该生成 pre 链")
+        self.assertIn("chain out", log, "本机 DNS 不依赖白名单，out 链必须建")
+
+    def test_no_lan4_only_out_chain(self):
+        """br-lan 没有 IPv4 时 pre 链没意义，但 out 链仍要建（本机 DNS 不依赖 LAN 口）。"""
+        h = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h.close)
+        h._write_bin("ip", "#!/bin/sh\nexit 0\n")   # 任何 ip 查询都返回空
+        rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("chain pre", log)
+        self.assertIn("chain out", log)
+
+    def test_no_pre_no_out_deletes_table(self):
+        """白名单空 + 无 LAN4 + 查不到 uid → 唯一该删表退出的组合。"""
+        h = Harness([])
+        self.addCleanup(h.close)
+        h._write_bin("ip", "#!/bin/sh\nexit 0\n")
+        h._write_bin("id", "#!/bin/sh\nexit 1\n")
+        rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("chain pre", log)
+        self.assertNotIn("chain out", log)
+        self.assertIn("delete table inet dert_dns", log)
 
 
 class PrepareBehavior(unittest.TestCase):

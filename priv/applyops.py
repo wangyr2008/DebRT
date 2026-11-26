@@ -295,10 +295,19 @@ def sync_dns_upstream():
             cur = open(resolv, encoding="utf-8", errors="replace").read()
         except OSError:
             cur = ""
-        if "nameserver 127.0.0.1" not in cur:
+        # v0.1.136 起本机 DNS 由 dert_dns 的 out 链转到 5353，resolv.conf 只该有
+        # 一行 127.0.0.1。旧版本（≤v0.1.135）写的是「127.0.0.2 + 127.0.0.1」，
+        # 升级后第一行指向已删除的 dns-self，每次查询都要先失败一次才落到第二行。
+        #
+        # 必须按「有效行是否等于期望」判断，不能只看有没有 127.0.0.1——
+        # 旧文件第二行正好就是它，会被误判成「已同步」而永不改写（审计 §C1）。
+        want = ["nameserver 127.0.0.1"]
+        have = [l.strip() for l in cur.splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+        if have != want:
             try:
                 with open(resolv, "w", encoding="utf-8") as f:
-                    f.write("nameserver 127.0.0.1\noptions timeout:1 attempts:2\n")
+                    f.write("nameserver 127.0.0.1\n")
             except OSError:
                 pass
 

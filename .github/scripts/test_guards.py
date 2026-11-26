@@ -648,12 +648,16 @@ assert _p40_bad == [], "P3-40 回归：%s" % "；".join(_p40_bad)
 # 走代理也连不上。
 # v0.1.118~v0.1.135 用 127.0.0.2 的 dns-self inbound；v0.1.136 起改由 dert_dns
 # 的 out 链把 127.0.0.1:53 / [::1]:53 redirect 到 5353，resolv.conf 只写 127.0.0.1。
-# 三处写入点必须一致：不能再出现 127.0.0.2（那个 inbound 已删，没人监听），
+# 四处写入点必须一致：不能再出现 127.0.0.2（那个 inbound 已删，没人监听），
 # 也不该写 ::1（out 链已覆盖 v6，多写一行会让人误以为要靠它）。
+#
+# v0.1.137 把 priv/applyops.py 也纳入检查：升级路径上 sync_dns_upstream() 会重写
+# resolv.conf，它漏掉的话，老设备升级后第一行仍是已失效的 127.0.0.2（审计 §C1）。
 _p41_bad = []
 for _rel41 in ("install.sh",
                os.path.join("network", "ppp", "ip-up.d", "dert"),
-               os.path.join("network", "ppp", "ip-down.d", "dert")):
+               os.path.join("network", "ppp", "ip-down.d", "dert"),
+               os.path.join("priv", "applyops.py")):
     _txt41 = open(os.path.join(ROOT, _rel41), encoding="utf-8").read()
     if "nameserver 127.0.0.1" not in _txt41:
         _p41_bad.append("%s 没写 nameserver 127.0.0.1" % _rel41)
