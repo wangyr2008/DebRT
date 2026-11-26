@@ -158,7 +158,9 @@ PRE_CHAIN=$(cat <<PRE
         #   · 地址一变就要重建表（netwatch 的对账逻辑）。
         # redirect 只改端口、不动地址：客户端发给路由器的链路本地地址也照样成立。
         iifname "br-lan" ether saddr @wl meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
-        iifname "br-lan" meta l4proto { tcp, udp } th dport 53 counter redirect to :53
+        # 非白名单设备的 DNS 劫持已移到 dert_base 的 dstnat 链（v0.1.140，审计 §3）：
+        # 那条规则不依赖 sing-box 状态，sing-box 停了也生效。本表只保留「依赖
+        # sing-box」的规则——删掉这张表就完全等于没装 sing-box。
     }
 PRE
 )

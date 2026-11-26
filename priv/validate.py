@@ -349,6 +349,14 @@ def norm_firewall(section, data, cur=None):
         prev = (cur or {}).get("firewall") or {}
         if "allow_lan_proxy" in prev:
             out["allow_lan_proxy"] = bool(prev["allow_lan_proxy"])
+    # v0.1.140：局域网 DNS 劫持开关（审计 §3）。缺省时保留原值，否则面板一保存
+    # 就会把它悄悄恢复成默认值（和 allow_lan_proxy 同一类问题）。
+    if "dns_hijack" in data:
+        out["dns_hijack"] = bool(data.get("dns_hijack"))
+    else:
+        prev = (cur or {}).get("firewall") or {}
+        if "dns_hijack" in prev:
+            out["dns_hijack"] = bool(prev["dns_hijack"])
     rules = data.get("portfw")
     if rules is None:
         return out

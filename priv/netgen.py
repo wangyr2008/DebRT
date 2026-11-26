@@ -640,8 +640,26 @@ def gen_nft(cfg):
     if (cfg.get("debug") or {}).get("flow"):
         lines += flow_chain_lines()
 
+    # 局域网 DNS 劫持（v0.1.140，审计 §3）：非白名单设备手动把 DNS 设成 8.8.8.8
+    # 也要经过 dnsmasq，而不是直连出去。放在 dert_base（而不是 dert_dns）是因为
+    # dert_dns 只在 sing-box 运行时存在——sing-box 一停，劫持就失效，设备拿到
+    # AAAA 记录后尝试 v6 连接（IPv6 关闭时 dnsmasq 的 filter-AAAA 本应拦住）。
+    #
+    # 只在「查外部地址」时劫持（fib daddr type != local）：查路由器自身的查询
+    # 本来就会到 dnsmasq，不需要再 NAT 一次。
+    #
+    # 与 dert_dns 的优先级：白名单设备的查询先进入 dert_dns pre（dstnat - 2），
+    # redirect 到 5353 并建立 conntrack NAT 绑定；本链是 dstnat（-100），同一个
+    # hook 上的后续 NAT 链不会对已建立绑定的连接二次 NAT。所以白名单设备不会
+    # 被这里抢走（真机计数器验证：白名单查询时本链 dport 53 计数不涨）。
+    dns_hijack = fw.get("dns_hijack", True)
+    hijack = []
+    if dns_hijack:
+        hijack = ["    iifname $LAN_BR fib daddr type != local "
+                  "meta l4proto { tcp, udp } th dport 53 counter redirect to :53"]
     # hairpin：LAN 内用公网 IP 访问自己 —— LAN 侧也要做 DNAT（审计 C-20）
-    lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] + dnat + dnat_lan + ["  }", ""]
+    lines += ["  chain dstnat {", "    type nat hook prerouting priority dstnat; policy accept;"] \
+        + hijack + dnat + dnat_lan + ["  }", ""]
     lines += [
         "  chain srcnat {",
         "    type nat hook postrouting priority srcnat; policy accept;",

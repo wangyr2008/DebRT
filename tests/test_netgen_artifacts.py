@@ -210,6 +210,21 @@ class TestNftBase(unittest.TestCase):
         self.assertIn("chain dns_bypass", self.body)
         self.assertIn("0x00002024", self.body)
 
+    def test_dns_hijack_default_on(self):
+        """dns_hijack 缺省时，dstnat 链开头有局域网 DNS 劫持（审计 §3）。
+
+        非白名单设备手动设 8.8.8.8 也要经过 dnsmasq；放在 dert_base 是为了
+        sing-box 停了也生效（v0.1.140）。
+        """
+        self.assertIn("fib daddr type != local", self.body)
+        self.assertIn("th dport 53 counter redirect to :53", self.body)
+
+    def test_dns_hijack_off(self):
+        cfg = support.pppoe_config()
+        cfg["firewall"] = {"dns_hijack": False}
+        body = self.ng.gen_nft(cfg)
+        self.assertNotIn("fib daddr type != local", body)
+
     def test_forward_mss_clamp(self):
         self.assertIn("chain forward_mss", self.body)
         # v4 和 v6 都用 rt mtu（v0.1.137 起）。早期 v6 硬编码 1420 的理由是

@@ -7,6 +7,33 @@
 
 ## [Unreleased]
 
+## [0.1.140] - 2026-11-27
+
+> 局域网 DNS 劫持从 `dert_dns` 移到 `dert_base`，不再依赖 sing-box 状态。
+
+### Changed
+
+- **非白名单设备的 DNS 劫持移到 `dert_base` 的 `dstnat` 链**（审计 §3）：
+  这条规则原来在 `dert_dns` 的 `pre` 链里，只在 sing-box 运行时存在。sing-box
+  一停，设备手动设 `8.8.8.8` 就直连出去——`filter-AAAA`（IPv6 关闭时生效）
+  管不到，设备拿到 AAAA 后尝试 v6 连接失败（真机用 netns 模拟验证过：
+  sing-box 运行时返回局域网地址，停止后超时）。
+  现在由 `dert_base` 负责，只看开关不看 sing-box 状态：
+  `iifname $LAN_BR fib daddr type != local meta l4proto { tcp, udp } th dport 53 counter redirect to :53`
+  - `fib daddr type != local`：查路由器自身的查询本来就会到 dnsmasq，不需要再 NAT
+  - 优先级：`dert_dns pre`（−102）先于本链（−100），白名单设备被先 redirect
+    并建立 conntrack 绑定，本链不会二次 NAT（真机计数器验证）
+  - 新增 `firewall.dns_hijack` 开关（默认 `true`）；`validate.norm_firewall`
+    缺省时保留原值，面板保存不会把它悄悄恢复
+- `dert_dns` 的 `pre` 链只剩白名单一条规则（删掉「非白名单 → :53」）——
+  这张表现在只含依赖 sing-box 的规则，删掉就完全等于没装 sing-box。
+
+### 测试
+
+- `test_netgen_artifacts.py`：`dns_hijack` 缺省/true 时 dstnat 链有劫持规则，
+  false 时没有。
+- `test_dns_split.py`：`pre` 链不再有 `redirect to :53`。
+
 ## [0.1.139] - 2026-11-27
 
 > nft 分流表结构简化：白名单改命名集合、`pre` 链始终生成；`landns` 解耦

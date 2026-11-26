@@ -124,9 +124,10 @@ class SyncBehavior(unittest.TestCase):
         # 按行尾断言：字符串包含判断会把 "redirect to :5353" 也算成 ":53"
         ends = [l.rstrip() for l in log.splitlines()]
         self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :5353")), 3,
-                         "白名单一条 + 本机 v4/v6 各一条（v0.1.136）")
-        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :53")), 1,
-                         "非白名单一条")
+                         "白名单一条 + 本机 v4/v6 各一条")
+        # v0.1.140：非白名单劫持移到 dert_base 的 dstnat 链，本表不再有 :53
+        self.assertEqual(sum(1 for l in ends if l.endswith("redirect to :53")), 0,
+                         "非白名单劫持已移到 dert_base")
         self.assertNotIn("dnat ip to", log)
         self.assertNotIn("dnat ip6 to", log)
         # 只看规则行：注释里提到 "::1 兜底" 是解释历史，不算
@@ -143,8 +144,11 @@ class SyncBehavior(unittest.TestCase):
         # 非白名单 → 53（dnsmasq → 运营商 → 真实 IP）。
         # 不再写 `ether saddr != @wl`：redirect 是终结判决，白名单已被第一条处理
         # （真机复核：两条都能匹配时，第一条计数 3、第二条 0）。
+        # v0.1.140 起这条也移到了 dert_base 的 dstnat 链，本表只剩白名单一条。
         self.assertNotIn("ether saddr != ", log)
-        self.assertIn("redirect to :53", log)
+        ends = [l.rstrip() for l in log.splitlines()]
+        self.assertFalse(any(l.endswith("redirect to :53") for l in ends),
+                         "劫持已移到 dert_base（v0.1.140）")
 
     def test_local_output_chain(self):
         """v0.1.136：本机 DNS 也走 5353，和局域网共用一条路。
