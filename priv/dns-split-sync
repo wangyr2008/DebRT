@@ -168,6 +168,13 @@ fi
 # 到 5353，和局域网白名单设备走同一条路。这样 resolv.conf 只剩一行 127.0.0.1，
 # 不再需要 127.0.0.2 和「两个 nameserver + glibc 换下一个」那套回落。
 #
+# **优先级依赖（隐式，改之前务必看）**：本链是 `dstnat - 2`（−102），而 sing-box
+# 自己的 `output_udp_icmp` 是 `mangle + 2`（−148）。−148 更小、**先执行**，它把
+# 目标为本地地址（`127.0.0.0/8`，来自 `inet4_local_address_set`）的包 return 掉，
+# 本机 DNS 才会落到这里。如果哪天那个集合丢了 127.0.0.0/8，或者有人把本链的
+# 优先级调到 −148 之前，本机 DNS 会被 sing-box 抢先 redirect 到 :42493（代理
+# 入口），表现为「DNS 解析全挂」。建表后下面的检查会把这个前提记进日志。
+#
 # 必须排除 sing-box 自己：config.json 模板里有 type: local 的 DNS server，它会读
 # resolv.conf 再查 127.0.0.1——不排除就是「查询 → redirect 5353 → 再查 127.0.0.1」
 # 的死循环（真机验证时用 setpriv 复现过）。
@@ -223,6 +230,18 @@ then
     nft delete table inet dert_dns 2>/dev/null
     logger -t dert-dns-split "event=table_build_failed fallback=dnsmasq"
     exit 0
+fi
+
+# 建表后确认「优先级依赖」的前提成立：sing-box 的本地地址集合必须包含
+# 127.0.0.1 / ::1，否则它的 output_udp_icmp 不会把本机 DNS 放行到我们这条链
+# （会抢先 redirect 到 :42493）。只写日志、不阻断——集合缺失是 sing-box 侧的
+# 问题，表本身没有错，而且下次 sing-box 重启会重建集合。
+if [ -n "$OUT_CHAIN" ]; then
+    for probe in "inet4_local_address_set 127.0.0.1" "inet6_local_address_set ::1"; do
+        set_name=${probe% *}; addr=${probe#* }
+        nft get element inet sing-box "$set_name" "{ $addr }" >/dev/null 2>&1 \
+            || logger -t dert-dns-split "event=local_set_missing set=$set_name addr=$addr"
+    done
 fi
 
 # 用 awk 数字段：tr | wc -l 数的是换行符，最后一项没有换行会少算一台（真机首测踩到）

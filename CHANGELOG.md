@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+## [0.1.138] - 2026-11-26
+
+> 修 `dns_table_stale` 的误判：只有 `out` 链时会被当成「表是新的」。
+
+### Fixed
+
+- **`netwatch` 的 `dns_table_stale` 漏判「缺 pre 链」**（审计 §C3）：
+  旧判据只要表里有 `redirect to :` 就认为表是新的，而 v0.1.136 新增的 `out`
+  链本身就含这一行。于是 sing-box 启动时 br-lan 若还没有 IPv4（表里只建了
+  `out`），等地址出现后 `pre` 链也不会补上，白名单设备一直拿不到 fakeip，
+  直到下次 sing-box 重启。现在额外判断「白名单非空 + br-lan 已有 v4 + 表里
+  没有 `chain pre`」→ 重建。新增 `whitelist_macs()`（带 `DERT_SB_CONFIG`
+  测试缝）和 `tests/test_netwatch.py` 的 4 个用例。
+- **脚本里补上 `out` 链的优先级依赖说明**：本链 `dstnat-2`（−102）**晚于**
+  sing-box 的 `output_udp_icmp`（`mangle+2` = −148），依赖后者先把
+  `127.0.0.0/8` return 掉。建表后新增检查：`nft get element` 确认
+  `inet4_local_address_set` 含 `127.0.0.1`、`inet6_local_address_set` 含 `::1`，
+  缺失时记 `event=local_set_missing`（只记日志，不阻断）。
+
 ## [0.1.137] - 2026-11-26
 
 > MTU 改回 1492（PPPoE 标准值），v6 的 MSS 也改用 `rt mtu`。

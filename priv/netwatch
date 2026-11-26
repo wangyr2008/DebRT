@@ -52,6 +52,24 @@ except Exception:
     sys.exit(1)' /etc/dert/config.json 2>/dev/null
 }
 
+# 白名单是否非空（与 dns-split-sync 读的是同一份数据：tun.include_mac_address）
+# DERT_SB_CONFIG 是测试缝：未设时指向生产路径，设了就能在临时根里跑。
+whitelist_macs() {
+    local cfg="${DERT_SB_CONFIG:-/etc/sing-box/config.json}"
+    [ -f "$cfg" ] || return 1
+    python3 -c 'import json, re, sys
+try:
+    c = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+for ib in c.get("inbounds", []):
+    if ib.get("type") == "tun":
+        macs = [str(m) for m in (ib.get("include_mac_address") or [])
+                if re.sub(r"[^0-9a-fA-F]", "", str(m))]
+        print("\n".join(macs))
+        break' "$cfg" 2>/dev/null
+}
+
 # nft 分流表是否需要重建。
 # 只在「5353 真的在监听」时才谈得上重建——否则建出来的表会把白名单 DNS
 # 指向一个没人收的端口。用监听状态而不是 tun 接口存在与否做判据：本表不引用
@@ -59,11 +77,20 @@ except Exception:
 # 不能无条件重建：nft -f 重建会清零计数器，诊断时很要命。
 dns_table_stale() {
     ss -lnu 2>/dev/null | grep -q ':5353' || return 1
-    nft list table inet dert_dns >/dev/null 2>&1 || return 0
-    # 用 redirect 之后表里不再写死地址，br-lan 地址变化不会让表失效——
-    # 只有「表还是旧的 dnat 写法」（升级后第一次、或被人手工改过）才需要重建。
-    nft list table inet dert_dns 2>/dev/null | grep -q 'redirect to :' && return 1
-    return 0
+    local t
+    t=$(nft list table inet dert_dns 2>/dev/null) || return 0
+    # 表还是旧的 dnat 写法（升级后第一次、或被人手工改过）→ 重建
+    echo "$t" | grep -q 'dnat ip' && return 0
+    # 应该有 pre 链却没有：白名单非空、br-lan 已有 v4，但表里只有 out 链。
+    # v0.1.137 的判据只看到 "redirect to :" 就认为表是新的——而 out 链本身
+    # 就含这一行，于是「br-lan 晚拿到地址」时 pre 链永远补不上，白名单设备
+    # 一直拿不到 fakeip，直到下次 sing-box 重启（审计 §C3）。
+    if ! echo "$t" | grep -q 'chain pre' \
+       && ip -4 addr show dev br-lan 2>/dev/null | grep -q 'inet ' \
+       && [ -n "$(whitelist_macs)" ]; then
+        return 0
+    fi
+    return 1
 }
 
 reconcile() {
