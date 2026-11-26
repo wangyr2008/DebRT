@@ -19,7 +19,7 @@
 #      不能带 protocol: "dns"：direct inbound 不做 sniff，protocol 识别不出来，
 #      规则会静默不匹配、退回默认 direct outbound，把查询转发回 5353 自己形成
 #      无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。
-#   3. xxx.lan → dnsmasq（landns）—— 保住本地主机名与 PTR 反查。
+#   3. xxx.lan → dnsmasq（landns，固定 127.0.0.1）—— 保住本地主机名与 PTR 反查。
 #
 # 非白名单设备由 nft 直接 DNAT 到 dnsmasq:53，完全不进 sing-box，因此这里不需要
 # 任何「按源 IP 分流」的规则（v0.1.57~v0.1.64 的 source_ip_cidr / carrier 已移除）。
@@ -34,23 +34,25 @@ CONF="${FSROOT}/etc/sing-box/config.json"
 DNSJSON="${FSROOT}/etc/sing-box/00-dert-dns.json"
 [ -f "$CONF" ] || exit 0
 
-# br-lan 的 v4 地址（dnsmasq 的监听地址，也是客户端 DNS 指向）
-# 同时兼容多行（inet 在行首）与 ip -o 单行（inet 在第 3 列）两种输出——
-# 只写 $1 == "inet" 的话，单行格式会静默回落到默认值，LAN 不是 192.168.10.x 时写错地址
-LAN4=$(ip -4 addr show dev br-lan 2>/dev/null \
-       | awk '$1 == "inet" { split($2, a, "/"); print a[1]; exit }
-              $3 == "inet" { split($4, a, "/"); print a[1]; exit }')
-[ -n "$LAN4" ] || LAN4="192.168.10.1"
-
+# landns 直接指向 127.0.0.1（v0.1.139 起）：
+#   - dnsmasq 有 interface=lo，本来就监听 127.0.0.1；
+#   - sing-box 自己发出的查询被 out 链的 `meta skuid <sing-box uid> return` 排除，
+#     不会被重定向回 5353（真机用 setpriv 验证过）；
+#   - 查不到 uid、out 链没建时，sing-box 查 127.0.0.1 会直接到 dnsmasq，同样正确。
+#
+# 以前取 br-lan 的 IPv4（拿不到时回退写死 192.168.10.1），片段内容和 LAN 地址
+# 绑死：改 LAN IP 时若恰好读不到地址，片段变了就会触发一次多余的 sing-box 重启
+# （审计 §2.1）。改成 127.0.0.1 后彻底解耦。
+#
 # v0.1.65 起不再需要 br-lan 的 v6 前缀和运营商 DNS 地址：
 #   - direct inbound 监听 "::" 双栈，不绑定具体 v6 地址
 #   - 非白名单设备的 DNS 由 nft 直接 DNAT 到 dnsmasq，不经 sing-box，所以这里
 #     也不需要「按源 IP 分流到运营商」的规则（v0.1.57~v0.1.64 的 carrier 已移除）
 
-python3 - "$DNSJSON" "$LAN4" "$CONF" <<'PYEOF'
-import json, os, sys
+python3 - "$DNSJSON" "$CONF" <<'PYEOF'
+import json, os, sys, tempfile
 
-path, lan4, sb_conf = sys.argv[1], sys.argv[2], sys.argv[3]
+path, sb_conf = sys.argv[1], sys.argv[2]
 
 # 本片段的 route.rules 会被 sing-box 的目录合并**排到最前面**（真机用
 # `sing-box merge` 验证过：合并后 [0][1] 是这里的 hijack-dns，config.json 的
@@ -109,7 +111,7 @@ cfg = {
     },
     "dns": {
         "servers": [
-            {"type": "udp", "server": lan4, "tag": "landns"},
+            {"type": "udp", "server": "127.0.0.1", "tag": "landns"},
         ],
         "rules": [
             # .lan 走 dnsmasq，保住本地主机名与 PTR
@@ -118,12 +120,25 @@ cfg = {
     }
 }
 
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(cfg, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-os.chmod(tmp, 0o600)
-os.replace(tmp, path)
+# 用 mkstemp 而不是固定名字的 path + ".tmp"：/etc/sing-box 被 sb_fix_perms
+# 整体 chown 给了 sing-box，而本脚本可能以 root 运行（收敛、前缀钩子）。固定
+# 名字的 tmp 允许被攻破的 sing-box 预先放置软链，把 root 的写入引到任意路径。
+# mkstemp 用 O_EXCL 创建、名字随机，绕不开（审计附 A1）。
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
+                           prefix=".00-dert-dns.", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+except BaseException:
+    # 任何失败都删掉临时文件，别在 /etc/sing-box 里留垃圾
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 PYEOF
 
 # 文件由 sing-box 用户创建（ExecStartPre 以 User=sing-box 运行），属主本来就对；

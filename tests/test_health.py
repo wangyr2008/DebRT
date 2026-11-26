@@ -55,7 +55,10 @@ class Env:
         fakes = [
             fake("systemctl", 'exit %d' % (0 if services_up else 1)),
             fake("nft", 'printf "%s" "$FAKE_NFT"'),
-            fake("ss", 'printf "%s" "$FAKE_SS"'),
+            # v0.1.139 起 health.py 查 TCP（-Hltn）：mDNS 也占 UDP 5353，
+            # 用 UDP 判断会误报。按参数区分，TCP 侧单独给 FAKE_SS_TCP。
+            fake("ss", 'case "$*" in *ltn*) printf "%s" "$FAKE_SS_TCP" ;; '
+                       '*) printf "%s" "$FAKE_SS" ;; esac'),
             # 按接口返回不同内容：br-lan 与 ppp0 的前缀要能分别断言
             fake("ip", 'case "$*" in *ppp0*) printf "%s" "$FAKE_IP_WAN" ;; '
                        '*) printf "%s" "$FAKE_IP" ;; esac'),
@@ -69,6 +72,8 @@ class Env:
         self.env_extra = {
             "FAKE_NFT": nft_out,
             "FAKE_SS": "*:5353 *:*\n" if listening else "*:53 *:*\n",
+            # health.py 查 TCP：没监听时必须是空输出（它只判断「有没有输出」）
+            "FAKE_SS_TCP": "*:5353 *:*\n" if listening else "",
             "FAKE_IP": ("    inet6 %s/64 scope global dynamic mngtmpaddr\n" % GUA),
             # WAN 默认给一个**不同**的 /64（真机正常态）
             "FAKE_IP_WAN": ("    inet6 2409:8a5e:a54:1fe0:98e6:5c85:448d:46a0/64 "

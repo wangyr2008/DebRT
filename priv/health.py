@@ -134,9 +134,12 @@ def dns_checks(checks):
     resolv.conf 被 pppd 的 usepeerdns 改写后，路由器自身会绕过 dnsmasq，
     局域网主机名（.lan）解析不了（真机 2026-11-12 实测）。
     """
-    rc, out = run(["ss", "-lnu"])
-    check(checks, "dns:5353_listening", ":5353" in out,
-          "白名单 DNS 入口在监听" if ":5353" in out else "5353 未监听（fakeip 不可用）")
+    # 查 TCP 而不是 UDP：mDNS 也占 UDP 5353，`ss -lnu` 会在 sing-box 没就绪时
+    # 误报「在监听」。dns-in 同时监听 TCP+UDP，mDNS 不用 TCP（审计 §5）。
+    rc, out = run(["ss", "-Hltn", "sport = :5353"])
+    listening = bool(out.strip())
+    check(checks, "dns:5353_listening", listening,
+          "白名单 DNS 入口在监听" if listening else "5353 未监听（fakeip 不可用）")
 
     try:
         with open(_FS + "/etc/resolv.conf", encoding="utf-8", errors="replace") as f:

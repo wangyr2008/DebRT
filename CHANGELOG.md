@@ -7,6 +7,40 @@
 
 ## [Unreleased]
 
+## [0.1.139] - 2026-11-27
+
+> nft 分流表结构简化：白名单改命名集合、`pre` 链始终生成；`landns` 解耦
+> LAN 地址；5353 就绪改查 TCP；临时文件加固。
+
+### Changed
+
+- **白名单改为命名集合，`pre` 链始终生成**（审计 §1）：
+  `dns-split-sync` 删掉「白名单空 × br-lan 有无 v4 × 有无 uid」的组合判断，
+  表结构固定为 `set wl` + `chain pre` + `chain out`。空集省略 `elements`
+  （写成 `elements = { }` 是语法错误）。第二条规则不再写 `ether saddr != @wl`
+  ——`redirect` 是终结判决，白名单已被第一条处理（真机复核：两条都能匹配时，
+  第一条计数 3、第二条 0）。
+  收益：`netwatch` 不用再重复实现一遍白名单判断，两套规则合一——这正是
+  §C2、§C3 两次问题的根因。
+- **`landns` 改为 `127.0.0.1`**（审计 §2）：片段不再依赖 br-lan 的 IPv4，
+  改 LAN IP 不会因为「恰好读不到地址」触发多余的 sing-box 重启。
+- **5353 就绪判断改查 TCP**（审计 §5）：mDNS 也占 UDP 5353，`ss -lnu` 会在
+  sing-box 没就绪时误判。`dns-in` 同时监听 TCP+UDP，mDNS 不用 TCP。
+  三处同步：`dns-split-sync`、`netwatch`、`health.py`。
+- **`dns-split-prepare` 的临时文件改用 `tempfile.mkstemp`**（审计附 A1）：
+  `/etc/sing-box` 被 chown 给 sing-box，固定名字的 tmp 允许被攻破的进程
+  预放软链，把 root 的写入引到任意路径。
+
+### 测试
+
+- `test_dns_split.py`：白名单非空断言 `set wl` + `elements` + `@wl`；
+  空白名单断言仍有 `set wl`（无 `elements`）和 `pre`；无 LAN4 断言仍有
+  `pre`；新增「片段不随 LAN 地址变化」（逐字节相同）；删除「两条都不建
+  就删表」。
+- `test_netwatch.py`：删除依赖 `whitelist_macs` 的 4 个用例，改为 4 个结构
+  判定（表不存在 / 固定结构 / 旧 dnat / 5353 未监听）。
+- `test_health.py`：mock 的 `ss` 按参数区分（TCP / UDP）。
+
 ## [0.1.138] - 2026-11-26
 
 > 修 `dns_table_stale` 的误判：只有 `out` 链时会被当成「表是新的」。

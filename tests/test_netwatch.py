@@ -1,13 +1,11 @@
-"""netwatch 的 dns_table_stale 判定（审计 §C3）。
+"""netwatch 的 dns_table_stale 判定（审计 §1.1、§5）。
 
-背景：v0.1.137 的判据只看到表里有 "redirect to :" 就认为表是新的，而 out 链
-本身就含这一行。于是「br-lan 晚拿到地址」时表里只有 out 链，pre 链永远补不上，
-白名单设备一直拿不到 fakeip，直到下次 sing-box 重启。
+v0.1.139 起表结构固定（`set wl` + `chain pre` + `chain out`），判定简化为
+「表在不在、是不是旧结构」——不再读白名单推断「该有 pre 却没有」，那套判断
+和 dns-split-sync 重复实现过一遍，两边规则还不一致。
 
-这里不跑整个 netwatch（它是常驻 netlink 循环），只提取 dns_table_stale 和
-whitelist_macs 两个函数，配一组假命令直接调用。
+5353 就绪判断也从 UDP 改成 TCP（mDNS 也占 UDP 5353）。
 """
-import json
 import os
 import shutil
 import stat
@@ -39,35 +37,29 @@ def _extract_funcs(path, names):
     return "\n".join(out)
 
 
-TABLE_OUT_ONLY = """table inet dert_dns {
+TABLE_FIXED = """table inet dert_dns {
+    set wl { type ether_addr; elements = { 0c:19:f8:64:7c:ac } }
+    chain pre {
+        iifname "br-lan" ether saddr @wl meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+    }
     chain out {
-        meta skuid 986 return
         ip daddr 127.0.0.1 meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
-        ip6 daddr ::1 meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
     }
 }"""
 
-TABLE_BOTH = """table inet dert_dns {
+TABLE_OLD_DNAT = """table inet dert_dns {
     chain pre {
-        iifname "br-lan" ether saddr { 0c:19:f8:64:7c:ac } meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
-    }
-    chain out {
-        ip daddr 127.0.0.1 meta l4proto { tcp, udp } th dport 53 counter redirect to :5353
+        iifname "br-lan" ether saddr { 0c:19:f8:64:7c:ac } meta l4proto { tcp, udp } th dport 53 counter dnat ip to 192.168.10.1:5353
     }
 }"""
 
 
 class DnsTableStale(unittest.TestCase):
-    def _run(self, table, lan4=True, whitelist=("0c:19:f8:64:7c:ac",)):
+    def _run(self, table=None, tcp_listening=True):
         td = tempfile.mkdtemp(prefix="dert-nw-")
         self.addCleanup(shutil.rmtree, td, True)
         bindir = os.path.join(td, "bin")
         os.makedirs(bindir)
-
-        cfg = os.path.join(td, "sb.json")
-        with open(cfg, "w") as f:
-            json.dump({"inbounds": [{"type": "tun", "tag": "tun-in",
-                                     "include_mac_address": list(whitelist)}]}, f)
 
         def put(name, body):
             p = os.path.join(bindir, name)
@@ -75,40 +67,36 @@ class DnsTableStale(unittest.TestCase):
                 f.write(body)
             os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
-        put("ss", '#!/bin/sh\necho "UNCONN 0 0 *:5353 *:*"\n')
-        put("nft", "#!/bin/sh\ncat <<'T'\n%s\nT\n" % table)
-        put("ip", '#!/bin/sh\necho "    inet 192.168.10.1/24 brd 192.168.10.255 scope global br-lan"\n'
-                  if lan4 else '#!/bin/sh\nexit 0\n')
+        put("ss", '#!/bin/sh\necho "LISTEN 0 128 *:5353 *:*"\nexit 0\n'
+                  if tcp_listening else '#!/bin/sh\nexit 0\n')
+        put("nft", "#!/bin/sh\ncat <<'T'\n%s\nT\n" % (table or ""))
         put("logger", '#!/bin/sh\nexit 0\n')
 
-        funcs = _extract_funcs(NETWATCH, ["whitelist_macs", "dns_table_stale"])
+        funcs = _extract_funcs(NETWATCH, ["dns_table_stale"])
         env = dict(os.environ)
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
-        env["DERT_SB_CONFIG"] = cfg
         r = subprocess.run(["bash", "-c", funcs + "\ndns_table_stale"],
                            env=env, capture_output=True, text=True, timeout=30)
-        # 0 = stale（需要重建），1 = 不需要
-        return r.returncode
+        return r.returncode   # 0 = stale（需要重建），1 = 不需要
 
-    def test_out_only_with_lan4_and_whitelist_is_stale(self):
-        """核心用例：只有 out 链，但 br-lan 已有 v4、白名单非空 → 必须重建。
+    def test_missing_table_is_stale(self):
+        """表不存在（nft 输出为空）→ 需要重建。"""
+        self.assertEqual(self._run(table=None), 0)
 
-        旧判据看到 out 链里的 "redirect to :5353" 就认为表是新的，pre 链
-        永远补不上，白名单设备一直拿不到 fakeip。
+    def test_fixed_structure_is_not_stale(self):
+        """有 set wl 的固定结构 → 不需要重建。"""
+        self.assertEqual(self._run(TABLE_FIXED), 1)
+
+    def test_old_dnat_is_stale(self):
+        """旧的 dnat 写法（升级前）→ 需要重建。"""
+        self.assertEqual(self._run(TABLE_OLD_DNAT), 0)
+
+    def test_no_tcp_listener_is_not_stale(self):
+        """5353 没在监听（TCP）→ 不谈重建，直接返回「不 stale」。
+
+        mDNS 占 UDP 5353，所以这里只认 TCP（审计 §5）。
         """
-        self.assertEqual(self._run(TABLE_OUT_ONLY), 0)
-
-    def test_out_only_without_lan4_is_not_stale(self):
-        """br-lan 还没有 v4 时 pre 链本来就不该有——不算 stale。"""
-        self.assertEqual(self._run(TABLE_OUT_ONLY, lan4=False), 1)
-
-    def test_out_only_without_whitelist_is_not_stale(self):
-        """白名单为空时 pre 链不该有——不算 stale。"""
-        self.assertEqual(self._run(TABLE_OUT_ONLY, whitelist=()), 1)
-
-    def test_pre_and_out_is_not_stale(self):
-        """两条链都在 → 表是新的。"""
-        self.assertEqual(self._run(TABLE_BOTH), 1)
+        self.assertEqual(self._run(TABLE_FIXED, tcp_listening=False), 1)
 
 
 if __name__ == "__main__":

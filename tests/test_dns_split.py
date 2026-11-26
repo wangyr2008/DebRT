@@ -25,7 +25,13 @@ FAKE = {
     # sing-box 必须"活着"，否则脚本直接退出
     "systemctl": '#!/bin/sh\n[ "$1" = "is-active" ] && echo active\nexit 0\n',
     # 5353 必须"在监听"，否则脚本等待 10 秒后退出
-    "ss": '#!/bin/sh\necho "UNCONN 0 0 *:5353 *:*"\nexit 0\n',
+    # v0.1.139 起脚本查 TCP（-Hltn）而不是 UDP（-lnu）：mDNS 也占 UDP 5353，
+    # 用 UDP 判断会在 sing-box 没就绪时误判。这里按参数区分，模拟真实行为。
+    "ss": ('#!/bin/sh\n'
+           'case "$*" in\n'
+           '  *ltn*) echo "LISTEN 0 128 *:5353 *:*" ;;\n'
+           '  *) echo "UNCONN 0 0 *:5353 *:*" ;;\n'
+           'esac\nexit 0\n'),
     "logger": '#!/bin/sh\nexit 0\n',
     # v0.1.136：out 链要排除 sing-box 自己的 uid，脚本用 id -u 查
     "id": '#!/bin/sh\n[ "$1" = "-u" ] && echo 986\nexit 0\n',
@@ -130,11 +136,14 @@ class SyncBehavior(unittest.TestCase):
     def test_whitelist_goes_to_5353_non_whitelist_to_53(self):
         _, log, _ = self.h.run(self.SCRIPT)
         macs = "0c:19:f8:64:7c:ac,44:59:e3:bb:f4:d6"
-        # 白名单 → 5353（sing-box direct inbound → hijack-dns → fakeip）
-        self.assertIn(f'ether saddr {{ {macs} }}', log)
+        # 白名单写成命名集合的 elements，规则用 @wl 引用
+        self.assertIn(f"elements = {{ {macs} }}", log)
+        self.assertIn("ether saddr @wl", log)
         self.assertIn("redirect to :5353", log)
-        # 非白名单 → 53（dnsmasq → 运营商 → 真实 IP）
-        self.assertIn(f'ether saddr != {{ {macs} }}', log)
+        # 非白名单 → 53（dnsmasq → 运营商 → 真实 IP）。
+        # 不再写 `ether saddr != @wl`：redirect 是终结判决，白名单已被第一条处理
+        # （真机复核：两条都能匹配时，第一条计数 3、第二条 0）。
+        self.assertNotIn("ether saddr != ", log)
         self.assertIn("redirect to :53", log)
 
     def test_local_output_chain(self):
@@ -190,8 +199,8 @@ class SyncBehavior(unittest.TestCase):
         _, log, _ = self.h.run(self.SCRIPT)
         # 两种写法归一后是同一个 MAC → 去重，集合里只出现一次
         self.assertIn("{ aa:bb:cc:dd:ee:ff,0c:19:f8:64:7c:ac }", log)
-        self.assertEqual(log.count("aa:bb:cc:dd:ee:ff"), 2,
-                         "一条白名单规则 + 一条 != 规则，各出现一次")
+        self.assertEqual(log.count("aa:bb:cc:dd:ee:ff"), 1,
+                         "只在 set wl 的 elements 里出现一次（规则用 @wl 引用）")
 
     def test_atomic_replace_idiom(self):
         # 直接写 table 定义对已存在的表是"追加"而非"替换"（真机堆到 20 条）
@@ -217,41 +226,37 @@ class SyncBehavior(unittest.TestCase):
 
 
 class EmptyWhitelist(unittest.TestCase):
-    """白名单为空 → 不建 pre 链，但 out 链（本机 DNS）仍要建。
+    """白名单为空 / 无 LAN4：pre 链仍生成，白名单集合为空。
 
-    v0.1.136 的早期实现在这里直接删表退出，导致本机 DNS 退回运营商——
-    而 v0.1.135 的本机 DNS 不依赖白名单，属于行为回退（审计 §C2）。
+    v0.1.139 起表结构固定（`set wl` + `chain pre` + `chain out`），不再用
+    「组合条件决定建哪条链」——那套判断出过两次问题（审计 §C2、§C3）。
     """
 
-    def test_only_out_chain(self):
+    def test_empty_whitelist_still_has_pre_and_empty_set(self):
         h = Harness([])
         self.addCleanup(h.close)
         rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
         self.assertEqual(rc, 0)
-        self.assertNotIn("chain pre", log, "空白名单不该生成 pre 链")
-        self.assertIn("chain out", log, "本机 DNS 不依赖白名单，out 链必须建")
+        # set wl 必须存在，但不带 elements（不能写成 elements = { }，那是语法错误）
+        self.assertIn("set wl { type ether_addr; }", log)
+        self.assertNotIn("elements", log)
+        # pre 链仍生成：空集不匹配任何包，查询落到「其余 → :53」
+        self.assertIn("chain pre", log)
+        self.assertIn("chain out", log)
 
-    def test_no_lan4_only_out_chain(self):
-        """br-lan 没有 IPv4 时 pre 链没意义，但 out 链仍要建（本机 DNS 不依赖 LAN 口）。"""
+    def test_no_lan4_still_has_pre(self):
+        """br-lan 没有 IPv4 时 pre 链仍生成。
+
+        redirect 找不到目标时内核丢包，但这时客户端本来也连不上路由器，
+        不需要单独判断（审计 §1.2）。
+        """
         h = Harness(["0c:19:f8:64:7c:ac"])
         self.addCleanup(h.close)
         h._write_bin("ip", "#!/bin/sh\nexit 0\n")   # 任何 ip 查询都返回空
         rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
         self.assertEqual(rc, 0)
-        self.assertNotIn("chain pre", log)
+        self.assertIn("chain pre", log)
         self.assertIn("chain out", log)
-
-    def test_no_pre_no_out_deletes_table(self):
-        """白名单空 + 无 LAN4 + 查不到 uid → 唯一该删表退出的组合。"""
-        h = Harness([])
-        self.addCleanup(h.close)
-        h._write_bin("ip", "#!/bin/sh\nexit 0\n")
-        h._write_bin("id", "#!/bin/sh\nexit 1\n")
-        rc, log, _ = h.run(os.path.join(support.PRIV, "dns-split-sync"))
-        self.assertEqual(rc, 0)
-        self.assertNotIn("chain pre", log)
-        self.assertNotIn("chain out", log)
-        self.assertIn("delete table inet dert_dns", log)
 
 
 class PrepareBehavior(unittest.TestCase):
@@ -268,7 +273,8 @@ class PrepareBehavior(unittest.TestCase):
             cfg = json.load(fh)
         text = json.dumps(cfg, ensure_ascii=False)
         self.assertIn("5353", text, "白名单 DNS 入口应监听 5353")
-        self.assertIn("192.168.10.1", text, "应使用 br-lan 的 v4 地址")
+        self.assertIn('"server": "127.0.0.1"', text,
+                      "landns 应固定指向 127.0.0.1（不依赖 LAN 地址）")
         self.assertIn('"::"', text, "必须监听双栈：白名单设备的 v6 DNS 也要能进来")
         self.assertIn("hijack-dns", text, "5353 入口要 hijack-dns 才能下发 fakeip")
         self.assertIn("landns", text, ".lan 本地解析不能丢（局域网主机名）")
@@ -281,6 +287,27 @@ class PrepareBehavior(unittest.TestCase):
         self.assertNotIn("source_ip_cidr", text)
         # v0.1.65 起不再读运营商 DNS（非白名单已由 nft 直连 dnsmasq）
         self.assertNotIn("carrier", text.lower())
+
+    def test_fragment_independent_of_lan_address(self):
+        """片段不依赖 br-lan 的 IPv4：有地址和没地址生成的字节完全相同。
+
+        landns 改成 127.0.0.1 后，改 LAN IP 不会因为「恰好读不到地址」而让
+        片段变化、触发多余的 sing-box 重启（审计 §2.5）。
+        """
+        h1 = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h1.close)
+        h1.run(os.path.join(support.PRIV, "dns-split-prepare"))
+        with open(os.path.join(h1.root, "etc", "sing-box", "00-dert-dns.json"), "rb") as f:
+            with_addr = f.read()
+
+        h2 = Harness(["0c:19:f8:64:7c:ac"])
+        self.addCleanup(h2.close)
+        h2._write_bin("ip", "#!/bin/sh\nexit 0\n")   # 任何 ip 查询都返回空
+        h2.run(os.path.join(support.PRIV, "dns-split-prepare"))
+        with open(os.path.join(h2.root, "etc", "sing-box", "00-dert-dns.json"), "rb") as f:
+            without_addr = f.read()
+
+        self.assertEqual(with_addr, without_addr, "片段不应随 LAN 地址变化")
 
     def _prepare_with(self, cfg):
         h = Harness(["0c:19:f8:64:7c:ac"])
