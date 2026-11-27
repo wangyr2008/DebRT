@@ -36,7 +36,7 @@ body { background: var(--ru-bg, #f5f5f7); }
 /* ===== sidebar ===== */
 #router-ui .ru-side{width:232px;flex:none;border-right:1px solid var(--ru-line);padding:22px 14px 16px;display:flex;flex-direction:column;
   position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;background:var(--ru-bg)}
-#router-ui .ru-brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
+#router-ui .ru-brand{display:flex;align-items:baseline;gap:11px;padding:0 8px 20px}
 /* 品牌字标（v0.1.127）：吉祥物 d + ebrt，内联 SVG。文字用 currentColor 跟主题走；
    绿灯浅色下是镂空（白圈会和白底融在一起显小），深色下是白圈，两组图形按主题切换。 */
 #router-ui{--ru-logo-word:#0071e3}
@@ -50,10 +50,13 @@ body { background: var(--ru-bg, #f5f5f7); }
 }
 #router-ui .ru-sidelogo{height:26px}
 #router-ui .ru-mlogo{height:24px}
-/* 版本号底部对齐 mascot 视觉底部。logo 26px、viewBox 高 68（-4~64），mascot
-   画到 y=56 → 视觉底部 22.94px；文字 descender ≈ 2.3px。flex-end 下基线 =
-   26 - padding - 2.3，令其等于 22.94 → padding ≈ 0.76px，取 1px。 */
-#router-ui .ru-brand small{display:block;font-size:11.5px;color:var(--ru-text2);align-self:flex-end;padding-bottom:1px}
+/* 版本号与 logo 字形底部对齐：按基线对齐，不按 padding 凑。
+   .ru-logo 里只有 SVG、没有文字，flex 按基线对齐时它的基线取自身底边；版本号的
+   基线（数字底部）因此落在 logo 底边上，再上移「字形底部到 logo 底边」那一段即可。
+   这段距离只由 viewBox 决定：viewBox="0 -4 204 64"（y 从 -4 到 60），mascot 与 ebrt
+   都画到 y=56，差 4/64 个 logo 高度——与字体无关，Mac/iOS/Windows 结果一致。
+   改 viewBox 或字形底部时要同步改这里的 4/64。line-height:1 让文字不把行撑高。 */
+#router-ui .ru-brand small{display:block;font-size:11.5px;line-height:1;color:var(--ru-text2);position:relative;top:calc(-26px * 4 / 64)}
 #router-ui .ru-nav{display:flex;flex-direction:column;gap:2px}
 #router-ui .ru-navitem{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:var(--ru-text);font-family:inherit;font-size:13.5px;font-weight:500;padding:9px 11px;border-radius:9px;cursor:pointer;text-align:left}
 #router-ui .ru-navitem .lucide{width:17px;height:17px;color:var(--ru-text2)}
@@ -225,8 +228,8 @@ body { background: var(--ru-bg, #f5f5f7); }
   position:sticky;top:-10px;z-index:40;background:var(--ru-bg);
   margin:-10px -16px 0;padding:10px 16px 8px}
 /* 窄屏头部没有侧边栏，版本号得单独占一个位置（桌面端由 .ru-side 的 ru-sidever 显示） */
-/* 移动版：logo 24px，同样推导 padding ≈ 0.3px，取 0.5px */
-#router-ui .ru-mver{font-size:12.5px;font-weight:500;color:var(--ru-text2);align-self:flex-end;padding-bottom:0.5px}
+/* 窄屏：同上，logo 24px。父元素是 .ru-mhead 里那个 flex 容器（align-items:baseline） */
+#router-ui .ru-mver{font-size:12.5px;font-weight:500;line-height:1;color:var(--ru-text2);position:relative;top:calc(-24px * 4 / 64)}
 #router-ui .ru-mhead .ru-nav{flex-direction:row;overflow-x:auto;gap:8px;padding:12px 2px 6px;scrollbar-width:none}
 #router-ui .ru-mhead .ru-nav::-webkit-scrollbar{display:none}
 #router-ui .ru-mhead .ru-navitem{width:auto;flex:none;padding:7px 13px;border-radius:999px;background:var(--ru-fill);font-size:12.5px}
