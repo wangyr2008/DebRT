@@ -7,6 +7,23 @@
 
 ## [Unreleased]
 
+## [0.1.143] - 2026-11-27
+
+> `dns-split-prepare` 的 `chmod` 也改走 fd，堵住同一类 TOCTOU。
+
+### Fixed
+
+- **`os.chmod(tmp, 0o600)` 会跟随软链**（审计附 A1，第三次）：`/etc/sing-box`
+  属于 sing-box，被攻破的进程能在 `mkstemp` 和 `chmod` 之间把 tmp 换成指向
+  `/etc/passwd` 的软链，root 会把那个文件改成 0600（非 root 进程查不到用户名，
+  服务大面积出错）。改成 `os.fchmod(fd, 0o600)`（放在 `fdopen` 之前），作用在
+  fd 上，不经过路径。`mkstemp` 本来就是 0600，这行只是写明意图。
+
+### 说明
+
+- 改完后 `prepare` 里不再有按路径操作的系统调用。`os.replace`（rename 替换
+  目录项）和 `os.unlink`（不跟随软链）都是安全的。
+
 ## [0.1.142] - 2026-11-27
 
 > 修 `dns-split-prepare` 的属主修改（安全），并订正过时注释。

@@ -139,10 +139,13 @@ try:
             os.fchown(fd, pw.pw_uid, pw.pw_gid)
         except KeyError:
             pass      # 用户不存在（首装）：保持 root
+    # 权限也走 fd：mkstemp 本来就是 0600，这行只是把意图写明。用 os.chmod(tmp)
+    # 会跟随软链——被攻破的 sing-box 能在 mkstemp 和 chmod 之间把 tmp 换成指向
+    # /etc/passwd 的软链，root 就会把那个文件改成 0600（审计附 A1，第三次）。
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
-    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 except BaseException:
     # 任何失败都删掉临时文件，别在 /etc/sing-box 里留垃圾
