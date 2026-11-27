@@ -7,6 +7,26 @@
 
 ## [Unreleased]
 
+## [0.1.142] - 2026-11-27
+
+> 修 `dns-split-prepare` 的属主修改（安全），并订正过时注释。
+
+### Fixed
+
+- **`mkstemp` 之后用 shell `chown "$DNSJSON"` 仍可被软链利用**（审计附 A1，
+  第二次）：`/etc/sing-box` 属于 sing-box，被攻破的进程可以在 `os.replace`
+  和 `chown` 之间把目标换成指向 `/etc/shadow` 的软链，root 就会把那个文件的
+  属主改掉。改为在 Python 里对 fd 调 `os.fchown`（不经过路径、不跟随软链），
+  删掉 shell 那行。
+- `dns-split-sync` / `dns-split-prepare` 的注释订正：v0.1.140 把「其余 → :53」
+  移到 `dert_base` 后，三处注释还在讲旧规则，改成「`@wl` 为空时本链不匹配，
+  查询交给 dert_base 的 dstnat 劫持到 :53」。
+
+### 说明
+
+- CHANGELOG 0.1.141 的「`br_local_out` 抓不到」解释撤回（内核没有这个路径），
+  改成「原因未查明」；计数器证明包已从 br-lan 发出。
+
 ## [0.1.141] - 2026-11-27
 
 > 删掉无效的 `MaxRtrAdvIntervalSec`（networkd 不认这个键）。
@@ -23,11 +43,14 @@
 
 - **`reconfigure` 会重建 RA 引擎并发 RA**：debug 日志确认（`Stopping IPv6
   Router Advertisement daemon` → `Started` → `Sent unsolicited Router
-  Advertisement` ×3）。之前「reconfigure 不发 RA」的结论是抓包方式造成的
-  误判——br-lan 是网桥，本地生成的多播包走 `br_local_out`，`tcpdump -i
-  br-lan` 抓不到。内核计数（`Icmp6OutRouterAdvertisements` +4、
+  Advertisement` ×3）。内核计数（`Icmp6OutRouterAdvertisements` +4、
   `Ip6OutMcastPkts` +7、tun0 不变）证明包确实从 br-lan 发出了，没被
   nft/策略路由改走，也没有 tc 丢弃。
+- **之前为什么 tcpdump 抓不到，原因未查明**。最初写的「网桥 `br_local_out`
+  路径抓不到」是错的——内核没有这个路径，本机发出的包（单播和多播）都走
+  `dev_queue_xmit` → `br_dev_xmit`，tcpdump 的抓包点就在这两步之间。以后
+  想查清楚，可以在 br-lan 连 AP 的**成员口**上抓：`tcpdump -ni <成员口>
+  'ip6 dst ff02::1'`。
 - 现状：PPPoE 重拨换 PD 前缀后，networkd 自己会发一轮 RA（PD 到手时），
   钩子的 reconfigure 再发一轮。**正常重拨（PD 变一次）时，客户端（有线和
   Wi-Fi）都能在几秒内拿到新前缀**（真机对照验证：有线 en0 与 Wi-Fi en1

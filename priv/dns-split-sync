@@ -93,9 +93,10 @@ PYEOF
 )
 
 # 白名单为空 / br-lan 没有 IPv4 都不再影响建表：pre 链始终生成，白名单是
-# 命名集合 `set wl`（可以为空），`@wl` 引用空集不匹配任何包，查询自然落到
-# 「其余 → :53」那条。br-lan 没有 IPv4 时 redirect 找不到目标、内核丢包——
-# 但这时客户端本来也连不上路由器，不需要单独判断。
+# 命名集合 `set wl`（可以为空），`@wl` 引用空集不匹配任何包——查询直接离开
+# 本链，交给 dert_base 的 dstnat 劫持到 :53（v0.1.140 起）。br-lan 没有 IPv4
+# 时 redirect 找不到目标、内核丢包——但这时客户端本来也连不上路由器，不需要
+# 单独判断。
 #
 # 不再用「组合条件决定建哪条链」：那套判断已经出过两次问题（审计 §C2、§C3），
 # 而且 netwatch 为了发现「该有 pre 却没有」把它又实现了一遍。固定结构更省心。
@@ -140,11 +141,11 @@ if [ -n "$WLS" ]; then
     SET_ELEMS=" elements = { $(printf '%s' "$WLS" | tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | paste -sd, -) }"
 fi
 
-# pre 链：始终生成。白名单是命名集合 `set wl`，`@wl` 引用空集不匹配任何包，
-# 查询自然落到第二条「其余 → :53」。
+# pre 链：始终生成。白名单是命名集合 `set wl`，`@wl` 引用空集不匹配任何包——
+# 查询直接离开本链，交给 dert_base 的 dstnat 劫持到 :53（v0.1.140 起）。
 #
-# 第二条不再写 `ether saddr != @wl`：redirect 是终结判决，白名单已被第一条
-# 处理，不会落到第二条（真机复核：两条都能匹配时，第一条计数 3、第二条 0）。
+# v0.1.140 起本链只有白名单一条规则——「其余 → :53」移到了 dert_base 的
+# dstnat（不依赖 sing-box 状态）。删掉这张表就完全等于没装 sing-box。
 PRE_CHAIN=$(cat <<PRE
     set wl { type ether_addr;$SET_ELEMS }
     chain pre {

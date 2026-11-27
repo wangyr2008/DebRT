@@ -21,9 +21,10 @@
 #      无限循环（真机 2026-11-11 实测 CPU 飙到 130%）。
 #   3. xxx.lan → dnsmasq（landns，固定 127.0.0.1）—— 保住本地主机名与 PTR 反查。
 #
-# 非白名单设备由 nft 直接 DNAT 到 dnsmasq:53，完全不进 sing-box，因此这里不需要
-# 任何「按源 IP 分流」的规则（v0.1.57~v0.1.64 的 source_ip_cidr / carrier 已移除）。
-# dnsmasq 的上游查询由 dert_base 的 dns_bypass 链打标绕过 sing-box（见 netgen.py）。
+# 非白名单设备由 dert_base 的 dstnat 链劫持到 dnsmasq:53，完全不进 sing-box，
+# 因此这里不需要任何「按源 IP 分流」的规则（v0.1.57~v0.1.64 的 source_ip_cidr /
+# carrier 已移除）。dnsmasq 的上游查询由 dert_base 的 dns_bypass 链打标绕过
+# sing-box（见 netgen.py）。
 #
 # 写文件用 tmp + rename，避免 sing-box 读到半个 JSON。
 set -u
@@ -46,8 +47,8 @@ DNSJSON="${FSROOT}/etc/sing-box/00-dert-dns.json"
 #
 # v0.1.65 起不再需要 br-lan 的 v6 前缀和运营商 DNS 地址：
 #   - direct inbound 监听 "::" 双栈，不绑定具体 v6 地址
-#   - 非白名单设备的 DNS 由 nft 直接 DNAT 到 dnsmasq，不经 sing-box，所以这里
-#     也不需要「按源 IP 分流到运营商」的规则（v0.1.57~v0.1.64 的 carrier 已移除）
+#   - 非白名单设备的 DNS 由 dert_base 的 dstnat 劫持到 dnsmasq，不经 sing-box，
+#     所以这里也不需要「按源 IP 分流到运营商」的规则（v0.1.57~v0.1.64 的 carrier 已移除）
 
 python3 - "$DNSJSON" "$CONF" <<'PYEOF'
 import json, os, sys, tempfile
@@ -127,6 +128,17 @@ cfg = {
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
                            prefix=".00-dert-dns.", suffix=".tmp")
 try:
+    # 属主在这里改，**不经过路径**：os.fchown 作用在 fd 上，不会跟随软链。
+    # 用 shell 的 `chown "$DNSJSON"` 不安全——/etc/sing-box 属于 sing-box，被攻破
+    # 的进程可以在 os.replace 和 chown 之间把目标换成指向 /etc/shadow 的软链，
+    # root 就会把那个文件的属主改掉（审计附 A1，第二次）。
+    if os.geteuid() == 0:
+        try:
+            import pwd
+            pw = pwd.getpwnam("sing-box")
+            os.fchown(fd, pw.pw_uid, pw.pw_gid)
+        except KeyError:
+            pass      # 用户不存在（首装）：保持 root
     with os.fdopen(fd, "w") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
@@ -141,7 +153,4 @@ except BaseException:
     raise
 PYEOF
 
-# 文件由 sing-box 用户创建（ExecStartPre 以 User=sing-box 运行），属主本来就对；
-# 这里只在以 root 手动执行时兜底修正，失败不影响功能
-chown sing-box:sing-box "$DNSJSON" 2>/dev/null || true
 exit 0
