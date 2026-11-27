@@ -21,14 +21,17 @@
 
 ### 说明
 
-- **「前缀变化后立即发 RA」本次没做**：真机验证过 `networkctl reconfigure
-  br-lan` 和 `down/up br-lan` 都**不发 RA**，只有 `systemctl restart
-  systemd-networkd` 会——但它会把 ppp0 重建（接口号 26→41，等于二次重拨），
-  不能放在前缀钩子里（会形成循环）。要立刻发 RA 只能引入 radvd（新依赖 +
-  与 networkd 的 `IPv6SendRA` 二选一），留作已知限制。
-- 现状：PPPoE 重拨换 PD 前缀后，客户端最多等 200–600 秒（一次周期 RA）才能
-  拿到新地址。期间有 v4 兜底，用户通常无感；真要立刻恢复，关一下 Wi-Fi
-  再打开（RS 会触发一次 RA）。
+- **`reconfigure` 会重建 RA 引擎并发 RA**：debug 日志确认（`Stopping IPv6
+  Router Advertisement daemon` → `Started` → `Sent unsolicited Router
+  Advertisement` ×3）。之前「reconfigure 不发 RA」的结论是抓包方式造成的
+  误判——br-lan 是网桥，本地生成的多播包走 `br_local_out`，`tcpdump -i
+  br-lan` 抓不到。内核计数（`Icmp6OutRouterAdvertisements` +4、
+  `Ip6OutMcastPkts` +7、tun0 不变）证明包确实从 br-lan 发出了，没被
+  nft/策略路由改走，也没有 tc 丢弃。
+- 现状：PPPoE 重拨换 PD 前缀后，networkd 自己会发一轮 RA（PD 到手时），
+  钩子的 reconfigure 再发一轮。部分 Wi-Fi AP 可能过滤 `ff02::1` 多播 RA，
+  客户端此时只能靠自己发 RS 触发的单播 RA；表现为重拨后 v6 短暂不通，
+  关/开 Wi-Fi 可立即恢复。根因（AP 多播转发 vs 其他）待有线设备对照确认。
 
 ## [0.1.140] - 2026-11-27
 
